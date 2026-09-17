@@ -13,6 +13,20 @@
 
 ---
 
+### 实测实录：纯手绘作画实机效果展示（物理触控含金量）
+
+底层虚拟副屏不仅能响应离散的按钮点击，更能承受高密度、高频次的连续物理手势调度。
+
+在与 DeepSeek Harness (DSH) 配合测试中，Agent 接到指令 **“去我的便签里面，用绘制的方式（用系统的笔）随便画一幅画吧！要手绘噢！”**。在后台完全静默的副屏上拉起便签画板，自主进行了 **105 步精细运笔手势**，一手一手纯手绘创作完成了整幅风景画：
+
+| DSH 交互执行链路 (1 轮 105 步连续触控) | 副屏纯手绘作画最终成品 (系统便签画板) |
+| :---: | :---: |
+| <img src="docs/images/dsh_drawing_task.jpg" width="340" alt="DSH Task Execution" /> | <img src="docs/images/drawn_landscape.jpg" width="340" alt="Drawn Landscape Result" /> |
+
+整个手绘过程完全在后台虚拟副屏中发生，手机物理主屏完全不受影响，真正做到了“你在主屏聊天刷剧，Agent 在后台副屏手绘作画”。
+
+---
+
 ### 试验环境声明 (Test Environment)
 
 本系统在以下真机实验环境下完成全流程开发、调试与自动化闭环验证：
@@ -58,7 +72,7 @@
 - **`vd tree`**：结构化 Dump 当前副屏的无障碍控件树（以极简 JSON 输出节点文本、ID、中心绝对点击坐标）。
 - **`vd tap <x> <y>`**：向副屏指定坐标发送物理触控点击事件（利用 `input -d <did> tap`）。
 - **`vd type "<文本>"`**：静默将文本填入副屏当前获得焦点的输入框（支持中文、特殊符号，0 键盘弹窗）。
-- **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向副屏发送滑动或长按手势。
+- **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向副屏发送滑动、曲线笔触或长按手势。
 - **`vd key <keycode>`**：向副屏发送系统物理按键（如 4 为返回，3 为主页，66 为回车）。
 - **`vd screenshot [path]`**：定向截取副屏当前帧并保存为 PNG 图片（默认路径 `/data/local/tmp/vd_screenshot.png`）。
 
@@ -128,6 +142,20 @@ By decoupling execution onto an independent virtual display (Display > 0), inter
 
 ---
 
+### Real-world Showcase: Autonomous Hand-drawn Artwork
+
+The underlying headless virtual display supports not just discrete button clicks, but high-frequency, precision continuous gestures.
+
+In automated tests with DeepSeek Harness (DSH), the Agent received a single prompt: **"Go to my system Notes app and draw a picture using the system pen! Must be hand-drawn!"**. It autonomously planned and executed **105 consecutive precision drawing gestures stroke by stroke**, producing a complete rural landscape artwork:
+
+| DSH Execution Workflow (1 turn, 105 steps) | Final Hand-drawn Artwork in Notes App |
+| :---: | :---: |
+| <img src="docs/images/dsh_drawing_task.jpg" width="340" alt="DSH Task Execution" /> | <img src="docs/images/drawn_landscape.jpg" width="340" alt="Drawn Landscape Result" /> |
+
+The whole drawing process took place entirely in the background virtual display without taking focus away from the user on the primary physical screen.
+
+---
+
 ### Experimental Verification Environment
 
 | Aspect | Tested Configuration |
@@ -149,7 +177,7 @@ By decoupling execution onto an independent virtual display (Display > 0), inter
    - `vd tree`: Output structured accessibility UI hierarchy and clickable node coordinates in JSON.
    - `vd tap <x> <y>`: Inject touch events directly to the target display.
    - `vd type "<text>"`: Inject text into the focused field without soft keyboard popups.
-   - `vd swipe <x1> <y1> <x2> <y2> [duration]`: Simulate drag/swipe gestures.
+   - `vd swipe <x1> <y1> <x2> <y2> [duration]`: Simulate drag/swipe gestures or brush strokes.
    - `vd key <keycode>`: Send key events (e.g. 4 for BACK, 3 for HOME, 66 for ENTER).
    - `vd screenshot [path]`: Take a direct frame capture of the virtual display.
 
