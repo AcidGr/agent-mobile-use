@@ -1,0 +1,221 @@
+#!/system/bin/sh
+MODDIR="/data/adb/modules/agent_mobile_use"
+if [ ! -d "$MODDIR" ]; then
+    MODDIR="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+
+STATUS_FILE="/data/local/tmp/vd_status.json"
+STOP_SIGNAL="/data/local/tmp/vd_stop"
+RUN_SCRIPT="$MODDIR/bin/run_daemon.sh"
+SERVER_BIN="$MODDIR/bin/vd_server"
+TOOLS_DEX="$MODDIR/bin/agent_tools.dex"
+if [ ! -f "$TOOLS_DEX" ]; then
+    TOOLS_DEX="/data/local/tmp/agent_tools.dex"
+fi
+
+is_running() {
+    if [ -f "$STATUS_FILE" ]; then
+        local st=$(grep -o '"status":"[^"]*"' "$STATUS_FILE" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+        local pid=$(grep -o '"pid":[0-9]*' "$STATUS_FILE" 2>/dev/null | head -n 1 | cut -d':' -f2)
+        if [ "$st" = "running" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+get_display_id() {
+    if is_running; then
+        grep -o '"display_id":[0-9]*' "$STATUS_FILE" | head -n 1 | cut -d':' -f2
+    else
+        echo "-1"
+    fi
+}
+
+start_web() {
+    if ! pgrep -f "vd_server" >/dev/null 2>&1; then
+        if [ -x "$SERVER_BIN" ]; then
+            nohup "$SERVER_BIN" > /data/local/tmp/vd_server.log 2>&1 &
+            sleep 0.5
+        fi
+    fi
+}
+
+start_vd() {
+    start_web
+
+    if is_running; then
+        local did=$(get_display_id)
+        echo "[vd] 虚拟副屏已处于运行状态 (Display $did)"
+        echo "[vd] 快照监控地址: http://127.0.0.1:3070"
+        return 0
+    fi
+
+    echo "[vd] 正在唤醒底层独立守护进程..."
+    rm -f "$STOP_SIGNAL"
+    nohup "$RUN_SCRIPT" > /data/local/tmp/daemon.log 2>&1 &
+
+    for i in $(seq 1 30); do
+        sleep 0.1
+        if is_running; then
+            break
+        fi
+    done
+
+    if is_running; then
+        local did=$(get_display_id)
+        echo "[vd] 虚拟副屏启动成功! (Display $did, 1080x2400, 420 DPI)"
+        echo "[vd] 快照监控就绪: http://127.0.0.1:3070"
+    else
+        echo "[vd] 启动失败，请检查 /data/local/tmp/daemon.log"
+        return 1
+    fi
+}
+
+stop_vd() {
+    echo "[vd] 正在释放虚拟副屏..."
+    touch "$STOP_SIGNAL"
+    for i in $(seq 1 20); do
+        sleep 0.1
+        if ! is_running; then
+            break
+        fi
+    done
+
+    if [ -f "$STATUS_FILE" ]; then
+        local pid=$(grep -o '"pid":[0-9]*' "$STATUS_FILE" | head -n 1 | cut -d':' -f2)
+        if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+    fi
+    echo '{"status":"stopped","display_id":-1}' > "$STATUS_FILE"
+    echo "[vd] 虚拟副屏已安全注销，显存与计算资源已彻底释放。"
+}
+
+show_status() {
+    if is_running; then
+        local did=$(get_display_id)
+        echo "状态: 运行中"
+        echo "Display ID: $did"
+        echo "规格: 1080 x 2400 (420 DPI)"
+        echo "快照网页: http://127.0.0.1:3070"
+    else
+        echo "状态: 已休眠 (0 功耗)"
+        echo "快照网页: http://127.0.0.1:3070"
+    fi
+}
+
+launch_app() {
+    local pkg="$1"
+    if [ -z "$pkg" ]; then
+        echo "用法: vd launch <包名>"
+        exit 1
+    fi
+    if ! is_running; then
+        echo "[vd] 检测到副屏未启动，自动拉起..."
+        start_vd || exit 1
+    fi
+    local did=$(get_display_id)
+    local act=$(cmd package resolve-activity --brief "$pkg" 2>/dev/null | tail -n 1)
+    if [ -n "$act" ] && [ "$act" != "No activity found" ]; then
+        echo "[vd] 正在向 Display $did 启动应用: $act"
+        am start -n "$act" --display "$did"
+    else
+        echo "[vd] 正在向 Display $did 调度包名: $pkg"
+        am start --display "$did" "$pkg"
+    fi
+}
+
+run_tool() {
+    export ANDROID_ROOT=/system
+    export ANDROID_DATA=/data
+    export ANDROID_ART_ROOT=/apex/com.android.art
+    export ANDROID_I18N_ROOT=/apex/com.android.i18n
+    export ANDROID_TZDATA_ROOT=/apex/com.android.tzdata
+    export BOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar:/apex/com.android.adservices/javalib/framework-adservices.jar:/apex/com.android.adservices/javalib/framework-sdksandbox.jar:/apex/com.android.appsearch/javalib/framework-appsearch.jar:/apex/com.android.configinfrastructure/javalib/framework-configinfrastructure.jar:/apex/com.android.conscrypt/javalib/conscrypt.jar:/apex/com.android.crashrecovery/javalib/framework-crashrecovery.jar:/apex/com.android.devicelock/javalib/framework-devicelock.jar:/apex/com.android.healthfitness/javalib/framework-healthfitness.jar:/apex/com.android.ipsec/javalib/android.net.ipsec.ike.jar:/apex/com.android.media/javalib/updatable-media.jar:/apex/com.android.mediaprovider/javalib/framework-mediaprovider.jar:/apex/com.android.mediaprovider/javalib/framework-pdf.jar:/apex/com.android.mediaprovider/javalib/framework-pdf-v.jar:/apex/com.android.mediaprovider/javalib/framework-photopicker.jar:/apex/com.android.ondevicepersonalization/javalib/framework-ondevicepersonalization.jar:/apex/com.android.os.statsd/javalib/framework-statsd.jar:/apex/com.android.permission/javalib/framework-permission.jar:/apex/com.android.permission/javalib/framework-permission-s.jar:/apex/com.android.profiling/javalib/framework-profiling.jar:/apex/com.android.scheduling/javalib/framework-scheduling.jar:/apex/com.android.sdkext/javalib/framework-sdkextensions.jar:/apex/com.android.tethering/javalib/framework-connectivity.jar:/apex/com.android.tethering/javalib/framework-connectivity-b.jar:/apex/com.android.tethering/javalib/framework-connectivity-t.jar:/apex/com.android.tethering/javalib/framework-tethering.jar:/apex/com.android.uwb/javalib/framework-ranging.jar:/apex/com.android.uwb/javalib/framework-uwb.jar:/apex/com.android.virt/javalib/framework-virtualization.jar:/apex/com.android.wifi/javalib/framework-wifi.jar
+    export DEX2OATBOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar
+    export CLASSPATH="$TOOLS_DEX"
+    /system/bin/app_process /system/bin com.agent.ToolMain "$@"
+}
+
+case "$1" in
+    start)
+        start_vd
+        ;;
+    stop)
+        stop_vd
+        ;;
+    restart)
+        stop_vd
+        sleep 0.5
+        start_vd
+        ;;
+    status)
+        show_status
+        ;;
+    launch)
+        launch_app "$2"
+        ;;
+    tree|dump)
+        if ! is_running; then echo "[]"; exit 1; fi
+        did=$(get_display_id)
+        run_tool tree "$did"
+        ;;
+    tap)
+        if ! is_running; then echo "副屏未运行"; exit 1; fi
+        did=$(get_display_id)
+        input -d "$did" tap "$2" "$3"
+        ;;
+    type)
+        if ! is_running; then echo "副屏未运行"; exit 1; fi
+        did=$(get_display_id)
+        run_tool type "$did" "$2"
+        ;;
+    swipe)
+        if ! is_running; then echo "副屏未运行"; exit 1; fi
+        did=$(get_display_id)
+        input -d "$did" swipe "$2" "$3" "$4" "$5" "${6:-300}"
+        ;;
+    key)
+        if ! is_running; then echo "副屏未运行"; exit 1; fi
+        did=$(get_display_id)
+        input -d "$did" keyevent "$2"
+        ;;
+    screenshot)
+        if ! is_running; then echo "副屏未运行"; exit 1; fi
+        did=$(get_display_id)
+        out="${2:-/data/local/tmp/vd_screenshot.png}"
+        sf_id=$(dumpsys SurfaceFlinger --display-id 2>/dev/null | grep -i 'AgentVirtualDisplay' | awk '{print $2}')
+        if [ -n "$sf_id" ]; then
+            screencap -d "$sf_id" -p "$out"
+        else
+            screencap -d "$did" -p "$out"
+        fi
+        if [ -f "$out" ]; then
+            echo "[vd] 快照已保存至: $out"
+        else
+            echo "[vd] 截图失败"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v3.0)"
+        echo ""
+        echo "用法: vd <command> [args...]"
+        echo ""
+        echo "感知与输入工具:"
+        echo "  tree                         输出副屏结构化无障碍控件树与中心坐标 (JSON)"
+        echo "  tap <x> <y>                  在副屏上发送物理触控点击"
+        echo "  type \"<文本>\"                静默输入中文、长难句与任意字符 (0 弹窗)"
+        echo "  swipe <x1> <y1> <x2> <y2>    在副屏上模拟滑动手势与长按"
+        echo "  key <keycode>                向副屏发送按键 (4:返回, 3:主页, 66:回车, 67:退格)"
+        echo "  screenshot [path]            截取副屏当前帧 PNG 图片"
+        echo ""
+        echo "生命周期管理:"
+        echo "  start                        按需拉起底层虚拟屏与 3070 快照监控"
+        echo "  stop                         注销副屏，释放全部显存与计算功耗"
+        echo "  restart                      重启副屏守护进程"
+        echo "  status                       查看当前副屏状态与 Web 链接"
+        echo "  launch <pkg>                 在副屏中定向启动应用 (如 com.sankuai.meituan)"
+        ;;
+esac

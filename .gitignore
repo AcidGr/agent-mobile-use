@@ -1,0 +1,5 @@
+# OS / Build Artifacts
+.DS_Store
+*.swp
+*~
+bin/classes/

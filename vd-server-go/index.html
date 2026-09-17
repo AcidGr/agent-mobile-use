@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>虚拟副屏快照监控</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f1117;
+            color: #e6edf3;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px 12px;
+        }
+        .header {
+            width: 100%;
+            max-width: 400px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .status-text {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #58a6ff;
+        }
+        .controls {
+            width: 100%;
+            max-width: 400px;
+            display: flex;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        button {
+            flex: 1;
+            padding: 10px 0;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: opacity 0.2s;
+        }
+        button:active { opacity: 0.75; }
+        .btn-refresh {
+            background: #238636;
+            color: #ffffff;
+            border-color: #2ea043;
+        }
+        .btn-stop {
+            background: #b62324;
+            color: #ffffff;
+            border-color: #da3633;
+        }
+        .screen-box {
+            position: relative;
+            width: min(90vw, 360px);
+            aspect-ratio: auto;
+            min-height: 500px;
+            background: #000000;
+            border: 2px solid #30363d;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #snapshot-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+            pointer-events: none;
+        }
+        #empty-tip {
+            color: #8b949e;
+            font-size: 0.9rem;
+            text-align: center;
+            line-height: 1.6;
+        }
+        .footer-note {
+            margin-top: 14px;
+            font-size: 0.75rem;
+            color: #8b949e;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div id="status-display" class="status-text">检测状态中...</div>
+    </div>
+
+    <div class="controls">
+        <button class="btn-refresh" onclick="refreshSnapshot()">手动刷新</button>
+        <button class="btn-stop" onclick="stopScreen()">关闭副屏</button>
+    </div>
+
+    <div class="screen-box">
+        <img id="snapshot-img" alt="副屏快照" />
+        <div id="empty-tip">副屏未启动</div>
+    </div>
+
+    <div class="footer-note">无自动轮询 / 零后台CPU占用 / 点击手动刷新截取当前画面</div>
+
+    <script>
+        const statusEl = document.getElementById('status-display');
+        const imgEl = document.getElementById('snapshot-img');
+        const tipEl = document.getElementById('empty-tip');
+
+        async function updateStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                if (data.status === 'running') {
+                    const did = data.display_id !== undefined ? data.display_id : data.displayId;
+                    statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ')';
+                    statusEl.style.color = '#7ee787';
+                    return true;
+                } else {
+                    statusEl.innerText = '屏幕状态: 已休眠';
+                    statusEl.style.color = '#f85149';
+                    imgEl.style.display = 'none';
+                    tipEl.style.display = 'block';
+                    tipEl.innerText = '副屏未启动';
+                    return false;
+                }
+            } catch (e) {
+                statusEl.innerText = '无法连接服务';
+                statusEl.style.color = '#f85149';
+                return false;
+            }
+        }
+
+        async function refreshSnapshot() {
+            const isRun = await updateStatus();
+            if (!isRun) return;
+
+            statusEl.innerText = '正在截取快照...';
+            const img = new Image();
+            img.onload = () => {
+                imgEl.src = img.src;
+                imgEl.style.display = 'block';
+                tipEl.style.display = 'none';
+                updateStatus();
+            };
+            img.onerror = () => {
+                statusEl.innerText = '获取快照失败';
+                statusEl.style.color = '#f85149';
+            };
+            img.src = '/api/screenshot?t=' + Date.now();
+        }
+
+        async function stopScreen() {
+            try {
+                await fetch('/api/stop', { method: 'POST' });
+                await updateStatus();
+            } catch (e) {}
+        }
+
+        updateStatus().then(isRun => {
+            if (isRun) refreshSnapshot();
+        });
+    </script>
+</body>
+</html>
