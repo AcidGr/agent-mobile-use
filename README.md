@@ -121,12 +121,13 @@
 
 ---
 
-## 进阶：DSH 原生插件与 MCP (Model Context Protocol) 说明
+## 进阶：DSH 原生预设与 MCP (Model Context Protocol) 说明
 
 本项目定位为 **设备端的纯原生底座与标准能力提供方**：
 
-1. **后续将配套推出 DSH 原生预设插件**：
-   - DeepSeek Harness (DSH) 原生适配的 Mobile Use 预设插件（Cordis 架构）将在后续单独发布。该插件将直接调度底座的 `vd` 工具，完成自动化视觉推理闭环与历史图片内存压缩（Sliding Window Image Offload）。
+1. **配套的 DSH 原生预设插件现已发布**：
+   - DeepSeek Harness (DSH) 原生适配的 Mobile Use 预设插件：**[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**。
+   - 该预设直接调度底座的 `vd` 工具与 3070 端口，完成自动化视觉推理闭环与智能滑动窗口图片内存压缩（Sliding-Window Image Offload），解压至 `~/.dsh/.agent-presets/` 即可直接在 Web 界面中使用。
 2. **支持接入 MCP 协议 (Model Context Protocol)**：
    - 本项目通过 `vd` 命令行与 `vd_server` HTTP 接口暴露了完整原子能力（截屏、控件感知、点击、滑动、键入、启动应用）。
    - **如果您希望将本底座接入 Claude Desktop、Cursor 等支持 MCP 的宿主系统，需要开发者自行编写轻量级 MCP Server 包装层**（例如使用 Node.js / Python 监听 stdio，将 MCP 请求映射为对 `vd` 指令或 3070 端口的调用）。底座已准备好所有原子工具，无需对手机端做多余改造。
