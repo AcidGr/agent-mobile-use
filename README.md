@@ -1,12 +1,19 @@
 # Agent Mobile Use - Android 虚拟副屏与无感后台控制底座
 
+[English](#english) | [中文说明](#中文说明)
+
+---
+
+<a name="中文说明"></a>
+## 中文说明
+
 本项目提供一套针对 Android（以 ColorOS / Android 16 为第一实验环境）深度定制的 **完全静默、后台独立运行、与物理主屏完全解耦** 的系统级控制底座。
 
 通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度拦截、以及免软键盘弹窗的无障碍文字注入，为大模型 Agent、自动化测试系统及远程控制脚本提供第一层设备操纵能力。
 
 ---
 
-## 试验环境声明 (Test Environment)
+### 试验环境声明 (Test Environment)
 
 本系统在以下真机实验环境下完成全流程开发、调试与自动化闭环验证：
 
@@ -23,24 +30,24 @@
 
 ---
 
-## 核心设计与作用
+### 核心设计与作用
 
 传统自动化方案（如普通 `adb shell input`、uiautomator、投屏方案）的最大痛点在于：**抢占主屏前台、弹窗打扰用户使用、输入法强制弹窗、主屏息屏或切换应用时任务中断**。
 
 本项目通过多层底层机制实现：
 
-1. **后台独立副屏 (Display > 0)**：在系统内存中创建一个独立的 Headless 虚拟屏幕，应用直接在副屏渲染运行，物理主屏可以正常刷微信、刷视频甚至息屏，两者互不干扰。
+1. **后台独立副屏 (Display > 0)**：在系统内存中创建一个独立的 Headless 虚拟屏幕，应用直接在副屏渲染运行，物理主屏可以正常日常使用甚至息屏，两者互不干扰。
 2. **全静默调度 (No Focus Stealing)**：通过 LSPosed Hook 补丁拦截 `ActivityTaskSupervisor` 和 `ActivityRecord` 的跨屏约束，禁止副屏应用抢夺主屏焦点。
 3. **免输入法文字灌入 (No IME Popup)**：通过 Java 字节码注入无障碍 `ACTION_SET_TEXT`，中英文长难句瞬时填入，完全不拉起软键盘。
 4. **轻量与自愈 (Zero Overhead)**：提供命令行控制总线与纯静态 HTTP 监控网关，副屏按需启动、随时安全注销，显存与计算资源零泄露。
 
 ---
 
-## 暴露的工具与接口
+### 暴露的工具与接口
 
 模块刷入后，提供三层接入形态：
 
-### 1. 命令行控制总线 (`vd` 工具)
+#### 1. 命令行控制总线 (`vd` 工具)
 
 模块安装后会自动在系统 PATH 中注册 `vd` 命令（位于 `/system/bin/vd`）：
 
@@ -50,12 +57,12 @@
 - **`vd launch <包名>`**：定向调度指定应用直接在副屏启动（例如 `vd launch com.sankuai.meituan`）。
 - **`vd tree`**：结构化 Dump 当前副屏的无障碍控件树（以极简 JSON 输出节点文本、ID、中心绝对点击坐标）。
 - **`vd tap <x> <y>`**：向副屏指定坐标发送物理触控点击事件（利用 `input -d <did> tap`）。
-- **`vd type "<文本>"`**：静默将文本填入副屏当前获得焦点的输入框（支持中文、emoji、特殊符号，0 键盘弹窗）。
+- **`vd type "<文本>"`**：静默将文本填入副屏当前获得焦点的输入框（支持中文、特殊符号，0 键盘弹窗）。
 - **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向副屏发送滑动或长按手势。
 - **`vd key <keycode>`**：向副屏发送系统物理按键（如 4 为返回，3 为主页，66 为回车）。
 - **`vd screenshot [path]`**：定向截取副屏当前帧并保存为 PNG 图片（默认路径 `/data/local/tmp/vd_screenshot.png`）。
 
-### 2. HTTP / REST 监控网关 (Port 3070)
+#### 2. HTTP / REST 监控网关 (Port 3070)
 
 由纯静态 Go 服务 `vd_server` 提供：
 - `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供手动刷新快照、当前状态指示与副屏注销按钮。
@@ -65,44 +72,11 @@
 
 ---
 
-## 仓库工程结构与源码说明
+### 安装与使用方式
 
-```
-.
-├── ksu-module/                   # KSU 模块打包源文件与安装脚本
-│   ├── customize.sh              # 模块刷入安装入口（自动安装 APK 并静默配置 LSPosed 作用域）
-│   ├── service.sh                # 开机后台拉起守护
-│   ├── module.prop               # 模块配置信息
-│   ├── system/bin/vd             # 命令行总线脚本
-│   └── bin/                      # 静态二进制与 DEX
-│       ├── vd_server             # Go 编译生成的纯静态无依赖 Web 服务
-│       ├── agent_vd.dex          # 虚拟屏常驻进程 DEX
-│       ├── agent_tools.dex       # 控件树 Dump 与文字注入 DEX
-│       └── sqlite3               # 静态 SQLite 二进制（用于操作 LSPosed 配置库）
-├── vd-server-go/                 # vd_server 完整 Go 源码与网页 HTML
-│   ├── main.go
-│   ├── index.html
-│   └── build.sh
-├── vd-tool-java/                 # 两个 DEX 的原生 Java 源码与编译脚本
-│   ├── src/com/agent/
-│   │   ├── DaemonMain.java       # 副屏生命周期管理器
-│   │   └── ToolMain.java         # 无障碍树解析与注入执行器
-│   └── build.sh
-├── agent-hook-apk/               # LSPosed Hook 补丁源码
-│   ├── src/com/agent/mobileuse/
-│   │   └── HookEntry.java        # 拦截 Task 跨屏限制与 IMMS 软键盘调度
-│   └── AndroidManifest.xml
-└── release/                      # 开箱即用的预打包发行版
-    └── agent-mobile-use-ksu-v3.5.zip
-```
+#### 方式一：直接刷入发行版（推荐）
 
----
-
-## 安装与使用方式
-
-### 方式一：直接刷入发行版（推荐）
-
-1. 从 `release/` 目录下载预编译好的刷机包：
+1. 从 `release/` 目录或 GitHub Releases 下载预编译好的刷机包：
    **`agent-mobile-use-ksu-v3.5.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
@@ -112,21 +86,20 @@
    - 将 `vd` 部署至 `/system/bin/vd`。
 5. 重启手机使 LSPosed Hook 与系统服务挂载生效。
 
-### 方式二：手动编译源码
+#### 方式二：手动编译源码
 
-若需修改 Java 或 Go 逻辑：
-- 编译 Java 组件：进入 `vd-tool-java/` 目录，执行 `./build.sh`（需本地安装有 `javac` 与 Android SDK 的 `dx` 或 `d8` 工具）。
-- 编译 Go 服务：进入 `vd-server-go/` 目录，执行 `./build.sh`（要求 `CGO_ENABLED=0 GOOS=linux GOARCH=arm64` 静态交叉编译）。
+- 编译 Java 组件：进入 `vd-tool-java/` 目录，执行 `./build.sh`。
+- 编译 Go 服务：进入 `vd-server-go/` 目录，执行 `./build.sh`（静态交叉编译）。
 - 组装并打包：在 `ksu-module/` 执行 `./pack.sh` 生成模块 zip。
 
 ---
 
-## 进阶：DSH 原生预设与 MCP (Model Context Protocol) 说明
+### 进阶：DSH 原生预设与 MCP (Model Context Protocol) 接入
 
 本项目定位为 **设备端的纯原生底座与标准能力提供方**：
 
-1. **配套的 DSH 原生预设插件现已发布**：
-   - DeepSeek Harness (DSH) 原生适配的 Mobile Use 预设插件：**[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**。
+1. **配套的 DSH 原生预设现已同步开源**：
+   - DeepSeek Harness (DSH) 原生适配的 Mobile Use 预设：**[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**。
    - 该预设直接调度底座的 `vd` 工具与 3070 端口，完成自动化视觉推理闭环与智能滑动窗口图片内存压缩（Sliding-Window Image Offload），解压至 `~/.dsh/.agent-presets/` 即可直接在 Web 界面中使用。
 2. **支持接入 MCP 协议 (Model Context Protocol)**：
    - 本项目通过 `vd` 命令行与 `vd_server` HTTP 接口暴露了完整原子能力（截屏、控件感知、点击、滑动、键入、启动应用）。
@@ -134,20 +107,69 @@
 
 ---
 
-## 兼容性与二次适配说明
-
-为了在 ColorOS 16 上获得极致的稳定度与系统融合，本模块在部分配置上针对实验环境做了适配。如果要在其他机型上获得完美体验，请注意以下改动点：
+### 兼容性与二次适配说明
 
 1. **`BOOTCLASSPATH` 环境变量解耦**：
-   - 源码 `vd-tool-java/` 编译出的 DEX 是通过系统自带的 `app_process` 执行的。在 `system/bin/vd` 与 `ksu-module/bin/run_daemon.sh` 中配置的 `BOOTCLASSPATH` 当前包含了 ColorOS 特定的 framework 包（例如 `oplus-framework.jar`）。
-   - **非 OPPO/OnePlus 设备适配**：若在原生 Android、小米或三星设备上运行报错，请自行修改脚本中的 `BOOTCLASSPATH`，动态获取系统默认类路径（例如 `export BOOTCLASSPATH=$(grep "export BOOTCLASSPATH" /init.environ.rc | cut -d' ' -f3)`）以适应目标机型。
+   - 在 `system/bin/vd` 与 `ksu-module/bin/run_daemon.sh` 中配置的 `BOOTCLASSPATH` 当前包含了 ColorOS 特定的 framework 包（例如 `oplus-framework.jar`）。
+   - **非 OPPO/OnePlus 设备适配**：若在原生 Android、小米或三星设备上运行报错，请自行修改脚本中的 `BOOTCLASSPATH`，动态获取系统默认类路径以适应目标机型。
 2. **LSPosed 模块配置路径差异**：
-   - `customize.sh` 默认操作的 LSPosed 数据库路径为 `/data/adb/lspd/config/modules_config.db`。若使用其他变种（如某些非官方 LSPosed 分支），自动添加作用域可能会跳过，此时请手动打开 LSPosed App，勾选「Agent Mobile Use Hook」，并勾选「系统框架 (Android)」后重启即可。
+   - `customize.sh` 默认操作的 LSPosed 数据库路径为 `/data/adb/lspd/config/modules_config.db`。若使用其他变种，请手动打开 LSPosed App，勾选「Agent Mobile Use Hook」，并勾选「系统框架 (Android)」后重启即可。
 3. **特定 App 副屏控件树降级策略**：
    - 部分第三方加固应用（如微信）在未连接真实物理触摸板的虚拟副屏上，系统默认会压制无障碍节点生成（`UiAutomation` 获取为空树）。针对此类应用，请以截屏视觉感知（`vd screenshot` + 坐标推理）作为主链路。
 
 ---
 
-## 开源协议
+<a name="english"></a>
+## English Description
 
-本项目代码遵循 MIT 开源协议发布。
+`agent-mobile-use` provides an industrial-grade, fully silent, background headless virtual display and low-level control foundation for Android (tested on ColorOS 16 / Android 16).
+
+By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, this project provides a clean substrate for LLM Agents and automated systems.
+
+---
+
+### Experimental Verification Environment
+
+| Aspect | Tested Configuration |
+| :--- | :--- |
+| **Device** | Physical Android device (ColorOS 16 custom ROM) |
+| **Android Version** | Android 16 (Linux Kernel 6.12) |
+| **Security Patch** | **Dec 2025 / 2026 Latest Security Patch Level** |
+| **Root Solution** | **KernelSU (KSU)** (No BL unlock required) |
+| **Hook Engine** | **LSPosed** (Injected into `system_server`) |
+| **Physical Display** | 1272 x 2800 @ 560 DPI (Auto-mirrored by daemon) |
+
+---
+
+### Exposed Tools & Interfaces
+
+1. **CLI Bus (`/system/bin/vd`)**:
+   - `vd start` / `vd stop` / `vd status`: Virtual display lifecycle management.
+   - `vd launch <pkg>`: Launch application directly onto the background display.
+   - `vd tree`: Output structured accessibility UI hierarchy and clickable node coordinates in JSON.
+   - `vd tap <x> <y>`: Inject touch events directly to the target display.
+   - `vd type "<text>"`: Inject text into the focused field without soft keyboard popups.
+   - `vd swipe <x1> <y1> <x2> <y2> [duration]`: Simulate drag/swipe gestures.
+   - `vd key <keycode>`: Send key events (e.g. 4 for BACK, 3 for HOME, 66 for ENTER).
+   - `vd screenshot [path]`: Take a direct frame capture of the virtual display.
+
+2. **HTTP / REST Gateway (Port 3070)**:
+   - `GET /`: Visual web snapshot monitor.
+   - `GET /api/status`: JSON display status.
+   - `GET /api/screenshot`: Current frame image stream.
+   - `POST /api/stop`: Safely release virtual display resources.
+
+---
+
+### Ecosystem & Companion DSH Preset
+
+- **Native DSH Agent Preset**:
+  Check out **[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**, our official DeepSeek Harness agent preset that interacts with this module to provide sliding-window image context offloading and visual autonomous control.
+- **MCP (Model Context Protocol) Support**:
+  All foundational tools are exposed via `vd` and REST endpoints. Developers can easily build an MCP server wrapper on top of this foundation for Claude Desktop or Cursor.
+
+---
+
+## License
+
+MIT License.
