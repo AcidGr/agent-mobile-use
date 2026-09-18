@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -23,34 +24,85 @@ const (
 )
 
 type StatusResp struct {
-	Status    string `json:"status"`
-	DisplayID int    `json:"display_id"`
-	PID       int    `json:"pid"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	DPI       int    `json:"dpi"`
+	Status          string `json:"status"`
+	DisplayID       int    `json:"display_id"`
+	PID             int    `json:"pid"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	DPI             int    `json:"dpi"`
+	Mode            string `json:"mode"`
+	TargetDisplayID int    `json:"target_display_id"`
+}
+
+var (
+	modeMu      sync.Mutex
+	currentMode = "background" // "background" (default) or "foreground"
+)
+
+func getCurrentMode() string {
+	modeMu.Lock()
+	defer modeMu.Unlock()
+	return currentMode
+}
+
+func setCurrentMode(m string) string {
+	modeMu.Lock()
+	defer modeMu.Unlock()
+	lower := strings.ToLower(strings.TrimSpace(m))
+	if lower == "foreground" || lower == "fg" || lower == "0" {
+		currentMode = "foreground"
+	} else {
+		currentMode = "background"
+	}
+	return currentMode
+}
+
+func getTargetDisplayID(st StatusResp) int {
+	if getCurrentMode() == "foreground" {
+		return 0
+	}
+	return st.DisplayID
+}
+
+func ensureTargetReady() (StatusResp, int, error) {
+	st := getStatus()
+	targetDid := getTargetDisplayID(st)
+	if targetDid == 0 {
+		return st, 0, nil
+	}
+	if st.Status != "running" {
+		st = startVirtualDisplay()
+		if st.Status != "running" {
+			return st, -1, fmt.Errorf("Virtual display not running")
+		}
+	}
+	return st, st.DisplayID, nil
 }
 
 func getStatus() StatusResp {
+	resp := StatusResp{Status: "stopped", DisplayID: -1}
 	data, err := os.ReadFile(statusFile)
-	if err != nil {
-		return StatusResp{Status: "stopped", DisplayID: -1}
-	}
-	var resp StatusResp
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return StatusResp{Status: "stopped", DisplayID: -1}
-	}
-	if resp.Status == "running" && resp.PID > 0 {
-		process, err := os.FindProcess(resp.PID)
-		if err != nil || process.Signal(syscall.Signal(0)) != nil {
-			return StatusResp{Status: "stopped", DisplayID: -1}
+	if err == nil {
+		var parsed StatusResp
+		if err := json.Unmarshal(data, &parsed); err == nil {
+			resp = parsed
+			if resp.Status == "running" && resp.PID > 0 {
+				process, err := os.FindProcess(resp.PID)
+				if err != nil || process.Signal(syscall.Signal(0)) != nil {
+					resp.Status = "stopped"
+					resp.DisplayID = -1
+				} else {
+					cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", resp.PID))
+					if err != nil || !strings.Contains(string(cmdline), "DaemonMain") {
+						resp.Status = "stopped"
+						resp.DisplayID = -1
+					}
+				}
+			}
 		}
-		// Also verify process cmdline contains com.agent.DaemonMain
-		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", resp.PID))
-		if err != nil || !strings.Contains(string(cmdline), "DaemonMain") {
-			return StatusResp{Status: "stopped", DisplayID: -1}
-		}
 	}
+	resp.Mode = getCurrentMode()
+	resp.TargetDisplayID = getTargetDisplayID(resp)
 	return resp
 }
 
@@ -195,23 +247,45 @@ func main() {
 		json.NewEncoder(w).Encode(stopVirtualDisplay())
 	})
 
-	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/mode", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
-			if st.Status != "running" {
-				http.Error(w, "Virtual display not running", http.StatusNotFound)
-				return
+		if r.Method == http.MethodPost {
+			var p struct {
+				Mode string `json:"mode"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil && p.Mode != "" {
+				setCurrentMode(p.Mode)
 			}
 		}
-		sfID := getSfDisplayID()
+		st := getStatus()
+		targetDid := getTargetDisplayID(st)
+		mode := getCurrentMode()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":           true,
+			"mode":              mode,
+			"target_display_id": targetDid,
+			"message":           fmt.Sprintf("Current mode is %s (Target Display %d)", mode, targetDid),
+		})
+	})
+
+	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		var out []byte
-		var err error
-		if sfID != "" {
-			out, err = exec.Command("/system/bin/screencap", "-d", sfID, "-p").Output()
+		if targetDid == 0 {
+			out, err = exec.Command("/system/bin/screencap", "-p").Output()
 		} else {
-			out, err = exec.Command("/system/bin/screencap", "-d", strconv.Itoa(st.DisplayID), "-p").Output()
+			sfID := getSfDisplayID()
+			if sfID != "" {
+				out, err = exec.Command("/system/bin/screencap", "-d", sfID, "-p").Output()
+			} else {
+				out, err = exec.Command("/system/bin/screencap", "-d", strconv.Itoa(targetDid), "-p").Output()
+			}
 		}
 
 		if err != nil || len(out) == 0 {
@@ -228,18 +302,16 @@ func main() {
 	mux.HandleFunc("/api/dump_ui", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
-			if st.Status != "running" {
-				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Virtual display not running"})
-				return
-			}
-		}
-		out, err := runTool("tree", strconv.Itoa(st.DisplayID))
+		_, targetDid, err := ensureTargetReady()
 		if err != nil {
-			out, _ = runTool("dump", strconv.Itoa(st.DisplayID))
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
+		}
+		did := strconv.Itoa(targetDid)
+		out, err := runTool("tree", did)
+		if err != nil {
+			out, _ = runTool("dump", did)
 		}
 		trimmed := strings.TrimSpace(out)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
@@ -252,9 +324,11 @@ func main() {
 	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
 		}
 		var p struct {
 			X int `json:"x"`
@@ -265,7 +339,7 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		did := strconv.Itoa(st.DisplayID)
+		did := strconv.Itoa(targetDid)
 		cmd := exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
 		if err := cmd.Run(); err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
@@ -277,9 +351,11 @@ func main() {
 	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
 		}
 		var p struct {
 			X1       int `json:"x1"`
@@ -296,7 +372,7 @@ func main() {
 		if p.Duration <= 0 {
 			p.Duration = 300
 		}
-		did := strconv.Itoa(st.DisplayID)
+		did := strconv.Itoa(targetDid)
 		cmd := exec.Command("/system/bin/input", "-d", did, "swipe",
 			strconv.Itoa(p.X1), strconv.Itoa(p.Y1), strconv.Itoa(p.X2), strconv.Itoa(p.Y2), strconv.Itoa(p.Duration))
 		if err := cmd.Run(); err != nil {
@@ -309,9 +385,11 @@ func main() {
 	mux.HandleFunc("/api/type", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
 		}
 		var p struct {
 			Text string `json:"text"`
@@ -321,7 +399,7 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		did := strconv.Itoa(st.DisplayID)
+		did := strconv.Itoa(targetDid)
 		out, err := runTool("type", did, p.Text)
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
@@ -333,9 +411,11 @@ func main() {
 	mux.HandleFunc("/api/key", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
 		}
 		var p struct {
 			Key string `json:"key"`
@@ -345,7 +425,7 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		did := strconv.Itoa(st.DisplayID)
+		did := strconv.Itoa(targetDid)
 		kc := parseKeycode(p.Key)
 		cmd := exec.Command("/system/bin/input", "-d", did, "keyevent", kc)
 		if err := cmd.Run(); err != nil {
@@ -358,9 +438,11 @@ func main() {
 	mux.HandleFunc("/api/launch", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		st := getStatus()
-		if st.Status != "running" {
-			st = startVirtualDisplay()
+		_, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
 		}
 		var p struct {
 			Package  string `json:"package"`
@@ -371,10 +453,13 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		did := strconv.Itoa(st.DisplayID)
-		var cmd *exec.Cmd
+		did := strconv.Itoa(targetDid)
+		args := []string{"start"}
+		if targetDid != 0 {
+			args = append(args, "--display", did)
+		}
 		if p.Activity != "" {
-			cmd = exec.Command("/system/bin/am", "start", "--display", did, "-n", p.Package+"/"+p.Activity)
+			args = append(args, "-n", p.Package+"/"+p.Activity)
 		} else {
 			actBytes, _ := exec.Command("/system/bin/cmd", "package", "resolve-activity", "--brief", p.Package).Output()
 			actLines := strings.Split(strings.TrimSpace(string(actBytes)), "\n")
@@ -383,11 +468,12 @@ func main() {
 				targetAct = actLines[len(actLines)-1]
 			}
 			if targetAct != "" {
-				cmd = exec.Command("/system/bin/am", "start", "--display", did, "-n", targetAct)
+				args = append(args, "-n", targetAct)
 			} else {
-				cmd = exec.Command("/system/bin/am", "start", "--display", did, p.Package)
+				args = append(args, p.Package)
 			}
 		}
+		cmd := exec.Command("/system/bin/am", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})

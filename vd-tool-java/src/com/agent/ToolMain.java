@@ -27,6 +27,13 @@ public class ToolMain {
     }
 
     public static void main(String[] args) {
+        try {
+            if (Looper.getMainLooper() == null) {
+                Looper.prepareMainLooper();
+            }
+        } catch (Throwable t) {
+            // ignore if already prepared
+        }
         if (args.length < 1) {
             printUsage();
             return;
@@ -232,17 +239,36 @@ public class ToolMain {
             if (setPrimaryClip != null) {
                 Class<?>[] pTypes = setPrimaryClip.getParameterTypes();
                 Object[] pArgs = new Object[pTypes.length];
-                pArgs[0] = clip;
-                if (pTypes.length > 1) pArgs[1] = "com.android.shell";
-                if (pTypes.length > 2) pArgs[2] = 0; // userId
-                if (pTypes.length > 3) pArgs[3] = displayId;
+                int stringCount = 0;
+                for (int i = 0; i < pTypes.length; i++) {
+                    Class<?> pt = pTypes[i];
+                    if (pt.isAssignableFrom(clip.getClass()) || pt.getName().contains("ClipData")) {
+                        pArgs[i] = clip;
+                    } else if (pt == String.class) {
+                        if (stringCount == 0) {
+                            pArgs[i] = "com.android.shell";
+                        } else {
+                            pArgs[i] = null;
+                        }
+                        stringCount++;
+                    } else if (pt == int.class || pt == Integer.class) {
+                        pArgs[i] = 0; // userId = 0, deviceId = 0 (DEVICE_ID_DEFAULT)
+                    } else if (pt == boolean.class || pt == Boolean.class) {
+                        pArgs[i] = false;
+                    } else {
+                        pArgs[i] = null;
+                    }
+                }
                 setPrimaryClip.invoke(clipboardService, pArgs);
             }
+
+            try { Thread.sleep(50); } catch (Exception ignored) {}
 
             // Send Paste keycode (279)
             Runtime.getRuntime().exec(new String[] { "/system/bin/input", "-d", String.valueOf(displayId), "keyevent", "279" }).waitFor();
         } catch (Throwable t) {
             t.printStackTrace();
+            System.exit(1);
         }
     }
 
