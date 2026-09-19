@@ -167,6 +167,22 @@ public class ToolMain {
             }
             int displayId = Integer.parseInt(args[1]);
             injectType(displayId, args[2]);
+        } else if ("tapnode".equals(cmd)) {
+            // A click that NEVER injects a touch event. This exists because injected touches
+            // and a real finger collide: measured on this device, `input -d 0 swipe` running
+            // as a 5s long-press was cut short by ACTION_CANCEL (flags=0x20) at the exact
+            // moment a `input -d 3 tap` was issued, and the same class of interference makes
+            // the soft keyboard collapse while the user is typing. performAction() calls the
+            // View's click handler directly and produces no InputEvent at all, so it cannot
+            // enter InputDispatcher's touch arbitration.
+            //
+            // See tapNode() for what this deliberately does NOT do.
+            if (args.length < 4) {
+                System.err.println("Usage: tapnode <displayId> <x> <y>");
+                System.exit(2);
+            }
+            int displayId = Integer.parseInt(args[1]);
+            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]));
         } else if ("clicknode".equals(cmd)) {
             // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
             // or description matches, then performAction(ACTION_CLICK) on it. See
@@ -184,7 +200,7 @@ public class ToolMain {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|clicknode> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|tapnode|clicknode> [args...]");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1075,6 +1091,145 @@ public class ToolMain {
         }
         sb.append("}");
         System.out.print(sb.toString());
+    }
+
+    /**
+     * Click whatever is at (x, y) using ONLY AccessibilityNodeInfo.performAction, so that no
+     * touch event is ever injected.
+     *
+     * WHY: injected touches and real fingers fight. Measured on this device, a 5s
+     * `input -d 0 swipe` was terminated by ACTION_CANCEL (flags=0x20) the moment an
+     * `input -d 3 tap` was issued, and the same interference collapses the soft keyboard
+     * while the user is typing on the physical screen. performAction() invokes the View's
+     * click handler directly and produces no InputEvent, so it stays out of the
+     * InputDispatcher touch arbitration that causes both symptoms.
+     *
+     * WHAT IT DELIBERATELY DOES NOT DO: it never falls back to injecting a coordinate tap.
+     * A silent fallback would reintroduce the exact interference this command exists to
+     * avoid, and would do it invisibly. When there is no actionable node under the point
+     * the call FAILS and says why, leaving the decision to the caller.
+     */
+    private static void tapNode(int targetDisplayId, int x, int y) {
+        HandlerThread ht = null;
+        Object uiAutomation = null;
+        try {
+            ht = new HandlerThread("NodeTapThread");
+            ht.start();
+            Object uac = Class.forName("android.app.UiAutomationConnection")
+                    .getConstructor().newInstance();
+            Class<?> uiClass = Class.forName("android.app.UiAutomation");
+            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
+            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
+                    .newInstance(ht.getLooper(), uac);
+            try {
+                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
+            } catch (NoSuchMethodException e) {
+                uiClass.getMethod("connect").invoke(uiAutomation);
+            }
+            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+            info.eventTypes = -1;
+            info.feedbackType = 16;
+            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
+            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
+            Thread.sleep(400);
+
+            List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
+            int windowCount = 0;
+            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+            if (displays != null) {
+                Class<?> saClass = displays.getClass();
+                int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+                Method keyAt = saClass.getMethod("keyAt", int.class);
+                Method valueAt = saClass.getMethod("valueAt", int.class);
+                for (int i = 0; i < sizeN; i++) {
+                    int dId = (Integer) keyAt.invoke(displays, i);
+                    if (dId != targetDisplayId) continue;
+                    List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                    if (wins == null) continue;
+                    for (Object win : wins) {
+                        windowCount++;
+                        Object rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                        if (rootObj instanceof AccessibilityNodeInfo) {
+                            collectAll((AccessibilityNodeInfo) rootObj, 0, all);
+                        }
+                    }
+                }
+            }
+
+            if (windowCount == 0) {
+                System.out.print("{\"ok\":false,\"error\":\"no_windows\",\"display_id\":"
+                        + targetDisplayId + "}");
+                return;
+            }
+
+            AccessibilityNodeInfo best = findActionableAt(all, x, y);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"ok\":").append(best != null);
+            sb.append(",\"display_id\":").append(targetDisplayId);
+            sb.append(",\"point\":[").append(x).append(",").append(y).append("]");
+            sb.append(",\"nodes\":").append(all.size());
+            if (best == null) {
+                sb.append(",\"error\":\"no_actionable_node_at_point\"");
+            } else {
+                Rect r = new Rect();
+                best.getBoundsInScreen(r);
+                sb.append(",\"type\":\"").append(escapeJson(simplifyType(
+                        best.getClassName() != null ? best.getClassName().toString() : ""))).append("\"");
+                if (best.getText() != null) {
+                    sb.append(",\"text\":\"").append(escapeJson(best.getText().toString())).append("\"");
+                }
+                if (best.getContentDescription() != null) {
+                    sb.append(",\"desc\":\"").append(escapeJson(best.getContentDescription().toString())).append("\"");
+                }
+                if (best.getViewIdResourceName() != null) {
+                    sb.append(",\"vid\":\"").append(escapeJson(best.getViewIdResourceName())).append("\"");
+                }
+                sb.append(",\"b\":[").append(r.left).append(",").append(r.top).append(",")
+                  .append(r.right).append(",").append(r.bottom).append("]");
+                sb.append(",\"via\":\"performAction\"");
+                sb.append(",\"injected_touch\":false");
+            }
+            sb.append("}");
+            System.out.print(sb.toString());
+
+        } catch (Throwable t) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"ok\":false,\"error\":\"").append(escapeJson(String.valueOf(t))).append("\"}");
+            System.out.print(sb.toString());
+        } finally {
+            if (uiAutomation != null) {
+                try {
+                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) ht.quitSafely();
+        }
+    }
+
+    /**
+     * The most specific clickable, enabled, visible node whose bounds contain (x, y).
+     * "Most specific" wins because a tap should land on the smallest thing under the
+     * finger — the innermost clickable, not the full-screen container that also contains
+     * the point. Returns null when nothing actionable is there.
+     */
+    private static AccessibilityNodeInfo findActionableAt(
+            List<AccessibilityNodeInfo> all, int x, int y) {
+        AccessibilityNodeInfo best = null;
+        long bestArea = Long.MAX_VALUE;
+        for (AccessibilityNodeInfo n : all) {
+            if (!n.isClickable() || !n.isEnabled() || !n.isVisibleToUser()) continue;
+            Rect r = new Rect();
+            n.getBoundsInScreen(r);
+            if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) continue;
+            long area = (long) (r.right - r.left) * (r.bottom - r.top);
+            if (area <= 0) continue;
+            if (area < bestArea) {
+                bestArea = area;
+                best = n;
+            }
+        }
+        return best;
     }
 
     /**

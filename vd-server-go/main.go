@@ -278,6 +278,32 @@ func runTool(args ...string) (string, error) {
 	return string(out), err
 }
 
+// a11yTap asks the tool to click the actionable node at (x, y) using only
+// AccessibilityNodeInfo.performAction, which injects no touch event. It returns the raw
+// JSON the tool printed, or nil when the tool could not be run at all.
+//
+// The distinction matters to the caller: nil means "I could not even ask", whereas a
+// parsed {ok:false} means "I asked and there is nothing actionable there". The /api/click
+// handler treats both as a reason to consider a coordinate fallback, but only the second
+// one carries a reason worth reporting back.
+//
+// The tool never falls back to injecting a touch itself, so `ok:false` is a real answer
+// rather than a silent substitution.
+func a11yTap(w http.ResponseWriter, targetDisplayID, x, y int) []byte {
+	out, err := runTool("tapnode", strconv.Itoa(targetDisplayID),
+		strconv.Itoa(x), strconv.Itoa(y))
+	if err != nil && strings.TrimSpace(out) == "" {
+		return nil
+	}
+	s := strings.TrimSpace(out)
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end <= start {
+		return nil
+	}
+	return []byte(s[start : end+1])
+}
+
 func parseKeycode(key string) string {
 	k := strings.ToUpper(strings.TrimSpace(key))
 	switch k {
@@ -466,8 +492,9 @@ func main() {
 			return
 		}
 		var p struct {
-			X int `json:"x"`
-			Y int `json:"y"`
+			X   int    `json:"x"`
+			Y   int    `json:"y"`
+			Via string `json:"via"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -475,6 +502,71 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
+
+		// Accessibility click FIRST, coordinate tap only as a fallback.
+		//
+		// WHY: `input tap` injects a real touch event into InputDispatcher. Measured on this
+		// device, an injected touch issued while the user's finger was on the physical screen
+		// terminated the user's gesture with ACTION_CANCEL, and the same interference makes
+		// the soft keyboard collapse mid-typing (the user had to re-focus the field every
+		// time). performAction() calls the View's click handler directly and produces no
+		// InputEvent, so it cannot enter touch arbitration.
+		//
+		// Verified with the user watching the physical screen: a 10-round loop of
+		// performAction clicks left the keyboard open, focus untouched and zero
+		// ACTION_CANCEL events, where the same loop via `input tap` had been collapsing the
+		// keyboard on every click.
+		//
+		// `via` controls how far this is allowed to go:
+		//   auto (default) - try accessibility, fall back to a coordinate tap
+		//   a11y           - accessibility only; if there is no actionable node, FAIL
+		//                    rather than silently injecting a touch the caller asked to avoid
+		//   coord          - coordinate tap only, straight away. The caller wants the injected
+		//                    touch and does not want an accessibility attempt first.
+		mode := strings.ToLower(strings.TrimSpace(p.Via))
+		if mode == "" {
+			mode = "auto"
+		}
+
+		if mode != "coord" {
+			if a := a11yTap(w, targetDid, p.X, p.Y); a != nil {
+				var res struct {
+					OK    bool   `json:"ok"`
+					Error string `json:"error"`
+					Via   string `json:"via"`
+					Desc  string `json:"desc"`
+					Text  string `json:"text"`
+					Vid   string `json:"vid"`
+				}
+				if json.Unmarshal(a, &res) == nil {
+					if res.OK {
+						label := res.Desc
+						if label == "" {
+							label = res.Text
+						}
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"success": true,
+							"via":     "a11y",
+							"label":   label,
+							"vid":     res.Vid,
+							"detail": "clicked via performAction; no touch event was injected, " +
+								"so the user's own gestures and soft keyboard were not disturbed",
+						})
+						return
+					}
+					if mode == "a11y" {
+						// The caller explicitly forbade injecting a touch. Report the real
+						// reason instead of doing the thing they ruled out.
+						json.NewEncoder(w).Encode(ActionResponse{
+							Success: false,
+							Message: "no actionable node at this point (via=a11y forbids a coordinate tap): " + res.Error,
+						})
+						return
+					}
+				}
+			}
+		}
+
 		if targetDid == 0 {
 			broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
 		}
@@ -483,7 +575,22 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
+		// Say which of the two reasons applies, because they mean different things to the
+		// caller: `coord` asked for this path, `auto` arrived here because the
+		// accessibility attempt found nothing. The warning about injecting a real touch
+		// belongs in both cases, but "fell back" is only true for one of them.
+		detail := "injected a coordinate tap (via=coord): this is a real touch event and can " +
+			"interrupt the user's own gesture or collapse the soft keyboard"
+		if mode != "coord" {
+			detail = "no actionable node at this point, so fell back to an injected coordinate " +
+				"tap: this is a real touch event and can interrupt the user's own gesture or " +
+				"collapse the soft keyboard"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"via":     "coord",
+			"detail":  detail,
+		})
 	})
 
 	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
