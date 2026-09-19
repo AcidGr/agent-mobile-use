@@ -511,8 +511,17 @@ func main() {
 		if p.Title == "" {
 			p.Title = "Mobile Agent 任务状态"
 		}
+		// Build notify command flags (attach custom avatar/icon if present)
+		flags := "-S bigtext"
+		if _, err := os.Stat("/data/local/tmp/dsh_whale_icon.png"); err == nil {
+			flags += " -i file:///data/local/tmp/dsh_whale_icon.png"
+		}
+		if _, err := os.Stat("/data/local/tmp/dsh_whale_avatar.png"); err == nil {
+			flags += " -I file:///data/local/tmp/dsh_whale_avatar.png"
+		}
+
 		// Post notification using su 2000 to assign to com.android.shell via environment variables
-		cmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post -S bigtext -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
+		cmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post `+flags+` -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
 			"NOTIFY_TAG="+p.Tag,

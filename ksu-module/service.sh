@@ -21,6 +21,10 @@ chmod 755 "$MODDIR/system/bin/vd" 2>/dev/null
 cp -f "$MODDIR/bin/agent_vd.dex" /data/local/tmp/agent_vd.dex 2>/dev/null
 cp -f "$MODDIR/bin/agent_tools.dex" /data/local/tmp/agent_tools.dex 2>/dev/null
 cp -f "$MODDIR/bin/run_daemon.sh" /data/local/tmp/run_daemon.sh 2>/dev/null
+cp -f "$MODDIR/res/dsh_whale_avatar.png" /data/local/tmp/dsh_whale_avatar.png 2>/dev/null
+cp -f "$MODDIR/res/dsh_whale_icon.png" /data/local/tmp/dsh_whale_icon.png 2>/dev/null
+chmod 666 /data/local/tmp/dsh_whale_avatar.png 2>/dev/null
+chmod 666 /data/local/tmp/dsh_whale_icon.png 2>/dev/null
 chmod 755 /data/local/tmp/run_daemon.sh 2>/dev/null
 
 if ! pgrep -f "vd_server" >/dev/null 2>&1; then
