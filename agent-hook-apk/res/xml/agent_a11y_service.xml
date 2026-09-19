@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Configuration for AgentA11yService.
+
+  ================== READ THIS FIRST: THE SERVICE DOES NOT WORK ==================
+
+  Goal was to make WeChat expose its node tree without making the user run TalkBack
+  or SelectToSpeak. It failed. Six variants were built, installed and measured, and
+  EVERY one scored 0/3 while SelectToSpeak scored 3/3 under the identical procedure.
+
+  The measurements, and what each ruled out:
+
+    variant  what it declared                          WeChat
+    -------  ----------------------------------------  ------
+    ref      no service bound                          0/3   (0, 0, 0)
+    ref      TalkBack                                  1/3   (0, 68, 0)
+    ref      SelectToSpeak                             3/3   (68, 68, 68)
+    v3.3     feedbackSpoken, canRetrieveWindowContent  0/3   bound OK, requestA11yBtn=false
+    v3.4     + accessibilityFlags, feedbackAllMask     0/3   feedback became all-mask
+    v3.5     every value copied from SelectToSpeak     0/3   verified in the XML resource
+    v3.6     + FEEDBACK_GENERIC category in manifest   0/3   capabilities 1 -> 9
+    v3.7     + setServiceInfo() at runtime             0/3   capabilities=9
+    ctrl     SelectToSpeak, same script, same screen   3/3   (68, 68, 68)
+
+  How SelectToSpeak's config was obtained, so this does not have to be redone: its
+  manifest entry points at resource 0x7f18004a, which the resource table maps to
+  res/9r.xml inside TalkBack's base.apk. Dumping that file gives the exact values this
+  file now carries. They were copied, not guessed.
+
+  What this leaves as the explanation: WeChat is most likely keying on the CLIENT's
+  package name or signing identity, not on the accessibility configuration it declares.
+  Everything declarable has been matched and it made no difference. That is a hypothesis,
+  not a measurement: confirming it would mean reading WeChat's detection code, which has
+  not been done.
+
+  CONSEQUENCE: enabling this service achieves nothing. It is kept only as a record of a
+  negative result. If the tree is needed from WeChat, the working option is a service the
+  app already trusts: SelectToSpeak measured 3/3, at the cost of a floating button
+  (requestA11yBtn=true). TalkBack works too but only 1/3 and it changes how taps are
+  interpreted, which is worse.
+
+  ============================== ATTRIBUTE NOTES ==============================
+
+  The values below are SelectToSpeak's, reproduced exactly. Deliberately NOT included,
+  because it is what draws the floating button:
+
+      flagRequestAccessibilityButton (0x100)
+
+  packageNames is intentionally absent here: it was present in v3.3 and v3.5, and its
+  removal in v3.6 changed nothing, so it is not the trigger either.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/a11y_service_description"
+    android:summary="@string/a11y_service_summary"
+    android:accessibilityEventTypes="typeViewClicked|typeNotificationStateChanged|typeWindowContentChanged|typeViewScrolled|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackSpoken|feedbackVisual"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews|flagRequestEnhancedWebAccessibility|flagRequestFilterKeyEvents|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canRequestFilterKeyEvents="true"
+    android:notificationTimeout="0" />

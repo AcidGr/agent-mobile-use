@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.agent.mobileuse"
-    android:versionCode="5"
-    android:versionName="3.2">
+    android:versionCode="10"
+    android:versionName="3.7">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -25,6 +25,35 @@
             <intent-filter>
                 <action android:name="com.agent.mobileuse.ACTION_GLOW" />
             </intent-filter>
+        </service>
+
+        <!-- Do-nothing accessibility service whose only job is to make apps that gate
+             their node tree on "is a screen reader attached?" open that tree up. See
+             AgentA11yService.java for the measurements behind it.
+
+             BIND_ACCESSIBILITY_SERVICE is the permission the system holds when binding;
+             declaring it means only the system can bind this, which is the point.
+
+             Nothing here requests a floating button (no requestA11yBtn) and nothing
+             speaks, so enabling it has no visible or audible effect on the device. -->
+        <service
+            android:name="com.agent.mobileuse.AgentA11yService"
+            android:exported="true"
+            android:label="@string/a11y_service_summary"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+                <!-- Read off TalkBack's own manifest: its SelectToSpeakService declares
+                     exactly these two lines, and WeChat accepts that service. A service
+                     without the category is still a valid accessibility service, but the
+                     category is how a service advertises generic feedback support, which
+                     is a plausible thing for an app to check when deciding whether a
+                     bound client is "a real assistive tool". -->
+                <category android:name="android.accessibilityservice.category.FEEDBACK_GENERIC" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/agent_a11y_service" />
         </service>
 
         <receiver
