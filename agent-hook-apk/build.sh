@@ -24,7 +24,7 @@ echo "[build] 1. Generating R.java and initial package with aapt..."
 echo "[build] 2. Compiling Java sources..."
 javac -proc:none -source 1.8 -target 1.8 \
     -cp "$ANDROID_JAR:$XPOSED_JAR" \
-    $(find src -name "*.java") \
+    $(find src build/gen -name "*.java") \
     -d build/classes
 
 echo "[build] 3. Converting classes to classes.dex..."

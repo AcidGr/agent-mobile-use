@@ -499,6 +499,7 @@ func main() {
 			Title   string `json:"title"`
 			Content string `json:"content"`
 			Tag     string `json:"tag"`
+			URL     string `json:"url"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -511,28 +512,45 @@ func main() {
 		if p.Title == "" {
 			p.Title = "Mobile Agent 任务状态"
 		}
-		// Build notify command flags (attach custom avatar/icon if present)
-		flags := "-S bigtext"
-		if _, err := os.Stat("/data/local/tmp/dsh_whale_icon.png"); err == nil {
-			flags += " -i file:///data/local/tmp/dsh_whale_icon.png"
-		}
-		if _, err := os.Stat("/data/local/tmp/dsh_whale_avatar.png"); err == nil {
-			flags += " -I file:///data/local/tmp/dsh_whale_avatar.png"
+		if p.URL == "" {
+			p.URL = "http://127.0.0.1:3080"
 		}
 
-		// Post notification using su 2000 to assign to com.android.shell via environment variables
-		cmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post `+flags+` -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
+		// Primary: Send broadcast to com.agent.mobileuse/.NotifyReceiver (native Android App notification with click jump & black whale avatar)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
+			"NOTIFY_URL="+p.URL,
 		)
 		out, err := cmd.CombinedOutput()
-		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
+		if err == nil && strings.Contains(string(out), "result=0") {
+			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
+
+		// Fallback: Use cmd notification post if APK broadcast fails
+		flags := "-S bigtext"
+		if _, statErr := os.Stat("/data/local/tmp/dsh_whale_icon.png"); statErr == nil {
+			flags += " -i file:///data/local/tmp/dsh_whale_icon.png"
+		}
+		if _, statErr := os.Stat("/data/local/tmp/dsh_whale_avatar.png"); statErr == nil {
+			flags += " -I file:///data/local/tmp/dsh_whale_avatar.png"
+		}
+
+		fallbackCmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post `+flags+` -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
+		fallbackCmd.Env = append(os.Environ(),
+			"NOTIFY_TITLE="+p.Title,
+			"NOTIFY_TAG="+p.Tag,
+			"NOTIFY_CONTENT="+p.Content,
+		)
+		fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
+		if fallbackErr != nil {
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fallbackErr.Error(), Data: string(fallbackOut)})
+			return
+		}
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(fallbackOut)})
 	})
 
 	mux.HandleFunc("/api/shell", func(w http.ResponseWriter, r *http.Request) {

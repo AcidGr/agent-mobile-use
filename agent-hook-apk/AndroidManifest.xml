@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.agent.mobileuse"
-    android:versionCode="4"
-    android:versionName="3.1">
+    android:versionCode="5"
+    android:versionName="3.2">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -10,14 +10,25 @@
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="Agent Mobile Use Hook"
+        android:label="DeepSeek Agent"
+        android:icon="@drawable/dsh_whale_icon"
         android:hasCode="true">
 
         <service
             android:name=".GlowService"
             android:exported="true" />
+
+        <receiver
+            android:name=".NotifyReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.agent.mobileuse.ACTION_NOTIFY" />
+                <action android:name="com.agent.mobileuse.ACTION_CLEAR" />
+            </intent-filter>
+        </receiver>
 
         <meta-data
             android:name="xposedmodule"
