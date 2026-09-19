@@ -34,18 +34,25 @@ public class DaemonMain {
         System.out.println("[AgentDaemon] Starting virtual display: " + sWidth + "x" + sHeight + " @ " + sDpi + " DPI");
 
         try {
-            Class<?> smClass = Class.forName("android.os.ServiceManager");
-            Method getService = smClass.getMethod("getService", String.class);
-            Object displayBinder = getService.invoke(null, "display");
-
-            Class<?> stubClass = Class.forName("android.hardware.display.IDisplayManager$Stub");
-            Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
-            Object displayService = asInterface.invoke(null, displayBinder);
+            if (android.os.Looper.myLooper() == null) {
+                android.os.Looper.prepare();
+            }
+            Class<?> atClass = Class.forName("android.app.ActivityThread");
+            Method systemMain = atClass.getMethod("systemMain");
+            Object at = systemMain.invoke(null);
+            Method getSysCtx = atClass.getMethod("getSystemContext");
+            android.content.Context ctx = (android.content.Context) getSysCtx.invoke(at);
 
             Class<?> dmClass = Class.forName("android.hardware.display.DisplayManager");
             java.lang.reflect.Constructor<?> dmCtor = dmClass.getDeclaredConstructor(android.content.Context.class);
             dmCtor.setAccessible(true);
-            DisplayManager dm = (DisplayManager) dmCtor.newInstance((Object) null);
+            DisplayManager dm = (DisplayManager) dmCtor.newInstance(ctx);
+
+            try {
+                java.lang.reflect.Field mirrorField = dmClass.getDeclaredField("mDisplayIdToMirror");
+                mirrorField.setAccessible(true);
+                mirrorField.setInt(dm, 0);
+            } catch (Throwable ignored) {}
 
             java.lang.reflect.Field serviceField = dmClass.getDeclaredField("mGlobal");
             serviceField.setAccessible(true);
