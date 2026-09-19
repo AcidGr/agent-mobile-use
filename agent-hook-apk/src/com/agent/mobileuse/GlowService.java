@@ -32,6 +32,7 @@ public class GlowService extends Service {
     private static final int NOTIFICATION_ID = 10086;
     private WindowManager mWindowManager;
     private GlowView mGlowView;
+    private CapsuleView mCapsuleView;
     private boolean mIsShowing = false;
     private BroadcastReceiver mTouchReceiver;
     private Handler mMainHandler;
@@ -154,6 +155,44 @@ public class GlowService extends Service {
 
             mWindowManager.addView(mGlowView, lp);
             mGlowView.startPulseAnimation();
+
+            // Add Black Status Bar Capsule (red circle zone, right of camera cutout)
+            try {
+                int capWidth = 240;
+                int capHeight = 70;
+                mCapsuleView = new CapsuleView(this, new Runnable() {
+                    @Override
+                    public void run() {
+                        triggerHandoff();
+                    }
+                });
+
+                int capWindowType = 2038; // TYPE_APPLICATION_OVERLAY
+                WindowManager.LayoutParams capLp = new WindowManager.LayoutParams(
+                    capWidth,
+                    capHeight,
+                    capWindowType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                );
+                capLp.gravity = Gravity.TOP | Gravity.LEFT;
+                capLp.x = 680;
+                capLp.y = 144; // Placed right below status bar (y >= 141) to guarantee touch reception
+                capLp.setTitle("AgentMobileCapsule");
+
+                try {
+                    java.lang.reflect.Field cutoutField = WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode");
+                    cutoutField.setInt(capLp, 3);
+                } catch (Throwable ignored) {}
+
+                mWindowManager.addView(mCapsuleView, capLp);
+                applySkipScreenshot(mCapsuleView);
+                android.util.Log.i("AgentGlowService", "CapsuleView added at (" + capLp.x + ", " + capLp.y + ")");
+            } catch (Throwable capErr) {
+                android.util.Log.e("AgentGlowService", "Failed to add capsule view: " + capErr.getMessage(), capErr);
+            }
+
             registerTouchReceiver();
             mIsShowing = true;
             android.util.Log.i("AgentGlowService", "Glow Overlay added (full screen edge glow + touch indicator enabled).");
@@ -223,18 +262,163 @@ public class GlowService extends Service {
     }
 
     private void hideGlow() {
-        if (!mIsShowing || mGlowView == null) return;
+        if (!mIsShowing) return;
         try {
             unregisterTouchReceiver();
-            mGlowView.stopAnimation();
-            if (mWindowManager != null) {
-                mWindowManager.removeView(mGlowView);
+            if (mGlowView != null) {
+                mGlowView.stopAnimation();
+                if (mWindowManager != null) {
+                    mWindowManager.removeView(mGlowView);
+                }
+                mGlowView = null;
             }
-            mGlowView = null;
+            if (mCapsuleView != null) {
+                if (mWindowManager != null) {
+                    try {
+                        mWindowManager.removeView(mCapsuleView);
+                    } catch (Throwable ignored) {}
+                }
+                mCapsuleView = null;
+            }
             mIsShowing = false;
-            android.util.Log.i("AgentGlowService", "Glow Overlay removed.");
+            android.util.Log.i("AgentGlowService", "Glow Overlay and CapsuleView removed.");
         } catch (Throwable t) {
-            android.util.Log.e("AgentGlowService", "Failed to remove glow view: " + t.getMessage(), t);
+            android.util.Log.e("AgentGlowService", "Failed to remove views: " + t.getMessage(), t);
+        }
+    }
+
+    private void triggerHandoff() {
+        android.util.Log.i("AgentGlowService", "Capsule clicked! Triggering handoff to background...");
+        if (mCapsuleView != null) {
+            mCapsuleView.animate().alpha(0f).scaleX(0.5f).scaleY(0.5f).setDuration(150).start();
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/handoff");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(1500);
+                    conn.setReadTimeout(1500);
+                    int code = conn.getResponseCode();
+                    android.util.Log.i("AgentGlowService", "Handoff request finished, response code: " + code);
+                    conn.disconnect();
+                } catch (Throwable t) {
+                    android.util.Log.w("AgentGlowService", "HTTP handoff failed, trying curl fallback: " + t.getMessage());
+                    try {
+                        Runtime.getRuntime().exec(new String[]{"/system/bin/sh", "-c", "curl -s http://127.0.0.1:3070/api/handoff"}).waitFor();
+                        android.util.Log.i("AgentGlowService", "Fallback curl handoff executed.");
+                    } catch (Throwable t2) {
+                        android.util.Log.e("AgentGlowService", "Curl fallback failed: " + t2.getMessage(), t2);
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void applySkipScreenshot(final View view) {
+        mMainHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.lang.reflect.Method getRoot = view.getClass().getMethod("getViewRootImpl");
+                    Object vri = getRoot.invoke(view);
+                    if (vri != null) {
+                        java.lang.reflect.Method getSc = vri.getClass().getMethod("getSurfaceControl");
+                        Object sc = getSc.invoke(vri);
+                        if (sc != null) {
+                            Class<?> tClass = Class.forName("android.view.SurfaceControl$Transaction");
+                            Object t = tClass.getConstructor().newInstance();
+                            java.lang.reflect.Method setSkip = tClass.getMethod("setSkipScreenshot", Class.forName("android.view.SurfaceControl"), boolean.class);
+                            setSkip.invoke(t, sc, true);
+                            java.lang.reflect.Method apply = tClass.getMethod("apply");
+                            apply.invoke(t);
+                            android.util.Log.i("AgentGlowService", "setSkipScreenshot(true) applied to CapsuleView!");
+                        }
+                    }
+                } catch (Throwable t) {
+                    android.util.Log.w("AgentGlowService", "SkipScreenshot reflection: " + t.getMessage());
+                }
+            }
+        }, 100);
+    }
+
+    private static class CapsuleView extends View {
+        private final Paint mBgPaint;
+        private final Paint mStrokePaint;
+        private final Paint mTextPaint;
+        private final Paint mDotPaint;
+        private final RectF mBounds = new RectF();
+        private final Runnable mOnClickCallback;
+
+        public CapsuleView(Context context, Runnable onClick) {
+            super(context);
+            mOnClickCallback = onClick;
+            mBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mBgPaint.setColor(0xF2121316); // 深黑灰，高对比度
+            mBgPaint.setStyle(Paint.Style.FILL);
+
+            mStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mStrokePaint.setColor(0xFF00E5FF); // 荧光青边框，极其醒目
+            mStrokePaint.setStyle(Paint.Style.STROKE);
+            mStrokePaint.setStrokeWidth(3f);
+
+            mDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mDotPaint.setColor(0xFF00E5FF); // 呼吸青色圆点
+            mDotPaint.setStyle(Paint.Style.FILL);
+
+            mTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mTextPaint.setColor(0xFFFFFFFF);
+            mTextPaint.setTextSize(28f);
+            mTextPaint.setFakeBoldText(true);
+            mTextPaint.setTextAlign(Paint.Align.LEFT);
+
+            setClickable(true);
+            setWillNotDraw(false);
+            setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        }
+
+        @Override
+        public boolean onTouchEvent(android.view.MotionEvent event) {
+            switch (event.getAction()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    animate().scaleX(0.92f).scaleY(0.92f).setDuration(100).start();
+                    invalidate();
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
+                    invalidate();
+                    if (mOnClickCallback != null) {
+                        mOnClickCallback.run();
+                    }
+                    return true;
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
+                    invalidate();
+                    return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int w = getWidth();
+            int h = getHeight();
+            float r = h / 2.0f;
+            mBounds.set(2, 2, w - 2, h - 2);
+
+            canvas.drawRoundRect(mBounds, r, r, mBgPaint);
+            canvas.drawRoundRect(mBounds, r, r, mStrokePaint);
+
+            float dotX = r * 0.85f;
+            float centerY = h / 2.0f;
+            canvas.drawCircle(dotX, centerY, 6f, mDotPaint);
+
+            Paint.FontMetrics fm = mTextPaint.getFontMetrics();
+            float textY = centerY - (fm.descent + fm.ascent) / 2.0f;
+            canvas.drawText("切到后台", dotX + 16f, textY, mTextPaint);
         }
     }
 

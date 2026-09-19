@@ -14,7 +14,7 @@ rm -rf build
 mkdir -p build/gen build/classes build/apk
 
 echo "[build] 1. Generating R.java and initial package with aapt..."
-"$AAPT" package -f -m \
+"$AAPT" package -f -m -0 arsc \
     -S res \
     -J build/gen \
     -M AndroidManifest.xml \
@@ -38,7 +38,10 @@ cd build
 cd "$SCRIPT_DIR"
 "$AAPT" add "build/apk/unaligned.apk" "assets/xposed_init"
 
-echo "[build] 5. Signing APK with debug key..."
+echo "[build] 5. Zipaligning APK to 4-byte boundary..."
+zipalign -p -f 4 "build/apk/unaligned.apk" "build/apk/aligned.apk"
+
+echo "[build] 6. Signing APK with debug key..."
 if [ ! -f "/root/debug.keystore" ]; then
     keytool -genkey -v -keystore /root/debug.keystore \
         -storepass android -alias androiddebugkey -keypass android \
@@ -51,7 +54,7 @@ fi
     --ks-key-alias androiddebugkey \
     --key-pass pass:android \
     --out "build/agent_hook.apk" \
-    "build/apk/unaligned.apk"
+    "build/apk/aligned.apk"
 
 echo "[build] Build successful: build/agent_hook.apk"
 ls -lh build/agent_hook.apk

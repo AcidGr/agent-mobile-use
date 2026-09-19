@@ -87,6 +87,44 @@ func getTargetDisplayID(st StatusResp) int {
 	return st.DisplayID
 }
 
+func handoffToBackground() map[string]interface{} {
+	st := getStatus()
+	vdDid := st.DisplayID
+	if vdDid <= 0 {
+		st = startVirtualDisplay()
+		vdDid = st.DisplayID
+	}
+
+	// 1. 获取 Display 0 当前顶层的组件名并无缝平移至副屏
+	out, _ := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep -A 5 "Display #0" | grep "topResumedActivity"`).Output()
+	re := regexp.MustCompile(`u0\s+([a-zA-Z0-9._]+/[a-zA-Z0-9._]+)`)
+	matches := re.FindStringSubmatch(string(out))
+	migratedComponent := ""
+	if len(matches) > 1 {
+		comp := matches[1]
+		if !strings.Contains(comp, "launcher") && !strings.Contains(comp, "systemui") {
+			migratedComponent = comp
+			if vdDid > 0 {
+				_ = exec.Command("/system/bin/am", "start", "--display", strconv.Itoa(vdDid), "-n", comp).Run()
+			}
+		}
+	}
+
+	// 2. 主屏退回桌面
+	_ = exec.Command("/system/bin/input", "-d", "0", "keyevent", "3").Run()
+
+	// 3. 模式设置为 background，并熄灭光效
+	setCurrentMode("background")
+
+	return map[string]interface{}{
+		"success":            true,
+		"mode":               "background",
+		"target_display_id":  vdDid,
+		"migrated_component": migratedComponent,
+		"message":            "Successfully handed off to background",
+	}
+}
+
 func ensureTargetReady() (StatusResp, int, error) {
 	st := getStatus()
 	targetDid := getTargetDisplayID(st)
@@ -290,6 +328,13 @@ func main() {
 			"target_display_id": targetDid,
 			"message":           fmt.Sprintf("Current mode is %s (Target Display %d)", mode, targetDid),
 		})
+	})
+
+	mux.HandleFunc("/api/handoff", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		res := handoffToBackground()
+		json.NewEncoder(w).Encode(res)
 	})
 
 	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
