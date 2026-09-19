@@ -101,25 +101,18 @@ public class ToolMain {
 
     /**
      * Hard caps. The DSH tool-result pruner replaces the middle of any result over
-     * thresholdChars (measured: 8192) with a fixed marker, keeping only headChars (4096)
-     * and tailChars (1024) — so an over-budget dump reaches the model as ~4096 chars of
-     * JSON, a marker, then ~1024 chars of a JSON *tail*: a corrupt, silently incomplete
-     * node list. Capping here keeps the payload valid and lets us report truncation
-     * honestly instead. The head+tail sliver is 5120 chars, so the budget below must sit
-     * under that with room for the envelope the Go server adds on top.
+     * thresholdChars with a fixed marker, keeping only headChars + tailChars — so an
+     * over-budget dump reaches the model as a corrupt, silently incomplete node list.
+     * The budget below must therefore stay under the preset's thresholdChars (raised to
+     * 14000 alongside this change) with room for the envelope and the fields the Go
+     * server adds.
      *
-     * Note the pruner counts Unicode code points while this string is built in UTF-16 code
-     * units; they agree for BMP text, and JSON-escaped non-ASCII only ever costs more, so
-     * this cap is the conservative one.
-     *
-     * Budget tuning history:
-     *   6200 chars / 140 nodes — first cut. Safe against the pruner, but on a dense home
-     *   screen (Taobao) the greedy tree-order fill cut 57% of the nodes, including most of
-     *   the bottom half of the screen. Measured after dedup + priority ranking: 6200 chars
-     *   now covers 100% of the same screen, so the slack below is deliberate headroom.
+     * `ctr` used to be ~15% of this payload for zero information, which is what made
+     * 6800 too small for a dense screen. With it gone, 12000 fits Amap's whole tree
+     * (~10500 after the removal) in one call.
      */
-    private static final int MAX_NODES = 150;
-    private static final int MAX_NODES_CHARS = 6800;
+    private static final int MAX_NODES = 200;
+    private static final int MAX_NODES_CHARS = 12000;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -710,7 +703,10 @@ public class ToolMain {
         if (nonEmpty(n.viewId)) sb.append(",\"vid\":\"").append(escapeJson(n.viewId)).append("\"");
         sb.append(",\"b\":[").append(n.left).append(",").append(n.top).append(",")
           .append(n.right).append(",").append(n.bottom).append("]");
-        sb.append(",\"ctr\":[").append(n.centerX).append(",").append(n.centerY).append("]");
+        // No `ctr`: it is exactly [(left+right)/2, (top+bottom)/2], so emitting it cost
+        // ~15% of the payload for zero information (measured on Amap: 1950 of 12780 bytes).
+        // `tap` below is still emitted because that is an ANCESTOR's centre, which the
+        // node's own bounds cannot reconstruct.
 
         if (n.clickable) sb.append(",\"click\":1");
         if (!n.enabled) sb.append(",\"enabled\":0");

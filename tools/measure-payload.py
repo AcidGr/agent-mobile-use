@@ -10,7 +10,7 @@ import subprocess
 import sys
 import urllib.request
 
-LIMIT = 8192
+LIMIT = 14000  # 与 preset 的 thresholdChars 保持一致
 
 APPS = [
     ("com.taobao.taobao", "淘宝"),

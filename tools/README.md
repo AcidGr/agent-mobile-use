@@ -18,88 +18,71 @@ Both drive the system browser (`com.heytap.browser`) for the WebView rows, and f
 it before the native apps — otherwise a leftover browser tab sits on top and the "app
 launches" land inside a WebView instead of the app under test.
 
-| column | meaning |
-| --- | --- |
-| `bytes` | response size; must stay under 8192 or DSH's result pruner slices the JSON |
-| `win` | windows on the display; `0` means the accessibility engine gave nothing |
-| `total` / `ret` | nodes collected vs. emitted after ranking and the budget cap |
-| `dup` | identical overlapping nodes merged away |
-| `trunc` | whether the budget ran out |
-| `omitted` / `ommin` | how many nodes were dropped, and the best usability tier among them |
-| `omtop` | **the one that matters** — non-empty means something tappable was dropped |
-| `nexty` | y coordinate to resume from via `mobile_dump_ui y_min=...` |
+Never use `mark.via` for this: it is the user's own browser.
 
-Read it like this: `trunc=true` on its own is not a problem. `trunc=true` with
-`omtop` set is a real loss. `win=0` is a retry, not an unreadable app.
+## The two numbers that must stay in step
+
+They live in **different repositories**, which is exactly why they drifted apart:
+
+| number | where | value |
+| --- | --- | --- |
+| `MAX_NODES_CHARS` | `agent-mobile-use/vd-tool-java/src/com/agent/ToolMain.java` | 12000 |
+| `thresholdChars` | `dsh-preset-mobile-use/preset/mobile-use/agent.cordis.yml` | 14000 |
+
+The tool budget must stay **below** the pruner threshold. Over `thresholdChars` the DSH
+pruner replaces the middle with a marker and keeps only `headChars` (4096) + `tailChars`
+(1024), so an over-budget dump arrives as a corrupt JSON fragment rather than a shortened
+one. Neither number is a platform limit: `thresholdChars` is ordinary config (8192 is just
+the plugin's default), and `MAX_NODES_CHARS` is a constant we wrote.
 
 ## Baseline at the time of writing
 
-`check-completeness.py` output. `act` is `act_sent/act_total`.
+`check-completeness.py` output. `act` is `act_sent/act_total`; `cp` is code points.
 
 ```
-淘宝        cp=7166  trunc=True   nodes=135 ret=65  act=45/45  ommin=4    OK
-小红书      cp=7097  trunc=True   nodes=50  ret=49  act=29/29  ommin=4    OK
-抖音        cp=7181  trunc=True   nodes=65  ret=52  act=40/40  ommin=4    OK
-美团        cp=6581  trunc=False  nodes=58  ret=58  act=32/32  ommin=None OK
-知乎        cp=7236  trunc=True   nodes=85  ret=59  act=42/42  ommin=4    OK
-QQ          cp=7077  trunc=True   nodes=73  ret=51  act=51/51  ommin=4    OK
-支付宝      cp=7193  trunc=True   nodes=75  ret=51  act=37/37  ommin=4    OK
-qq.com      cp=7126  trunc=True   nodes=114 ret=64  act=61/61  ommin=4    OK
-m.zhihu     cp=5664  trunc=False  nodes=48  ret=48  act=35/35  ommin=None OK
+淘宝        cp=11660  trunc=False  nodes=136 ret=134  act=45/45  OK
+小红书      cp=6401   trunc=False  nodes=50  ret=50   act=29/29  OK
+抖音        cp=7228   trunc=False  nodes=59  ret=59   act=36/36  OK
+美团        cp=4247   trunc=False  nodes=46  ret=46   act=31/31  OK
+知乎        cp=9133   trunc=False  nodes=88  ret=87   act=46/46  OK
+QQ          cp=8285   trunc=False  nodes=73  ret=73   act=51/51  OK
+支付宝      cp=9388   trunc=False  nodes=74  ret=74   act=37/37  OK
+qq.com      cp=11206  trunc=False  nodes=114 ret=114  act=61/61  OK
+m.zhihu     cp=4861   trunc=False  nodes=48  ret=48   act=35/35  OK
+高德地图    cp=10441  trunc=False  nodes=120 ret=120  act=86/86  OK
 ```
 
-Worst payload is 7236 code points against the 8192 prune limit, and every screen
-delivers every control in a single call. Amap is the exception — see below.
+Every screen now delivers every control **in a single call** — no paging needed, and no
+screen reports `truncated`. Worst payload measured 11690 against the 14000 limit.
 
 The harness refuses to report a screen it did not actually reach. A launch that fails
 leaves the previous app on top, so it checks the resumed package and prints SKIPPED
 rather than measuring the wrong app; that is how a phantom 微博 row was caught
 (`com.sina.weibo` is not installed on this device).
 
-## Dense screens need a paged read
+## Why the threshold was raised from 8192
 
-`check-completeness.py` reports `act_sent`/`act_total`, which is the only honest measure
-of "did the dump capture everything": `truncated` merely says the character budget ran
-out, and comparing two dumps taken seconds apart is invalid because the screen changes
-between them.
-
-Most screens are complete in one call. **Amap is not** — measured stable at 120 nodes / 86
-controls, of which 11 never arrive:
+Not for headroom — five screens genuinely exceeded it and were being sliced mid-JSON:
 
 ```
-FrameLayout '查路线'    [1096,1242,1271,1435]
-FrameLayout '我的位置'  [1096,1067,1271,1242]
-LinearLayout '(无标签)' [0,2548,1272,2800]     <- bottom nav
+com.taobao.taobao     11660      com.eg.android.AlipayGphone   9388
+qq.com (WebView)      11206      com.zhihu.android             9133
+com.tencent.mobileqq   8285
 ```
 
-Its full tree is ~12000 code points against a ~6800 budget, so something must be dropped;
-that is arithmetic, not a bug. What matters is that the loss is **loud** (`omitted_top: 1`)
-and **recoverable**:
+## The `ctr` removal
 
-```
-y_min=2400  ->  15 controls, 0 lost        (95 nodes clipped by the window)
-```
+`ctr` was `[(left+right)/2, (top+bottom)/2]` — pure redundancy, ~15% of every payload
+(measured on Amap: 1950 of 12780 bytes). Dropping it is free, and it is what brought the
+dense screens back under budget. `tap` is kept: that is an *ancestor's* centre and cannot
+be derived from the node's own bounds.
 
-so a paged read covers 90/86 controls across two calls. The tool description therefore
-requires paging whenever `omitted_top` is set, rather than leaving it to taste.
+## Paging still exists, as a fallback
 
-Ranking cannot fix this class of screen — sorting decides *which* nodes are dropped, not
-how many. The one genuinely unreadable category is canvas-drawn UI: Baidu Maps exposes
-16 nodes for a full map of labels, because the labels are drawn, not laid out. No budget
-or query strategy recovers those; they would need OCR on a screenshot.
-
-## Payload budget
-
-`measure-payload.py` reports the response size in **code points**, because that is the
-unit the DSH result pruner counts. Over `thresholdChars` (8192) the pruner replaces the
-middle with a marker, keeping only `headChars` (4096) + `tailChars` (1024) — so an
-over-budget dump arrives as a corrupt JSON fragment rather than a shortened one.
-
-Measured worst case across the six native apps plus two real WebView sites:
-
-```
-worst = 6983 code points (limit 8192, headroom 1209)
-```
+`mobile_dump_ui y_min=...` remains, driven by `next_y` when `omitted_top` is set. With the
+budget raised it is no longer needed for the screens above, but a screen with more
+controls than ~12000 code points can hold will still report `truncated`, and then paging
+recovers the rest instead of losing it.
 
 ## WebView / H5 pages
 
@@ -117,4 +100,10 @@ Querying the WebView re-enables it, but asynchronously: the first read returns o
 WebView's own chrome (`total=9`, no page content) and the next returns the page
 (`total=15`, with the buttons). The dump tool therefore reads twice and keeps the richer
 result. Verified deterministic on 3/3 fresh page loads, and end to end against
-`qq.com` (62 nodes) and `m.zhihu.com` (32 nodes).
+`qq.com` (114 nodes) and `m.zhihu.com` (48 nodes).
+
+## The one thing no budget fixes
+
+Canvas-drawn UI. Baidu Maps exposes 16 nodes for a full map of place labels, because the
+labels are drawn rather than laid out. No budget, query strategy, or accessibility flag
+recovers those; they would need OCR over a screenshot.
