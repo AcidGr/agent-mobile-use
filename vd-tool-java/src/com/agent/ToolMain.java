@@ -92,10 +92,17 @@ public class ToolMain {
     }
 
     /**
-     * Hard caps. The DSH tool-result pruner truncates results above 8192 chars
-     * (head 4096 + tail 1024), which would cut the JSON mid-array and hand the model a
-     * corrupt, silently incomplete node list. Capping here keeps the payload valid and
-     * lets us report truncation honestly instead.
+     * Hard caps. The DSH tool-result pruner replaces the middle of any result over
+     * thresholdChars (measured: 8192) with a fixed marker, keeping only headChars (4096)
+     * and tailChars (1024) — so an over-budget dump reaches the model as ~4096 chars of
+     * JSON, a marker, then ~1024 chars of a JSON *tail*: a corrupt, silently incomplete
+     * node list. Capping here keeps the payload valid and lets us report truncation
+     * honestly instead. The head+tail sliver is 5120 chars, so the budget below must sit
+     * under that with room for the envelope the Go server adds on top.
+     *
+     * Note the pruner counts Unicode code points while this string is built in UTF-16 code
+     * units; they agree for BMP text, and JSON-escaped non-ASCII only ever costs more, so
+     * this cap is the conservative one.
      *
      * Budget tuning history:
      *   6200 chars / 140 nodes — first cut. Safe against the pruner, but on a dense home
@@ -104,7 +111,7 @@ public class ToolMain {
      *   now covers 100% of the same screen, so the slack below is deliberate headroom.
      */
     private static final int MAX_NODES = 150;
-    private static final int MAX_NODES_CHARS = 7200;
+    private static final int MAX_NODES_CHARS = 6600;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -119,6 +126,13 @@ public class ToolMain {
      */
     private static final int DUMP_ATTEMPTS = 3;
     private static final int DUMP_RETRY_SLEEP_MS = 350;
+
+    /**
+     * Wait between the two passes. A WebView re-enables its renderer accessibility when it
+     * is queried, but not synchronously, so reading twice in a row without a gap sees the
+     * same disabled tree both times.
+     */
+    private static final int WEBVIEW_WAKE_SLEEP_MS = 600;
 
     public static void main(String[] args) {
         try {
@@ -207,7 +221,10 @@ public class ToolMain {
             int dispH = size[1];
 
             List<NodeItem> list = null;
+            List<NodeItem> firstList = null;
             int windowCount = 0;
+            int firstWindows = 0;
+            int firstSize = 0;
             int attempt = 0;
 
             // A dump racing an activity transition can see zero windows even though the
@@ -216,39 +233,68 @@ public class ToolMain {
             // Measured on Zhihu, which reported windows:0 and a perfectly good tree two
             // seconds later. Retrying here is what keeps the model from concluding that
             // the app hides its accessibility tree when it simply was not asked yet.
-            for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
-                list = new ArrayList<NodeItem>();
-                windowCount = 0;
-                int winIndex = 0;
+            //
+            // The second pass handles a different shape: a WebView whose renderer-side
+            // accessibility was auto-disabled. Chromium tears its accessibility tree down
+            // after NO_ACCESSIBILITY_SERVICES_ENABLED_DELAY_MS (5s) when it cannot see an
+            // accessibility service (AccessibilityState.isAnyAccessibilityServiceEnabled
+            // consults getEnabledAccessibilityServiceList, which UiAutomation does not
+            // appear in). Querying the WebView re-enables it, but asynchronously: the
+            // first dump returns only the WebView's chrome (9 nodes, no page content) and
+            // the very next one returns the page (15 nodes with the actual buttons).
+            // Measured deterministic across 3/3 fresh page loads.
+            for (int pass = 0; pass < 2; pass++) {
+                for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
+                    list = new ArrayList<NodeItem>();
+                    windowCount = 0;
+                    int winIndex = 0;
 
-                Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
-                if (displays != null) {
-                    Class<?> saClass = displays.getClass();
-                    int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
-                    Method keyAt = saClass.getMethod("keyAt", int.class);
-                    Method valueAt = saClass.getMethod("valueAt", int.class);
+                    Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+                    if (displays != null) {
+                        Class<?> saClass = displays.getClass();
+                        int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+                        Method keyAt = saClass.getMethod("keyAt", int.class);
+                        Method valueAt = saClass.getMethod("valueAt", int.class);
 
-                    for (int i = 0; i < sizeN; i++) {
-                        int dId = (Integer) keyAt.invoke(displays, i);
-                        if (dId != targetDisplayId) continue;
-                        List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                        if (wins == null) continue;
-                        for (Object win : wins) {
-                            windowCount++;
-                            Method getRootMethod = win.getClass().getMethod("getRoot");
-                            Object rootObj = getRootMethod.invoke(win);
-                            if (rootObj instanceof AccessibilityNodeInfo) {
-                                int[] idCounter = new int[] { 1 };
-                                collectInteractiveNodes((AccessibilityNodeInfo) rootObj, 0,
-                                        null, list, idCounter, winIndex);
+                        for (int i = 0; i < sizeN; i++) {
+                            int dId = (Integer) keyAt.invoke(displays, i);
+                            if (dId != targetDisplayId) continue;
+                            List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                            if (wins == null) continue;
+                            for (Object win : wins) {
+                                windowCount++;
+                                Method getRootMethod = win.getClass().getMethod("getRoot");
+                                Object rootObj = getRootMethod.invoke(win);
+                                if (rootObj instanceof AccessibilityNodeInfo) {
+                                    int[] idCounter = new int[] { 1 };
+                                    collectInteractiveNodes((AccessibilityNodeInfo) rootObj, 0,
+                                            null, list, idCounter, winIndex);
+                                }
+                                winIndex++;
                             }
-                            winIndex++;
                         }
                     }
+                    if (windowCount > 0) break;
+                    if (attempt < DUMP_ATTEMPTS - 1) {
+                        try { Thread.sleep(DUMP_RETRY_SLEEP_MS); } catch (InterruptedException ignored) {}
+                    }
                 }
-                if (windowCount > 0) break;
-                if (attempt < DUMP_ATTEMPTS - 1) {
-                    try { Thread.sleep(DUMP_RETRY_SLEEP_MS); } catch (InterruptedException ignored) {}
+
+                if (pass == 0) {
+                    firstSize = list.size();
+                    firstList = list;
+                    firstWindows = windowCount;
+                    // Give a possibly auto-disabled WebView time to rebuild its tree, then
+                    // look again. A second read costs ~0.6s and is the difference between
+                    // an H5 page and a blank one.
+                    try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
+                } else {
+                    // Keep whichever pass saw more. A thin second pass must not replace a
+                    // thin first one, and a richer second pass is exactly the WebView wake.
+                    if (list.size() <= firstSize) {
+                        list = firstList;
+                        windowCount = firstWindows;
+                    }
                 }
             }
             if (list == null) list = new ArrayList<NodeItem>();

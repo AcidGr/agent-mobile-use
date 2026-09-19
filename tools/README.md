@@ -27,20 +27,47 @@ Read it like this: `trunc=true` on its own is not a problem. `trunc=true` with
 ## Baseline at the time of writing
 
 ```
-com.taobao.taobao          bytes=7755  win=1 total=135 ret=74 dup=9 trunc=true  omitted=59 omtop=     ommin=4 nexty=2744
-com.xingin.xhs             bytes=7516  win=1 total=49  ret=49 dup=2 trunc=false omitted=                ommin=   nexty=
-com.ss.android.ugc.aweme   bytes=7829  win=1 total=66  ret=55 dup=1 trunc=true  omitted=7  omtop=     ommin=4 nexty=2744
-com.sankuai.meituan        bytes=7143  win=1 total=60  ret=60 dup=  trunc=false omitted=                ommin=   nexty=
-com.zhihu.android          bytes=8166  win=1 total=64  ret=58 dup=2 trunc=true  omitted=5  omtop=     ommin=4 nexty=2744
-com.tencent.mobileqq       bytes=8108  win=1 total=73  ret=55 dup=5 trunc=true  omitted=18 omtop=     ommin=4 nexty=2800
+com.taobao.taobao          codepoints=6961 total=136 ret=69 trunc=true  omitted=65 omtop=     ommin=4
+com.xingin.xhs             codepoints=6919 total=49  ret=48 trunc=true  omitted=1  omtop=     ommin=4
+com.ss.android.ugc.aweme   codepoints=6983 total=69  ret=52 trunc=true  omitted=13 omtop=     ommin=4
+com.sankuai.meituan        codepoints=6507 total=58  ret=58 trunc=false omitted=                ommin=
+com.zhihu.android          codepoints=6942 total=64  ret=55 trunc=true  omitted=8  omtop=     ommin=4
+com.tencent.mobileqq       codepoints=6893 total=73  ret=50 trunc=true  omitted=23 omtop=     ommin=2
+qq.com (WebView)           codepoints=6945 total=62  ret=60 trunc=true  omitted=2  omtop=     ommin=4
+m.zhihu.com (WebView)      codepoints=3735 total=32  ret=32 trunc=false omitted=                ommin=
 ```
 
 `omtop` is empty everywhere, so on none of these screens does truncation cost a
-tappable control. Regressions show up there first.
+tappable control. Regressions show up there first. `ommin=2` on QQ means one off-screen
+actionable node was dropped; page it with `next_y` if that screen needs it.
 
-## Known gap
+## Payload budget
 
-WebView/H5 pages return a single `WebView` node regardless of the flags set on
-the accessibility service, because `Settings.Secure.accessibility_enabled` is 0
-and Chromium's `AccessibilityBridge` therefore never attaches. Such screens must
-be read by screenshot, and their buttons cannot be resolved from the tree.
+`measure-payload.py` reports the response size in **code points**, because that is the
+unit the DSH result pruner counts. Over `thresholdChars` (8192) the pruner replaces the
+middle with a marker, keeping only `headChars` (4096) + `tailChars` (1024) — so an
+over-budget dump arrives as a corrupt JSON fragment rather than a shortened one.
+
+Measured worst case across the six native apps plus two real WebView sites:
+
+```
+worst = 6983 code points (limit 8192, headroom 1209)
+```
+
+## WebView / H5 pages
+
+Content **is** readable; an earlier revision of this file claimed otherwise.
+
+Chromium auto-disables a WebView's renderer accessibility after
+`NO_ACCESSIBILITY_SERVICES_ENABLED_DELAY_MS` (5s) when
+`AccessibilityState.isAnyAccessibilityServiceEnabled()` is false. That check consults
+`AccessibilityManager.getEnabledAccessibilityServiceList()`, which UiAutomation does not
+appear in: `AccessibilityManagerService.registerUiTestAutomationService` clears
+`mEnabledServices` and substitutes a fake component, so the list comes back empty even
+though `AccessibilityManager.isEnabled()` is true.
+
+Querying the WebView re-enables it, but asynchronously: the first read returns only the
+WebView's own chrome (`total=9`, no page content) and the next returns the page
+(`total=15`, with the buttons). The dump tool therefore reads twice and keeps the richer
+result. Verified deterministic on 3/3 fresh page loads, and end to end against
+`qq.com` (62 nodes) and `m.zhihu.com` (32 nodes).
