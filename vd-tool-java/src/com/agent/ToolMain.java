@@ -167,13 +167,24 @@ public class ToolMain {
             }
             int displayId = Integer.parseInt(args[1]);
             injectType(displayId, args[2]);
+        } else if ("clicknode".equals(cmd)) {
+            // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
+            // or description matches, then performAction(ACTION_CLICK) on it. See
+            // clickNode() for what this buys over a coordinate tap and where it fails.
+            if (args.length < 3) {
+                System.err.println("Usage: clicknode <displayId> <text|desc> [contains]");
+                return;
+            }
+            int displayId = Integer.parseInt(args[1]);
+            boolean contains = args.length > 3 && "contains".equals(args[3]);
+            clickNode(displayId, args[2], contains);
         } else {
             printUsage();
         }
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|clicknode> [args...]");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -231,24 +242,55 @@ public class ToolMain {
             int windowCount = 0;
             int firstWindows = 0;
             int firstSize = 0;
+            // How many attempts the FIRST scan needed. The rescue loop below can push the
+            // raw counter much higher, and reporting that as `retries` would make a normal
+            // screen look like a struggling one.
+            int scanAttempts = 0;
+            // Set when a rescue scan is what finally produced nodes. The caller is told,
+            // because a payload that needed rescue means the tree was not ready yet — a
+            // model that knows this will not conclude the screen is empty.
+            boolean recovered = false;
             int attempt = 0;
+            // Set once the paging window is applied, BEFORE the scan loop: the loop reads it
+            // to decide whether a second read is worth its wait.
+            boolean paged = yMin >= 0 || yMax >= 0;
 
-            // A dump racing an activity transition can see zero windows even though the
-            // screen is fine: UiAutomation.connect() returns before the service is bound,
-            // and AccessibilityInteractionClient then has no window list to hand out.
-            // Measured on Zhihu, which reported windows:0 and a perfectly good tree two
-            // seconds later. Retrying here is what keeps the model from concluding that
-            // the app hides its accessibility tree when it simply was not asked yet.
+            // Reading a tree is a race, so no single scan is trusted on its own. Three shapes
+            // of "not ready yet" were measured on this device, and they need DIFFERENT
+            // waits:
             //
-            // The second pass handles a different shape: a WebView whose renderer-side
-            // accessibility was auto-disabled. Chromium tears its accessibility tree down
-            // after NO_ACCESSIBILITY_SERVICES_ENABLED_DELAY_MS (5s) when it cannot see an
-            // accessibility service (AccessibilityState.isAnyAccessibilityServiceEnabled
-            // consults getEnabledAccessibilityServiceList, which UiAutomation does not
-            // appear in). Querying the WebView re-enables it, but asynchronously: the
-            // first dump returns only the WebView's chrome (9 nodes, no page content) and
-            // the very next one returns the page (15 nodes with the actual buttons).
-            // Measured deterministic across 3/3 fresh page loads.
+            //  - a dump racing an activity transition returns zero WINDOWS. UiAutomation
+            //    .connect() returns before the service is bound, so
+            //    AccessibilityInteractionClient has no window list to hand out. Measured on
+            //    Zhihu: windows:0 and a perfectly good tree two seconds later. A 350ms
+            //    retry loop fixes this cheaply.
+            //
+            //  - a window exists but yields NO NODES, and keeps doing so for seconds.
+            //    Measured on WeChat, and this was the surprise: it is INTERMITTENT, not
+            //    conditional. Six consecutive scans of one unchanged screen, ~6s apart,
+            //    returned 0, 0, 0, 68, 0, 70 nodes — with `tree_blocked` on every empty
+            //    one. There is no "correct display" or "correct launch order" to find; the
+            //    tree simply is not there every time it is asked for. Reacting to that with
+            //    a single re-read is what produced the contradiction: the same screen was
+            //    reported as tree_blocked and as 73 readable nodes, hours apart, and the
+            //    only variable was luck. So the second scan waits 2.5s, which is what
+            //    actually catches a non-empty window.
+            //
+            //  - a WebView whose renderer-side accessibility was auto-disabled. Chromium
+            //    tears its tree down after NO_ACCESSIBILITY_SERVICES_ENABLED_DELAY_MS (5s)
+            //    when it cannot see an accessibility service
+            //    (AccessibilityState.isAnyAccessibilityServiceEnabled consults
+            //    getEnabledAccessibilityServiceList, which UiAutomation never appears in).
+            //    Querying it re-enables it asynchronously: the first dump returns only the
+            //    WebView's chrome (9 nodes, no page content) and the next one returns the
+            //    page (15 nodes with the real buttons). Measured deterministic 3/3.
+            //
+            // All three are covered by the same shape: scan, wait, scan again, and keep
+            // whichever scan saw more. Ordering it that way matters — the second scan must
+            // be allowed to REPLACE a thin first one, or the WebView wake is lost.
+            //
+            // The wait is skipped when the caller asked for a paging window: re-reading
+            // would return the same clipped result, so it would only burn 2.5s.
             for (int pass = 0; pass < 2; pass++) {
                 for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
                     list = new ArrayList<NodeItem>();
@@ -280,6 +322,10 @@ public class ToolMain {
                             }
                         }
                     }
+                    if (pass == 0) scanAttempts = attempt + 1;
+                    // Zero windows is a scan failure and is worth retrying fast; a window
+                    // with no nodes is NOT retried here, because the thing that fixes it is
+                    // time, not repetition — pass 1 owns that case.
                     if (windowCount > 0) break;
                     if (attempt < DUMP_ATTEMPTS - 1) {
                         try { Thread.sleep(DUMP_RETRY_SLEEP_MS); } catch (InterruptedException ignored) {}
@@ -290,16 +336,26 @@ public class ToolMain {
                     firstSize = list.size();
                     firstList = list;
                     firstWindows = windowCount;
-                    // Give a possibly auto-disabled WebView time to rebuild its tree, then
-                    // look again. A second read costs ~0.6s and is the difference between
-                    // an H5 page and a blank one.
-                    try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
+                    // Give a not-yet-ready tree time to appear: a WebView's page content, or
+                    // WeChat's intermittently empty window. The second read is the difference
+                    // between a blank tree and the real one.
+                    if (!paged) {
+                        try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
+                    }
                 } else {
                     // Keep whichever pass saw more. A thin second pass must not replace a
-                    // thin first one, and a richer second pass is exactly the WebView wake.
+                    // thin first one, and a richer second pass is exactly the wake.
                     if (list.size() <= firstSize) {
                         list = firstList;
                         windowCount = firstWindows;
+                    } else if (firstWindows > 0 && firstSize == 0) {
+                        // The screen had a window but no nodes on the first read, and did
+                        // have nodes on the retry. Report it: a caller that knows the tree
+                        // was slow to appear will not read a later `tree_blocked` as "this
+                        // app hides its tree", which is exactly the wrong lesson to take
+                        // from an intermittently-empty window. Measured on WeChat, which
+                        // does this on both displays.
+                        recovered = true;
                     }
                 }
             }
@@ -314,7 +370,6 @@ public class ToolMain {
             // Paging window. The full tree geometry is reported in the envelope even when
             // a window is applied, so the caller always knows what it is not seeing.
             int clipped = 0;
-            boolean paged = yMin >= 0 || yMax >= 0;
             if (paged) {
                 List<NodeItem> windowed = new ArrayList<NodeItem>(list.size());
                 for (NodeItem n : list) {
@@ -329,7 +384,7 @@ public class ToolMain {
             rankForBudget(list);
 
             emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
-                    droppedDup, clipped, paged, attempt, budgetOverride);
+                    droppedDup, clipped, paged, scanAttempts, recovered, budgetOverride);
 
         } catch (Throwable t) {
             // Never die silently. Emit the SAME shape as a success so "did this fail?"
@@ -581,7 +636,7 @@ public class ToolMain {
     private static void emitEnvelope(int displayId, int dispW, int dispH,
                                      int windowCount, List<NodeItem> list,
                                      int droppedDup, int clipped, boolean paged,
-                                     int scanAttempts, int budgetOverride) {
+                                     int scanAttempts, boolean recovered, int budgetOverride) {
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;
@@ -657,12 +712,20 @@ public class ToolMain {
         }
         sb.append(",\"total\":").append(total);
         if (scanAttempts > 0) sb.append(",\"retries\":").append(scanAttempts);
+        // The tree was not there on the first read and appeared on a retry. Reported
+        // because it changes how a later empty result should be read: WeChat returns an
+        // empty window intermittently rather than refusing outright (measured 0,0,0,68,0,70
+        // on one unchanged screen), so "it worked a minute ago" is not a contradiction.
+        if (recovered) sb.append(",\"recovered\":1");
         // Three ways to end up with no nodes, and they call for different reactions.
         // Each is now named for what it actually is:
         //   no_windows   the engine returned no window object at all (a scan failure)
-        //   tree_blocked a window exists but getRoot() yielded nothing (WeChat's chat
-        //                list does exactly this: 1 window, 0 nodes, a full screen of
-        //                content visible only in a screenshot)
+        //   tree_blocked a window exists but getRoot() yielded nothing. NOTE: this is NOT
+        //                proof that the app withholds its tree. WeChat lands here
+        //                intermittently — the same unchanged screen returned 0 nodes on
+        //                four scans and 68/70 on two others — so treat it as "not readable
+        //                right now" and re-read before concluding anything, and check
+        //                `recovered` on a later call.
         // Both are `ok:true` — the call succeeded, the screen just has no readable tree.
         if (windowCount == 0) {
             sb.append(",\"no_windows\":1");
@@ -868,6 +931,185 @@ public class ToolMain {
                 collectInteractiveNodes(child, depth + 1, childAncestor, list, idCounter, winIndex);
             }
         }
+    }
+
+    /** Depth cap for node search. WeChat's real tree runs 14+ deep. */
+    private static final int MAX_NODE_DEPTH = 30;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Node-identity click
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Click a node by identity instead of by coordinate.
+     *
+     * Why this is worth having: performAction(ACTION_CLICK) asks the system to run the
+     * target View's click directly, so it does not depend on (a) the coordinate still
+     * being correct after the layout settled, or (b) nothing overlapping that point.
+     * A coordinate tap goes through InputDispatcher and lands on whatever is topmost.
+     *
+     * Where it fails, which is why the coordinate path must stay:
+     *   - no node, no click (canvas-drawn UI exposes nothing to click)
+     *   - plenty of controls return false from performAction even though they are
+     *     clickable, most often RecyclerView items and anything with a custom
+     *     touch handler
+     *   - an invisible or disabled node cannot be actioned
+     * Callers get an explicit `ok` plus `why`, so a false result is never mistaken for
+     * a successful tap.
+     */
+    private static void clickNode(int targetDisplayId, String label, boolean contains) {
+        HandlerThread ht = null;
+        Object uiAutomation = null;
+        String err = null;
+        String cls = null;
+        String txt = null;
+        String dsc = null;
+        String vid = null;
+        int[] bounds = null;
+        boolean ok = false;
+        int tried = 0;
+        try {
+            ht = new HandlerThread("NodeClickThread");
+            ht.start();
+            Object uac = Class.forName("android.app.UiAutomationConnection")
+                    .getConstructor().newInstance();
+            Class<?> uiClass = Class.forName("android.app.UiAutomation");
+            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
+            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
+                    .newInstance(ht.getLooper(), uac);
+            try {
+                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
+            } catch (NoSuchMethodException e) {
+                uiClass.getMethod("connect").invoke(uiAutomation);
+            }
+            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+            info.eventTypes = -1;
+            info.feedbackType = 16;
+            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
+            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
+            Thread.sleep(400);
+
+            List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
+            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+            if (displays != null) {
+                Class<?> saClass = displays.getClass();
+                int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+                Method keyAt = saClass.getMethod("keyAt", int.class);
+                Method valueAt = saClass.getMethod("valueAt", int.class);
+                for (int i = 0; i < sizeN; i++) {
+                    int dId = (Integer) keyAt.invoke(displays, i);
+                    if (dId != targetDisplayId) continue;
+                    List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                    if (wins == null) continue;
+                    for (Object win : wins) {
+                        Object rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                        if (rootObj instanceof AccessibilityNodeInfo) {
+                            collectAll((AccessibilityNodeInfo) rootObj, 0, all);
+                        }
+                    }
+                }
+            }
+
+            // Prefer a node this action can actually land on: clickable, enabled, visible.
+            // A label often sits inside the real control, and actioning the label is what
+            // makes a node click look like it silently failed.
+            AccessibilityNodeInfo best = null;
+            AccessibilityNodeInfo fallback = null;
+            for (AccessibilityNodeInfo an : all) {
+                if (!labelMatches(an.getText(), label, contains)
+                        && !labelMatches(an.getContentDescription(), label, contains)) {
+                    continue;
+                }
+                tried++;
+                if (an.isClickable() && an.isEnabled() && an.isVisibleToUser()) {
+                    best = an;
+                    break;
+                }
+                if (fallback == null) fallback = an;
+            }
+            if (best == null) best = fallback;
+            if (best != null && !best.isClickable()) {
+                // A label usually sits inside the real control and is not itself
+                // clickable; actioning the label is what makes a node click look like it
+                // silently did nothing. Walk up to the nearest actionable ancestor.
+                AccessibilityNodeInfo anc = clickableAncestor(best);
+                if (anc != null) best = anc;
+            }
+            if (best != null) {
+                Rect r = new Rect();
+                best.getBoundsInScreen(r);
+                bounds = new int[] { r.left, r.top, r.right, r.bottom };
+                cls = best.getClassName() != null ? best.getClassName().toString() : null;
+                txt = best.getText() != null ? best.getText().toString() : null;
+                dsc = best.getContentDescription() != null
+                        ? best.getContentDescription().toString() : null;
+                vid = best.getViewIdResourceName();
+                ok = best.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (!ok) err = "performAction(ACTION_CLICK) returned false";
+            } else {
+                err = "no node matched";
+            }
+        } catch (Throwable t) {
+            err = String.valueOf(t);
+        } finally {
+            if (uiAutomation != null) {
+                try {
+                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) ht.quit();
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"ok\":").append(ok);
+        if (err != null) sb.append(",\"error\":\"").append(escapeJson(err)).append("\"");
+        sb.append(",\"label\":\"").append(escapeJson(label)).append("\"");
+        sb.append(",\"matched\":").append(tried);
+        if (cls != null) sb.append(",\"type\":\"").append(escapeJson(cls)).append("\"");
+        if (txt != null) sb.append(",\"text\":\"").append(escapeJson(txt)).append("\"");
+        if (dsc != null) sb.append(",\"desc\":\"").append(escapeJson(dsc)).append("\"");
+        if (vid != null) sb.append(",\"vid\":\"").append(escapeJson(vid)).append("\"");
+        if (bounds != null) {
+            sb.append(",\"b\":[").append(bounds[0]).append(",").append(bounds[1]).append(",")
+              .append(bounds[2]).append(",").append(bounds[3]).append("]");
+        }
+        sb.append("}");
+        System.out.print(sb.toString());
+    }
+
+    /**
+     * Nearest ancestor (or the node itself) that accepts a click. This is the node whose
+     * click the user meant when they named a label.
+     */
+    private static AccessibilityNodeInfo clickableAncestor(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo cur = node;
+        for (int up = 0; up < MAX_NODE_DEPTH && cur != null; up++) {
+            if (cur.isClickable() && cur.isEnabled()) return cur;
+            AccessibilityNodeInfo p = null;
+            try { p = cur.getParent(); } catch (Throwable ignored) {}
+            if (p == null) return null;
+            cur = p;
+        }
+        return null;
+    }
+
+    private static void collectAll(AccessibilityNodeInfo node, int depth,
+                                   List<AccessibilityNodeInfo> out) {
+        if (node == null || depth > MAX_NODE_DEPTH) return;
+        out.add(node);
+        int c = node.getChildCount();
+        for (int i = 0; i < c; i++) {
+            AccessibilityNodeInfo ch = null;
+            try { ch = node.getChild(i); } catch (Throwable ignored) {}
+            if (ch != null) collectAll(ch, depth + 1, out);
+        }
+    }
+
+    private static boolean labelMatches(CharSequence value, String label, boolean contains) {
+        if (value == null) return false;
+        String s = value.toString().trim();
+        if (s.length() == 0) return false;
+        return contains ? s.contains(label) : s.equals(label);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

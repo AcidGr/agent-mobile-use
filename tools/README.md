@@ -114,18 +114,37 @@ differs:
 | normal | `ok: true` + nodes present | act on it |
 | scan failure | `ok: false` + `error` | retry; the dump did not run |
 | engine gave nothing | `ok: true`, `no_windows: 1` | retry; no window object at all |
-| tree blocked | `ok: true`, `tree_blocked: 1` | **do NOT retry** — screenshot and use coordinates |
+| tree blocked | `ok: true`, `tree_blocked: 1` | **re-read once** — it is intermittent, not a property of the app |
 
-`tree_blocked` is the one that actually happens. Measured on WeChat:
+`tree_blocked` is the one that actually happens, and an earlier revision of this file
+got it wrong in the most expensive way: it called the state deliberate and told the
+reader not to retry. Measured on WeChat, six consecutive scans of ONE UNCHANGED SCREEN,
+about 6s apart, returned:
 
 ```
-LauncherUI (chat list)              windows=1  nodes=0    ← blocked
-chat page                           windows=1  nodes=0    ← blocked
-plugin.settings.ui.MMSettingUI      windows=1  nodes=135  ← fine
+0, 0, 0, 68, 0, 70      nodes, windows=1 on every scan
 ```
 
-while a screenshot of the blocked screens shows a full screen of content. It is
-deliberate, so retrying is wasted effort — the opposite of the `no_windows` case.
+Every empty one carried `tree_blocked`. Same app, same screen, same display, same
+service state. So the tree is NOT reliably available, and a later successful read is not
+a contradiction. The envelope reports `recovered: 1` when a window yielded no nodes on
+the first scan but did on a retry, which is how a caller tells "the tree was slow" apart
+from "the app refuses".
+
+What drives the difference is NOT yet identified, and one plausible answer has already
+been ruled out. Six 6s-spaced reads look like periodic jitter, but raising the in-call
+retry gap from 600ms to 2500ms changed nothing measurable (2/6 readable either way, and
+`recovered` never fired: whenever a read succeeded, its FIRST scan had already succeeded;
+whenever one failed, its second scan failed too). So it is not "wait a moment and it
+appears" — retrying inside the call is cheap insurance, not a fix, and anything that
+depends on WeChat's tree must tolerate an unreadable read.
+
+Two claims that used to be in this file were measurement artefacts and are withdrawn:
+`nodes=135` attributed to WeChat settings (the foreground at that moment was the
+browser, and `plugin.settings.ui.MMSettingUI` does not exist on this device), and "74
+nodes readable" attributed to WeChat (those labels — 下一页 / 完成 / 关闭 TalkBack —
+are TalkBack's own setup activity). Both came from testing without checking who owned
+the foreground.
 
 `no_windows` replaced an earlier `empty_scan` field that was misnamed (it detected a
 missing window, not an empty tree) and effectively unreachable: it required the engine
