@@ -51,10 +51,20 @@ func setCurrentMode(m string) string {
 	lower := strings.ToLower(strings.TrimSpace(m))
 	if lower == "foreground" || lower == "fg" || lower == "0" {
 		currentMode = "foreground"
+		go setEdgeGlow(true)
 	} else {
 		currentMode = "background"
+		go setEdgeGlow(false)
 	}
 	return currentMode
+}
+
+func setEdgeGlow(enable bool) {
+	if enable {
+		exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService").Run()
+	} else {
+		exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a STOP com.agent.mobileuse/.GlowService").Run()
+	}
 }
 
 func getTargetDisplayID(st StatusResp) int {

@@ -15,6 +15,8 @@
 
 ### 实测实录：纯手绘作画实机效果展示（物理触控含金量）
 
+📺 **B站高清实机演示视频**：[https://www.bilibili.com/video/BV1WYeS6YEwt](https://www.bilibili.com/video/BV1WYeS6YEwt)
+
 底层虚拟副屏不仅能响应离散的按钮点击，更能承受高密度、高频次的连续物理手势调度。
 
 在与 DeepSeek Harness (DSH) 配合测试中，Agent 接到指令 **“去我的便签里面，用绘制的方式（用系统的笔）随便画一幅画吧！要手绘噢！”**。在后台完全静默的副屏上拉起便签画板，自主进行了 **105 步精细运笔手势**，一手一手纯手绘创作完成了整幅风景画：
@@ -143,6 +145,8 @@ By decoupling execution onto an independent virtual display (Display > 0), inter
 ---
 
 ### Real-world Showcase: Autonomous Hand-drawn Artwork
+
+📺 **Bilibili Showcase Video**: [https://www.bilibili.com/video/BV1WYeS6YEwt](https://www.bilibili.com/video/BV1WYeS6YEwt)
 
 The underlying headless virtual display supports not just discrete button clicks, but high-frequency, precision continuous gestures.
 
