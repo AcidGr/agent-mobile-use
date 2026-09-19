@@ -61,6 +61,14 @@ public class ToolMain {
         // ---- budget ranking (filled by rankForBudget) ----
         public int priority;
 
+        /**
+         * Whether this node does something the model cares about: navigate, open a
+         * submenu, show a destination. A pure checkbox or a decorative toggle ranks below
+         * a control that changes where you are, which is the difference that cost Amap
+         * its 查路线 button when the budget ran out inside one priority tier.
+         */
+        public boolean actionBearing;
+
         // ---- window provenance ----
         /**
          * Index of the window this node came from, in the z-order returned by
@@ -111,7 +119,7 @@ public class ToolMain {
      *   now covers 100% of the same screen, so the slack below is deliberate headroom.
      */
     private static final int MAX_NODES = 150;
-    private static final int MAX_NODES_CHARS = 6600;
+    private static final int MAX_NODES_CHARS = 6800;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -153,7 +161,12 @@ public class ToolMain {
             // slots without the caller having to build a different argv shape.
             int yMin = args.length > 2 && args[2].length() > 0 ? Integer.parseInt(args[2]) : -1;
             int yMax = args.length > 3 && args[3].length() > 0 ? Integer.parseInt(args[3]) : -1;
-            dumpTree(displayId, yMin, yMax);
+            // Diagnostic escape hatch: raise the node budget so a full tree can be
+            // compared against what the model actually receives. Never sent by the
+            // server, so production behaviour is unchanged.
+            int budgetOverride = args.length > 4 && args[4].length() > 0
+                    ? Integer.parseInt(args[4]) : 0;
+            dumpTree(displayId, yMin, yMax, budgetOverride);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
                 System.err.println("Usage: type <displayId> <text>");
@@ -174,7 +187,7 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static void dumpTree(int targetDisplayId, int yMin, int yMax) {
+    private static void dumpTree(int targetDisplayId, int yMin, int yMax, int budgetOverride) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -323,7 +336,7 @@ public class ToolMain {
             rankForBudget(list);
 
             emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
-                    droppedDup, clipped, paged, attempt);
+                    droppedDup, clipped, paged, attempt, budgetOverride);
 
         } catch (Throwable t) {
             // Never die silently: emit a valid envelope so the caller can tell the
@@ -517,6 +530,7 @@ public class ToolMain {
         for (int i = 0; i < list.size(); i++) {
             NodeItem n = list.get(i);
             n.priority = priorityOf(n);
+            n.actionBearing = isActionBearing(n);
             // Document order is both the tiebreak and the keeper of the reading order.
             ranked.add(new Ranked(n, i));
         }
@@ -532,6 +546,13 @@ public class ToolMain {
         return 2;
     }
 
+    /** Heuristic for the within-tier tiebreak; deliberately conservative. */
+    private static boolean isActionBearing(NodeItem n) {
+        if (n.checkable || n.editableFlag) return false;
+        if (!n.clickable) return n.targetId > 0;
+        return true;
+    }
+
     /** Sort key: usefulness tier, then document order. */
     static class Ranked implements Comparable<Ranked> {
         final NodeItem node;
@@ -544,6 +565,7 @@ public class ToolMain {
 
         public int compareTo(Ranked o) {
             if (node.priority != o.node.priority) return node.priority - o.node.priority;
+            if (node.actionBearing != o.node.actionBearing) return node.actionBearing ? -1 : 1;
             if (seq != o.seq) return seq - o.seq;
             return node.id - o.node.id;
         }
@@ -563,13 +585,20 @@ public class ToolMain {
     private static void emitEnvelope(int displayId, int dispW, int dispH,
                                      int windowCount, List<NodeItem> list,
                                      int droppedDup, int clipped, boolean paged,
-                                     int scanAttempts) {
+                                     int scanAttempts, int budgetOverride) {
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;
         boolean truncated = false;
         int lastBottom = 0;
         int omitted = 0;
+        // Lossless accounting: how many nodes in the ENTIRE tree are actionable
+        // (clickable / checkable), and how many of those actually reached the model.
+        // Without this, "truncated" only says the budget ran out, not whether anything
+        // the model could have tapped was lost — and comparing two dumps taken seconds
+        // apart cannot answer it either, because the screen changes in between.
+        int actTotal = 0;
+        int actSent = 0;
         int omittedMinPriority = Integer.MAX_VALUE;
         boolean omittedTopTier = false;
         int fullMinX = Integer.MAX_VALUE, fullMaxX = Integer.MIN_VALUE;
@@ -581,10 +610,16 @@ public class ToolMain {
             if (n.right > fullMaxX) fullMaxX = n.right;
             if (n.top < fullMinY) fullMinY = n.top;
             if (n.bottom > fullMaxY) fullMaxY = n.bottom;
+            // Count only nodes that would actually render. Counting every raw clickable
+            // node reports a phantom loss, because renderNode drops some of them as noise
+            // and act_sent can then never reach act_total however large the budget is.
+            if ((n.clickable || n.checkable) && isEmittable(n, dispW, dispH)) actTotal++;
         }
 
         for (int i = 0; i < total; i++) {
-            if (emitted >= MAX_NODES || nodes.length() >= MAX_NODES_CHARS) {
+            int charBudget = budgetOverride > 0 ? budgetOverride : MAX_NODES_CHARS;
+            int nodeBudget = budgetOverride > 0 ? Integer.MAX_VALUE : MAX_NODES;
+            if (emitted >= nodeBudget || nodes.length() >= charBudget) {
                 // Everything still queued is a candidate for omission, but only nodes that
                 // would actually have rendered count — otherwise `omitted` reports noise
                 // the caller was never going to see.
@@ -594,6 +629,10 @@ public class ToolMain {
                     if (!isEmittable(n, dispW, dispH)) continue;
                     omitted++;
                     if (n.priority < omittedMinPriority) omittedMinPriority = n.priority;
+                    // Tier 1 is "on screen, actionable through its own click" — a real
+                    // control the model can tap. Measured on Amap, where the budget cut
+                    // straight into tier 1 and silently dropped 查路线 and 我的位置 with no
+                    // signal at all, because only tier 0 was treated as top-tier.
                     if (n.priority <= 1) omittedTopTier = true;
                 }
                 break;
@@ -603,6 +642,7 @@ public class ToolMain {
             if (emitted > 0) nodes.append(",");
             nodes.append(s);
             emitted++;
+            if (list.get(i).clickable || list.get(i).checkable) actSent++;
             if (list.get(i).bottom > lastBottom) lastBottom = list.get(i).bottom;
         }
 
@@ -628,6 +668,8 @@ public class ToolMain {
         if (droppedDup > 0) sb.append(",\"dup\":").append(droppedDup);
         if (paged) sb.append(",\"clipped\":").append(clipped);
         sb.append(",\"returned\":").append(emitted);
+        sb.append(",\"act_total\":").append(actTotal);
+        sb.append(",\"act_sent\":").append(actSent);
         sb.append(",\"truncated\":").append(truncated);
         if (truncated) {
             // Say WHAT was lost, not just that something was. "omitted":73 alone tells the

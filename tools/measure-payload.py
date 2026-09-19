@@ -21,7 +21,7 @@ APPS = [
     ("com.tencent.mobileqq", "QQ"),
 ]
 
-# Optional WebView targets: (activity, url) triples exercised through mark.via.
+# Optional WebView targets: (activity, url) triples exercised through com.heytap.browser.
 WEB = [
     ("https://www.qq.com", "qq.com"),
     ("https://m.zhihu.com", "m.zhihu"),
@@ -68,8 +68,8 @@ def main():
         if cp:
             worst = max(worst, cp)
     for url, name in WEB:
-        sh('am force-stop mark.via >/dev/null 2>&1; sleep 2; '
-           'am start --display 3 -a android.intent.action.VIEW -d "%s" mark.via >/dev/null 2>&1; sleep 9;' % url)
+        sh('am force-stop com.heytap.browser >/dev/null 2>&1; sleep 2; '
+           'am start --display 3 -a android.intent.action.VIEW -d "%s" com.heytap.browser >/dev/null 2>&1; sleep 9;' % url)
         cp = measure(name)
         if cp:
             worst = max(worst, cp)
