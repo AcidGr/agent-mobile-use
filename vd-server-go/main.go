@@ -511,8 +511,13 @@ func main() {
 		if p.Title == "" {
 			p.Title = "Mobile Agent 任务状态"
 		}
-		// Post notification using su 2000 to assign to com.android.shell
-		cmd := exec.Command("/system/bin/su", "2000", "cmd", "notification", "post", "-S", "bigtext", "-t", p.Title, p.Tag, p.Content)
+		// Post notification using su 2000 to assign to com.android.shell via environment variables
+		cmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post -S bigtext -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
+		cmd.Env = append(os.Environ(),
+			"NOTIFY_TITLE="+p.Title,
+			"NOTIFY_TAG="+p.Tag,
+			"NOTIFY_CONTENT="+p.Content,
+		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
