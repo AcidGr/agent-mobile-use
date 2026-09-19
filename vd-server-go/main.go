@@ -167,8 +167,34 @@ func getStatus() StatusResp {
 	return resp
 }
 
-func getSfDisplayID() string {
-	out, err := exec.Command("/system/bin/dumpsys", "SurfaceFlinger", "--display-id").Output()
+// displaySize resolves the pixel size of the display the agent is currently driving.
+// For the virtual display the daemon already knows it; for the physical display it is
+// parsed from `wm size`, which reports the override or physical resolution.
+func displaySize(targetDid int, st StatusResp) (int, int) {
+	if targetDid != 0 {
+		if st.Width > 0 && st.Height > 0 {
+			return st.Width, st.Height
+		}
+		return 0, 0
+	}
+	out, err := exec.Command("/system/bin/wm", "size").Output()
+	if err != nil {
+		return 0, 0
+	}
+	re := regexp.MustCompile(`([0-9]+)x([0-9]+)`)
+	matches := re.FindAllStringSubmatch(string(out), -1)
+	if len(matches) == 0 {
+		return 0, 0
+	}
+	// When an override is active `wm size` prints "Override size: WxH" first; the last
+	// match is the effective one either way.
+	last := matches[len(matches)-1]
+	w, _ := strconv.Atoi(last[1])
+	h, _ := strconv.Atoi(last[2])
+	return w, h
+}
+
+func getSfDisplayID() string {	out, err := exec.Command("/system/bin/dumpsys", "SurfaceFlinger", "--display-id").Output()
 	if err != nil {
 		return ""
 	}
@@ -370,7 +396,7 @@ func main() {
 	mux.HandleFunc("/api/dump_ui", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_, targetDid, err := ensureTargetReady()
+		st, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
@@ -378,15 +404,37 @@ func main() {
 		}
 		did := strconv.Itoa(targetDid)
 		out, err := runTool("tree", did)
-		if err != nil {
-			out, _ = runTool("dump", did)
-		}
 		trimmed := strings.TrimSpace(out)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			w.Write([]byte(trimmed))
+		if err != nil || trimmed == "" {
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: false,
+				Message: "UI dump failed: the accessibility tree could not be read for this display",
+				Data:    trimmed,
+			})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Raw dump", Data: trimmed})
+
+		// ToolMain emits a JSON envelope. Decode, decorate, re-encode: this adds the
+		// geometry and mode that only the daemon knows, so every observation reaches the
+		// model together with the coordinate space it is expressed in.
+		var env map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(trimmed), &env); jsonErr != nil {
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: false,
+				Message: "UI dump returned malformed JSON",
+				Data:    trimmed,
+			})
+			return
+		}
+
+		env["mode"] = getCurrentMode()
+		env["target_display_id"] = targetDid
+		if wv, ok := env["width"].(float64); !ok || int(wv) <= 0 {
+			dw, dh := displaySize(targetDid, st)
+			env["width"] = dw
+			env["height"] = dh
+		}
+		json.NewEncoder(w).Encode(env)
 	})
 
 	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {
