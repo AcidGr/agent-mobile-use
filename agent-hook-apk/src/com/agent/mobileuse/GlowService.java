@@ -1,28 +1,40 @@
 package com.agent.mobileuse;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import java.util.ArrayList;
+import java.util.List;
 
 public class GlowService extends Service {
+    public static final String ACTION_TOUCH = "com.agent.mobileuse.ACTION_TOUCH";
+
     private static final String CHANNEL_ID = "agent_glow_notify_channel";
     private static final int NOTIFICATION_ID = 10086;
     private WindowManager mWindowManager;
     private GlowView mGlowView;
     private boolean mIsShowing = false;
+    private BroadcastReceiver mTouchReceiver;
+    private Handler mMainHandler;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -32,6 +44,7 @@ public class GlowService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        mMainHandler = new Handler(Looper.getMainLooper());
         promoteToForeground();
     }
 
@@ -39,10 +52,8 @@ public class GlowService extends Service {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (Build.VERSION.SDK_INT >= 26 && nm != null) {
-                // Use reflection for NotificationChannel to ensure compile-time compat with android-23 jar
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 java.lang.reflect.Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                // IMPORTANCE_MIN = 1, IMPORTANCE_LOW = 2
                 Object channel = ctor.newInstance(CHANNEL_ID, "Agent Foreground Glow", 1);
                 java.lang.reflect.Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
@@ -51,7 +62,7 @@ public class GlowService extends Service {
                 java.lang.reflect.Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
                 setChannelMethod.invoke(builder, CHANNEL_ID);
                 builder.setContentTitle("Agent 移动端前台操作中")
-                       .setContentText("屏幕边缘光效常驻运行")
+                       .setContentText("屏幕边缘光效与触控轨迹常驻运行")
                        .setSmallIcon(android.R.drawable.stat_notify_sync);
                 startForeground(NOTIFICATION_ID, builder.build());
             } else {
@@ -113,7 +124,6 @@ public class GlowService extends Service {
             );
 
             // TYPE_APPLICATION_OVERLAY = 2038
-            // No FLAG_SECURE: perfectly normal screen rendering, screenshot will show normal app + edge glow!
             int windowType = 2038;
             int winFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                          | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -144,16 +154,78 @@ public class GlowService extends Service {
 
             mWindowManager.addView(mGlowView, lp);
             mGlowView.startPulseAnimation();
+            registerTouchReceiver();
             mIsShowing = true;
-            android.util.Log.i("AgentGlowService", "Glow Overlay added (normal transparent blending, visible on display & screenshot).");
+            android.util.Log.i("AgentGlowService", "Glow Overlay added (full screen edge glow + touch indicator enabled).");
         } catch (Throwable t) {
             android.util.Log.e("AgentGlowService", "Failed to add glow view: " + t.getMessage(), t);
+        }
+    }
+
+    private void registerTouchReceiver() {
+        if (mTouchReceiver != null) return;
+        mTouchReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!mIsShowing || mGlowView == null || intent == null) return;
+                int type = intent.getIntExtra("type", 1);
+                if (type == 1) {
+                    // Click
+                    final int x = intent.getIntExtra("x", 0);
+                    final int y = intent.getIntExtra("y", 0);
+                    android.util.Log.i("AgentGlowService", "Trigger ripple at (" + x + ", " + y + ")");
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (mGlowView != null) mGlowView.addRipple(x, y);
+                        }
+                    });
+                } else if (type == 2) {
+                    // Swipe
+                    final int x1 = intent.getIntExtra("x1", 0);
+                    final int y1 = intent.getIntExtra("y1", 0);
+                    final int x2 = intent.getIntExtra("x2", 0);
+                    final int y2 = intent.getIntExtra("y2", 0);
+                    final int duration = intent.getIntExtra("duration", 300);
+                    android.util.Log.i("AgentGlowService", "Trigger swipe from (" + x1 + ", " + y1 + ") to (" + x2 + ", " + y2 + ")");
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (mGlowView != null) mGlowView.addSwipe(x1, y1, x2, y2, duration);
+                        }
+                    });
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(ACTION_TOUCH);
+        try {
+            // Android 14+ RECEIVER_EXPORTED = 2
+            java.lang.reflect.Method regMethod = Context.class.getMethod("registerReceiver", BroadcastReceiver.class, IntentFilter.class, int.class);
+            regMethod.invoke(this, mTouchReceiver, filter, 2);
+            android.util.Log.i("AgentGlowService", "TouchReceiver registered with RECEIVER_EXPORTED (2)");
+        } catch (Throwable t) {
+            android.util.Log.w("AgentGlowService", "Fallback registerReceiver: " + t.getMessage());
+            try {
+                registerReceiver(mTouchReceiver, filter);
+            } catch (Throwable t2) {
+                android.util.Log.e("AgentGlowService", "Failed to register TouchReceiver: " + t2.getMessage(), t2);
+            }
+        }
+    }
+
+    private void unregisterTouchReceiver() {
+        if (mTouchReceiver != null) {
+            try {
+                unregisterReceiver(mTouchReceiver);
+            } catch (Throwable ignored) {}
+            mTouchReceiver = null;
         }
     }
 
     private void hideGlow() {
         if (!mIsShowing || mGlowView == null) return;
         try {
+            unregisterTouchReceiver();
             mGlowView.stopAnimation();
             if (mWindowManager != null) {
                 mWindowManager.removeView(mGlowView);
@@ -179,11 +251,21 @@ public class GlowService extends Service {
         private final Paint mPaintOuter;
         private final Paint mPaintInner;
         private final Paint mPaintCore;
+        private final Paint mRippleOuterPaint;
+        private final Paint mRippleInnerPaint;
+        private final Paint mRippleCorePaint;
+        private final Paint mSwipeTrailPaint;
+        private final Paint mSwipeCorePaint;
+        private final Paint mSwipePointPaint;
+
         private final RectF mRect;
         private final float mCornerRadius;
         private final float mStrokeWidth;
         private ValueAnimator mAnimator;
         private float mAlphaScale = 1.0f;
+
+        private final List<RippleItem> mRipples = new ArrayList<>();
+        private final List<SwipeItem> mSwipes = new ArrayList<>();
 
         public GlowView(Context context, int w, int h, int radius, int stroke) {
             super(context);
@@ -192,23 +274,94 @@ public class GlowService extends Service {
             float halfStroke = stroke / 2.0f;
             mRect = new RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
 
-            // Layer 1: Electric cyan aura
+            // Edge Layer 1: Electric cyan aura
             mPaintOuter = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintOuter.setStyle(Paint.Style.STROKE);
             mPaintOuter.setStrokeWidth(stroke * 2.2f);
             mPaintOuter.setColor(Color.argb(75, 0, 210, 255));
 
-            // Layer 2: Deep indigo/purple transition
+            // Edge Layer 2: Deep indigo/purple transition
             mPaintInner = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintInner.setStyle(Paint.Style.STROKE);
             mPaintInner.setStrokeWidth(stroke * 1.3f);
             mPaintInner.setColor(Color.argb(150, 110, 70, 255));
 
-            // Layer 3: Sharp core bright line
+            // Edge Layer 3: Sharp core bright line
             mPaintCore = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintCore.setStyle(Paint.Style.STROKE);
             mPaintCore.setStrokeWidth(stroke * 0.6f);
             mPaintCore.setColor(Color.argb(255, 230, 245, 255));
+
+            // Ripple Paints
+            mRippleOuterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mRippleOuterPaint.setStyle(Paint.Style.STROKE);
+            mRippleOuterPaint.setStrokeWidth(6.0f);
+
+            mRippleInnerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mRippleInnerPaint.setStyle(Paint.Style.STROKE);
+            mRippleInnerPaint.setStrokeWidth(3.0f);
+
+            mRippleCorePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mRippleCorePaint.setStyle(Paint.Style.FILL);
+
+            // Swipe Paints
+            mSwipeTrailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mSwipeTrailPaint.setStyle(Paint.Style.STROKE);
+            mSwipeTrailPaint.setStrokeCap(Paint.Cap.ROUND);
+            mSwipeTrailPaint.setStrokeWidth(14.0f);
+
+            mSwipeCorePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mSwipeCorePaint.setStyle(Paint.Style.STROKE);
+            mSwipeCorePaint.setStrokeCap(Paint.Cap.ROUND);
+            mSwipeCorePaint.setStrokeWidth(6.0f);
+
+            mSwipePointPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            mSwipePointPaint.setStyle(Paint.Style.FILL);
+        }
+
+        public void addRipple(float x, float y) {
+            final RippleItem item = new RippleItem(x, y);
+            mRipples.add(item);
+            ValueAnimator va = ValueAnimator.ofFloat(0.0f, 1.0f);
+            va.setDuration(380);
+            va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override
+                public void onAnimationUpdate(ValueAnimator animation) {
+                    item.progress = (float) animation.getAnimatedValue();
+                    invalidate();
+                }
+            });
+            va.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    mRipples.remove(item);
+                    invalidate();
+                }
+            });
+            va.start();
+        }
+
+        public void addSwipe(float x1, float y1, float x2, float y2, int duration) {
+            final SwipeItem item = new SwipeItem(x1, y1, x2, y2);
+            mSwipes.add(item);
+            int animDuration = Math.max(duration + 150, 450);
+            ValueAnimator va = ValueAnimator.ofFloat(0.0f, 1.0f);
+            va.setDuration(animDuration);
+            va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override
+                public void onAnimationUpdate(ValueAnimator animation) {
+                    item.progress = (float) animation.getAnimatedValue();
+                    invalidate();
+                }
+            });
+            va.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    mSwipes.remove(item);
+                    invalidate();
+                }
+            });
+            va.start();
         }
 
         public void startPulseAnimation() {
@@ -230,6 +383,8 @@ public class GlowService extends Service {
             if (mAnimator != null) {
                 mAnimator.cancel();
             }
+            mRipples.clear();
+            mSwipes.clear();
         }
 
         @Override
@@ -245,6 +400,7 @@ public class GlowService extends Service {
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
 
+            // 1. Draw edge glow frame
             mPaintOuter.setAlpha((int) (75 * mAlphaScale));
             mPaintInner.setAlpha((int) (150 * mAlphaScale));
             mPaintCore.setAlpha((int) (255 * mAlphaScale));
@@ -252,6 +408,84 @@ public class GlowService extends Service {
             canvas.drawRoundRect(mRect, mCornerRadius, mCornerRadius, mPaintOuter);
             canvas.drawRoundRect(mRect, mCornerRadius, mCornerRadius, mPaintInner);
             canvas.drawRoundRect(mRect, mCornerRadius, mCornerRadius, mPaintCore);
+
+            // 2. Draw active click ripples
+            for (int i = 0; i < mRipples.size(); i++) {
+                RippleItem r = mRipples.get(i);
+                float p = r.progress;
+                float radius = 15.0f + 65.0f * p;
+                int alpha = (int) (230 * (1.0f - p));
+
+                // Outer cyan ring
+                mRippleOuterPaint.setColor(Color.argb(alpha, 0, 210, 255));
+                canvas.drawCircle(r.x, r.y, radius, mRippleOuterPaint);
+
+                // Inner purple ring
+                mRippleInnerPaint.setColor(Color.argb((int) (alpha * 0.8f), 110, 70, 255));
+                canvas.drawCircle(r.x, r.y, radius * 0.65f, mRippleInnerPaint);
+
+                // Center bright white core
+                if (p < 0.7f) {
+                    int coreAlpha = (int) (255 * (1.0f - p / 0.7f));
+                    mRippleCorePaint.setColor(Color.argb(coreAlpha, 255, 255, 255));
+                    canvas.drawCircle(r.x, r.y, 8.0f * (1.0f - p), mRippleCorePaint);
+                }
+            }
+
+            // 3. Draw active swipe trails
+            for (int i = 0; i < mSwipes.size(); i++) {
+                SwipeItem s = mSwipes.get(i);
+                float p = s.progress;
+
+                // Motion progress: reaches end at p = 0.65, then fades out
+                float moveP = Math.min(1.0f, p / 0.65f);
+                float curX = s.x1 + (s.x2 - s.x1) * moveP;
+                float curY = s.y1 + (s.y2 - s.y1) * moveP;
+
+                float fade = (p < 0.65f) ? 1.0f : (1.0f - (p - 0.65f) / 0.35f);
+                int alpha = (int) (220 * fade);
+
+                // Outer cyan aura line
+                mSwipeTrailPaint.setColor(Color.argb((int) (alpha * 0.7f), 0, 210, 255));
+                canvas.drawLine(s.x1, s.y1, curX, curY, mSwipeTrailPaint);
+
+                // Inner bright white/cyan core line
+                mSwipeCorePaint.setColor(Color.argb(alpha, 220, 245, 255));
+                canvas.drawLine(s.x1, s.y1, curX, curY, mSwipeCorePaint);
+
+                // Leading head dot
+                mSwipePointPaint.setColor(Color.argb(alpha, 0, 230, 255));
+                canvas.drawCircle(curX, curY, 12.0f, mSwipePointPaint);
+                mSwipePointPaint.setColor(Color.argb(alpha, 255, 255, 255));
+                canvas.drawCircle(curX, curY, 6.0f, mSwipePointPaint);
+
+                // Start point small anchor dot
+                mSwipePointPaint.setColor(Color.argb((int) (alpha * 0.5f), 110, 70, 255));
+                canvas.drawCircle(s.x1, s.y1, 8.0f, mSwipePointPaint);
+            }
+        }
+    }
+
+    private static class RippleItem {
+        final float x;
+        final float y;
+        float progress = 0.0f;
+
+        RippleItem(float x, float y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    private static class SwipeItem {
+        final float x1, y1, x2, y2;
+        float progress = 0.0f;
+
+        SwipeItem(float x1, float y1, float x2, float y2) {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
         }
     }
 }

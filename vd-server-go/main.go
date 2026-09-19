@@ -67,6 +67,19 @@ func setEdgeGlow(enable bool) {
 	}
 }
 
+func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
+	if getCurrentMode() != "foreground" {
+		return
+	}
+	if touchType == 1 {
+		cmd := fmt.Sprintf("am broadcast -a com.agent.mobileuse.ACTION_TOUCH -p com.agent.mobileuse --ei type 1 --ei x %d --ei y %d", x, y)
+		go exec.Command("/system/bin/sh", "-c", cmd).Run()
+	} else if touchType == 2 {
+		cmd := fmt.Sprintf("am broadcast -a com.agent.mobileuse.ACTION_TOUCH -p com.agent.mobileuse --ei type 2 --ei x1 %d --ei y1 %d --ei x2 %d --ei y2 %d --ei duration %d", x1, y1, x2, y2, duration)
+		go exec.Command("/system/bin/sh", "-c", cmd).Run()
+	}
+}
+
 func getTargetDisplayID(st StatusResp) int {
 	if getCurrentMode() == "foreground" {
 		return 0
@@ -350,6 +363,9 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
+		if targetDid == 0 {
+			broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
+		}
 		cmd := exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
 		if err := cmd.Run(); err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
@@ -383,6 +399,9 @@ func main() {
 			p.Duration = 300
 		}
 		did := strconv.Itoa(targetDid)
+		if targetDid == 0 {
+			broadcastTouch(2, 0, 0, p.X1, p.Y1, p.X2, p.Y2, p.Duration)
+		}
 		cmd := exec.Command("/system/bin/input", "-d", did, "swipe",
 			strconv.Itoa(p.X1), strconv.Itoa(p.Y1), strconv.Itoa(p.X2), strconv.Itoa(p.Y2), strconv.Itoa(p.Duration))
 		if err := cmd.Run(); err != nil {
