@@ -87,15 +87,30 @@ public class GlowService extends Service {
             mWindowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
             if (mWindowManager == null) return;
 
-            int width = getResources().getDisplayMetrics().widthPixels;
-            int height = getResources().getDisplayMetrics().heightPixels;
-            if (width <= 0) width = 1272;
-            if (height <= 0) height = 2800;
+            int width = 1272;
+            int height = 2800;
+            try {
+                android.view.Display display = mWindowManager.getDefaultDisplay();
+                android.util.DisplayMetrics realMetrics = new android.util.DisplayMetrics();
+                java.lang.reflect.Method getRealMetricsMethod = android.view.Display.class.getMethod("getRealMetrics", android.util.DisplayMetrics.class);
+                getRealMetricsMethod.invoke(display, realMetrics);
+                if (realMetrics.widthPixels > 0) width = realMetrics.widthPixels;
+                if (realMetrics.heightPixels > 0) height = realMetrics.heightPixels;
+            } catch (Throwable t) {
+                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                if (dm.widthPixels > 0) width = dm.widthPixels;
+                if (dm.heightPixels > 0) height = dm.heightPixels;
+            }
 
             int cornerRadius = 135;
             int strokeWidth = 10; // Sleek 10px cyber glow edge
 
             mGlowView = new GlowView(this, width, height, cornerRadius, strokeWidth);
+            mGlowView.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            );
 
             // TYPE_APPLICATION_OVERLAY = 2038
             // No FLAG_SECURE: perfectly normal screen rendering, screenshot will show normal app + edge glow!
@@ -114,6 +129,18 @@ public class GlowService extends Service {
             );
             lp.gravity = Gravity.TOP | Gravity.LEFT;
             lp.setTitle("AgentMobileEdgeGlow");
+
+            // Allow overlay to extend into cutout / notch / status bar area (LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS = 3)
+            try {
+                java.lang.reflect.Field cutoutField = WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode");
+                cutoutField.setInt(lp, 3);
+            } catch (Throwable ignored) {}
+
+            // Ignore system bar insets so window covers 100% of physical display edges
+            try {
+                java.lang.reflect.Method fitInsetsMethod = WindowManager.LayoutParams.class.getMethod("setFitInsetsTypes", int.class);
+                fitInsetsMethod.invoke(lp, 0);
+            } catch (Throwable ignored) {}
 
             mWindowManager.addView(mGlowView, lp);
             mGlowView.startPulseAnimation();
@@ -154,12 +181,14 @@ public class GlowService extends Service {
         private final Paint mPaintCore;
         private final RectF mRect;
         private final float mCornerRadius;
+        private final float mStrokeWidth;
         private ValueAnimator mAnimator;
         private float mAlphaScale = 1.0f;
 
         public GlowView(Context context, int w, int h, int radius, int stroke) {
             super(context);
             mCornerRadius = radius;
+            mStrokeWidth = stroke;
             float halfStroke = stroke / 2.0f;
             mRect = new RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
 
@@ -200,6 +229,15 @@ public class GlowService extends Service {
         public void stopAnimation() {
             if (mAnimator != null) {
                 mAnimator.cancel();
+            }
+        }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+            super.onSizeChanged(w, h, oldw, oldh);
+            if (w > 0 && h > 0) {
+                float halfStroke = mStrokeWidth / 2.0f;
+                mRect.set(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
             }
         }
 
