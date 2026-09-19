@@ -332,10 +332,13 @@ public class ToolMain {
                     droppedDup, clipped, paged, attempt, budgetOverride);
 
         } catch (Throwable t) {
-            // Never die silently: emit a valid envelope so the caller can tell the
-            // difference between "empty screen" and "the dump failed".
+            // Never die silently. Emit the SAME shape as a success so "did this fail?"
+            // is answered by an explicit `ok` field rather than by the absence of one:
+            // success carries ok:true, failure carries ok:false plus `error`, and an
+            // empty tree carries ok:true with nodes:[] and a reason field. Callers that
+            // only check for a missing key cannot misread a failure as an empty screen.
             StringBuilder sb = new StringBuilder();
-            sb.append("{\"error\":\"").append(escapeJson(String.valueOf(t))).append("\"}");
+            sb.append("{\"ok\":false,\"error\":\"").append(escapeJson(String.valueOf(t))).append("\"}");
             System.out.print(sb.toString());
         } finally {
             if (uiAutomation != null) {
@@ -641,7 +644,8 @@ public class ToolMain {
 
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"display_id\":").append(displayId);
+        sb.append("\"ok\":true");
+        sb.append(",\"display_id\":").append(displayId);
         sb.append(",\"width\":").append(dispW);
         sb.append(",\"height\":").append(dispH);
         sb.append(",\"windows\":").append(windowCount);
@@ -653,10 +657,17 @@ public class ToolMain {
         }
         sb.append(",\"total\":").append(total);
         if (scanAttempts > 0) sb.append(",\"retries\":").append(scanAttempts);
+        // Three ways to end up with no nodes, and they call for different reactions.
+        // Each is now named for what it actually is:
+        //   no_windows   the engine returned no window object at all (a scan failure)
+        //   tree_blocked a window exists but getRoot() yielded nothing (WeChat's chat
+        //                list does exactly this: 1 window, 0 nodes, a full screen of
+        //                content visible only in a screenshot)
+        // Both are `ok:true` — the call succeeded, the screen just has no readable tree.
         if (windowCount == 0) {
-            // Distinguish "the screen is empty" from "the engine gave us nothing".
-            // These look identical in `nodes:[]` and mean opposite things to the model.
-            sb.append(",\"empty_scan\":1");
+            sb.append(",\"no_windows\":1");
+        } else if (total == 0) {
+            sb.append(",\"tree_blocked\":1");
         }
         if (droppedDup > 0) sb.append(",\"dup\":").append(droppedDup);
         if (paged) sb.append(",\"clipped\":").append(clipped);
