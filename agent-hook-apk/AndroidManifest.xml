@@ -20,8 +20,12 @@
         android:hasCode="true">
 
         <service
-            android:name=".GlowService"
-            android:exported="true" />
+            android:name="com.agent.mobileuse.GlowService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.agent.mobileuse.ACTION_GLOW" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".NotifyReceiver"

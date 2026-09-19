@@ -156,10 +156,10 @@ public class GlowService extends Service {
             mWindowManager.addView(mGlowView, lp);
             mGlowView.startPulseAnimation();
 
-            // Add Black Status Bar Capsule (red circle zone, right of camera cutout)
+            // Add Centered Dynamic Island Capsule over camera cutout (Width 400, Height 140, Centered at X=636)
             try {
-                int capWidth = 240;
-                int capHeight = 70;
+                int capWidth = 400;
+                int capHeight = 140;
                 mCapsuleView = new CapsuleView(this, new Runnable() {
                     @Override
                     public void run() {
@@ -168,27 +168,35 @@ public class GlowService extends Service {
                 });
 
                 int capWindowType = 2038; // TYPE_APPLICATION_OVERLAY
+                int capWinFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+
                 WindowManager.LayoutParams capLp = new WindowManager.LayoutParams(
                     capWidth,
                     capHeight,
                     capWindowType,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    capWinFlags,
                     PixelFormat.TRANSLUCENT
                 );
                 capLp.gravity = Gravity.TOP | Gravity.LEFT;
-                capLp.x = 680;
-                capLp.y = 144; // Placed right below status bar (y >= 141) to guarantee touch reception
+                capLp.x = 436; // Perfectly centered at X=636 (436 + 200 = 636)
+                capLp.y = 24;  // Enclosing camera cutout, extending to Y=164 (>141) for seamless and easy touch
                 capLp.setTitle("AgentMobileCapsule");
 
                 try {
                     java.lang.reflect.Field cutoutField = WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode");
-                    cutoutField.setInt(capLp, 3);
+                    cutoutField.setInt(capLp, 3); // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } catch (Throwable ignored) {}
+
+                try {
+                    java.lang.reflect.Method fitInsetsMethod = WindowManager.LayoutParams.class.getMethod("setFitInsetsTypes", int.class);
+                    fitInsetsMethod.invoke(capLp, 0);
                 } catch (Throwable ignored) {}
 
                 mWindowManager.addView(mCapsuleView, capLp);
                 applySkipScreenshot(mCapsuleView);
-                android.util.Log.i("AgentGlowService", "CapsuleView added at (" + capLp.x + ", " + capLp.y + ")");
+                android.util.Log.i("AgentGlowService", "CapsuleView added at (" + capLp.x + ", " + capLp.y + ") with size " + capWidth + "x" + capHeight);
             } catch (Throwable capErr) {
                 android.util.Log.e("AgentGlowService", "Failed to add capsule view: " + capErr.getMessage(), capErr);
             }
@@ -407,18 +415,22 @@ public class GlowService extends Service {
             int w = getWidth();
             int h = getHeight();
             float r = h / 2.0f;
-            mBounds.set(2, 2, w - 2, h - 2);
+            mBounds.set(3, 3, w - 3, h - 3);
 
             canvas.drawRoundRect(mBounds, r, r, mBgPaint);
             canvas.drawRoundRect(mBounds, r, r, mStrokePaint);
 
-            float dotX = r * 0.85f;
+            // Front camera cutout is centered at X=200 (occupies [162, 238])
+            // Left side: Glowing cyan breathing dot
+            float dotX = 75f;
             float centerY = h / 2.0f;
-            canvas.drawCircle(dotX, centerY, 6f, mDotPaint);
+            canvas.drawCircle(dotX, centerY, 8f, mDotPaint);
 
+            // Right side: "切到后台" bold text
+            mTextPaint.setTextSize(30f);
             Paint.FontMetrics fm = mTextPaint.getFontMetrics();
             float textY = centerY - (fm.descent + fm.ascent) / 2.0f;
-            canvas.drawText("切到后台", dotX + 16f, textY, mTextPaint);
+            canvas.drawText("切到后台", 242f, textY, mTextPaint);
         }
     }
 
