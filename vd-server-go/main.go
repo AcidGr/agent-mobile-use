@@ -403,7 +403,26 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-		out, err := runTool("tree", did)
+		// Optional vertical paging window (?y_min=&y_max=, both half-open in layout
+		// coordinates). Lets the caller fetch the part of a long screen that the
+		// budget could not fit, instead of guessing what is down there.
+		args := []string{"tree", did}
+		if yMin := r.URL.Query().Get("y_min"); yMin != "" {
+			if _, convErr := strconv.Atoi(yMin); convErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "y_min must be an integer"})
+				return
+			}
+			args = append(args, yMin)
+			yMax := r.URL.Query().Get("y_max")
+			if _, convErr := strconv.Atoi(yMax); yMax != "" && convErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "y_max must be an integer"})
+				return
+			}
+			args = append(args, yMax)
+		}
+		out, err := runTool(args...)
 		trimmed := strings.TrimSpace(out)
 		if err != nil || trimmed == "" {
 			json.NewEncoder(w).Encode(ActionResponse{

@@ -6,10 +6,12 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.view.accessibility.AccessibilityNodeInfo;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Host-side UI tool for agent-mobile-use.
@@ -54,6 +56,22 @@ public class ToolMain {
         public int targetId = -1;      // self if clickable, else nearest clickable ancestor
         public int targetCenterX, targetCenterY;
         public int targetRatio = 1;    // ancestor area / self area; 1 when target is self
+        public String tapReason;       // set when an inherited target was suppressed
+
+        // ---- budget ranking (filled by rankForBudget) ----
+        public int priority;
+
+        // ---- window provenance ----
+        /**
+         * Index of the window this node came from, in the z-order returned by
+         * getWindowsOnAllDisplays (0 = bottom-most).
+         *
+         * All windows used to be flattened into one list, which meant a modal dialog's
+         * nodes sat interleaved with the activity underneath it and the model had no way
+         * to tell that the lower ones were covered. Taobao's 闪购外卖红包 poplayer is
+         * exactly this case.
+         */
+        public int windowIndex;
     }
 
     /** A clickable node offered as an ancestor target to non-clickable children. */
@@ -78,12 +96,29 @@ public class ToolMain {
      * (head 4096 + tail 1024), which would cut the JSON mid-array and hand the model a
      * corrupt, silently incomplete node list. Capping here keeps the payload valid and
      * lets us report truncation honestly instead.
+     *
+     * Budget tuning history:
+     *   6200 chars / 140 nodes — first cut. Safe against the pruner, but on a dense home
+     *   screen (Taobao) the greedy tree-order fill cut 57% of the nodes, including most of
+     *   the bottom half of the screen. Measured after dedup + priority ranking: 6200 chars
+     *   now covers 100% of the same screen, so the slack below is deliberate headroom.
      */
-    private static final int MAX_NODES = 140;
-    private static final int MAX_NODES_CHARS = 6200;
+    private static final int MAX_NODES = 150;
+    private static final int MAX_NODES_CHARS = 7200;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
-    private static final int MAX_ANCESTOR_RATIO = 5;
+    private static final int MAX_ANCESTOR_RATIO = 4;
+
+    /** An ancestor target covering more than this fraction of the screen is unusable. */
+    private static final double MAX_ANCESTOR_SCREEN_FRACTION = 0.5;
+
+    /**
+     * Retries when the accessibility engine reports no window at all. This is almost
+     * always a timing artifact around an activity transition, not an app that hides its
+     * tree, so it is worth waiting out rather than reporting an empty screen.
+     */
+    private static final int DUMP_ATTEMPTS = 3;
+    private static final int DUMP_RETRY_SLEEP_MS = 350;
 
     public static void main(String[] args) {
         try {
@@ -100,7 +135,11 @@ public class ToolMain {
         String cmd = args[0];
         if ("tree".equals(cmd) || "dump".equals(cmd)) {
             int displayId = args.length > 1 ? Integer.parseInt(args[1]) : 0;
-            dumpTree(displayId);
+            // Optional paging window. -1 means "unbounded" so the shell can pass empty
+            // slots without the caller having to build a different argv shape.
+            int yMin = args.length > 2 && args[2].length() > 0 ? Integer.parseInt(args[2]) : -1;
+            int yMax = args.length > 3 && args[3].length() > 0 ? Integer.parseInt(args[3]) : -1;
+            dumpTree(displayId, yMin, yMax);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
                 System.err.println("Usage: type <displayId> <text>");
@@ -121,7 +160,7 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static void dumpTree(int targetDisplayId) {
+    private static void dumpTree(int targetDisplayId, int yMin, int yMax) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -145,9 +184,18 @@ public class ToolMain {
             AccessibilityServiceInfo info = new AccessibilityServiceInfo();
             info.eventTypes = -1;
             info.feedbackType = 16;
-            // FLAG_RETRIEVE_INTERACTIVE_WINDOWS | FLAG_REQUEST_TOUCH_EXPLORATION_MODE
-            // | FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            info.flags = 82;
+            // Bits below were read off this device at runtime, not copied from a doc:
+            //   FLAG_INCLUDE_NOT_IMPORTANT_VIEWS        0x2
+            //   FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY 0x8
+            //   FLAG_REPORT_VIEW_IDS                    0x10
+            //   FLAG_RETRIEVE_INTERACTIVE_WINDOWS       0x40
+            // 0x52 (the original set) is enough for native views. 0x8 is kept because it
+            // is the correct declaration for reading web content, but it is NOT a fix for
+            // WebViews here: measured, an H5 page still collapses to a single WebView node
+            // because Settings.Secure.accessibility_enabled is 0, so Chromium's
+            // AccessibilityBridge never attaches. Flipping that setting is a device-level
+            // change that would affect the whole system, so it stays off.
+            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
 
             Thread.sleep(400);
@@ -158,37 +206,78 @@ public class ToolMain {
             int dispW = size[0];
             int dispH = size[1];
 
-            List<NodeItem> list = new ArrayList<NodeItem>();
+            List<NodeItem> list = null;
             int windowCount = 0;
-            int winIndex = 0;
+            int attempt = 0;
 
-            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
-            if (displays != null) {
-                Class<?> saClass = displays.getClass();
-                int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
-                Method keyAt = saClass.getMethod("keyAt", int.class);
-                Method valueAt = saClass.getMethod("valueAt", int.class);
+            // A dump racing an activity transition can see zero windows even though the
+            // screen is fine: UiAutomation.connect() returns before the service is bound,
+            // and AccessibilityInteractionClient then has no window list to hand out.
+            // Measured on Zhihu, which reported windows:0 and a perfectly good tree two
+            // seconds later. Retrying here is what keeps the model from concluding that
+            // the app hides its accessibility tree when it simply was not asked yet.
+            for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
+                list = new ArrayList<NodeItem>();
+                windowCount = 0;
+                int winIndex = 0;
 
-                for (int i = 0; i < sizeN; i++) {
-                    int dId = (Integer) keyAt.invoke(displays, i);
-                    if (dId != targetDisplayId) continue;
-                    List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                    if (wins == null) continue;
-                    for (Object win : wins) {
-                        windowCount++;
-                        Method getRootMethod = win.getClass().getMethod("getRoot");
-                        Object rootObj = getRootMethod.invoke(win);
-                        if (rootObj instanceof AccessibilityNodeInfo) {
-                            int[] idCounter = new int[] { 1 };
-                            collectInteractiveNodes((AccessibilityNodeInfo) rootObj, 0,
-                                    null, list, idCounter, winIndex);
+                Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+                if (displays != null) {
+                    Class<?> saClass = displays.getClass();
+                    int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+                    Method keyAt = saClass.getMethod("keyAt", int.class);
+                    Method valueAt = saClass.getMethod("valueAt", int.class);
+
+                    for (int i = 0; i < sizeN; i++) {
+                        int dId = (Integer) keyAt.invoke(displays, i);
+                        if (dId != targetDisplayId) continue;
+                        List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                        if (wins == null) continue;
+                        for (Object win : wins) {
+                            windowCount++;
+                            Method getRootMethod = win.getClass().getMethod("getRoot");
+                            Object rootObj = getRootMethod.invoke(win);
+                            if (rootObj instanceof AccessibilityNodeInfo) {
+                                int[] idCounter = new int[] { 1 };
+                                collectInteractiveNodes((AccessibilityNodeInfo) rootObj, 0,
+                                        null, list, idCounter, winIndex);
+                            }
+                            winIndex++;
                         }
-                        winIndex++;
                     }
                 }
+                if (windowCount > 0) break;
+                if (attempt < DUMP_ATTEMPTS - 1) {
+                    try { Thread.sleep(DUMP_RETRY_SLEEP_MS); } catch (InterruptedException ignored) {}
+                }
+            }
+            if (list == null) list = new ArrayList<NodeItem>();
+
+            // Order matters all the way through: dedup -> tap suppression -> paging ->
+            // ranking. Each stage removes or reorders nodes, so it has to see the output
+            // of the one before it.
+            int droppedDup = dedupeIdenticalNodes(list);
+            suppressUnusableTargets(list, dispW, dispH);
+
+            // Paging window. The full tree geometry is reported in the envelope even when
+            // a window is applied, so the caller always knows what it is not seeing.
+            int clipped = 0;
+            boolean paged = yMin >= 0 || yMax >= 0;
+            if (paged) {
+                List<NodeItem> windowed = new ArrayList<NodeItem>(list.size());
+                for (NodeItem n : list) {
+                    boolean above = yMin >= 0 && n.bottom <= yMin;
+                    boolean below = yMax >= 0 && n.top >= yMax;
+                    if (above || below) { clipped++; continue; }
+                    windowed.add(n);
+                }
+                list = windowed;
             }
 
-            emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list);
+            rankForBudget(list);
+
+            emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
+                    droppedDup, clipped, paged, attempt);
 
         } catch (Throwable t) {
             // Never die silently: emit a valid envelope so the caller can tell the
@@ -260,6 +349,164 @@ public class ToolMain {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Post-processing passes
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Collapse nodes that are indistinguishable on screen.
+     *
+     * Android nests container after container at byte-identical bounds (Taobao rendered
+     * "淘工厂" three times at [31,406,238,623]), and those copies were eating the token
+     * budget that the bottom half of the screen needed. Two nodes are the same element to
+     * a model that only sees (bounds, text, desc), so they are merged: the keeper takes
+     * over every interaction flag.
+     *
+     * A text node inside a textless container is KEPT — that node holds the only label
+     * for the pair, so collapsing the pair would destroy the label.
+     *
+     * @return how many nodes were dropped
+     */
+    private static int dedupeIdenticalNodes(List<NodeItem> list) {
+        Map<String, Integer> firstSeen = new HashMap<String, Integer>();
+        List<NodeItem> out = new ArrayList<NodeItem>(list.size());
+        int dropped = 0;
+        for (NodeItem n : list) {
+            String key = n.left + ":" + n.top + ":" + n.right + ":" + n.bottom
+                    + "|" + norm(n.text) + "|" + norm(n.desc);
+            Integer at = firstSeen.get(key);
+            if (at == null) {
+                firstSeen.put(key, out.size());
+                out.add(n);
+                continue;
+            }
+            NodeItem keep = out.get(at);
+            boolean keepHasOwnSemantic = nonEmpty(keep.text) || nonEmpty(keep.desc);
+            if (keep.clickable || !keepHasOwnSemantic) {
+                mergeInto(keep, n);
+                dropped++;
+            } else {
+                // The earlier node is only a label holder; this one carries the
+                // interaction. Fold the label forward and drop the earlier node.
+                mergeInto(n, keep);
+                out.set(at, n);
+                dropped++;
+            }
+        }
+        return dropped;
+    }
+
+    /** Absorb every interaction flag and the tighter click target of {@code from}. */
+    private static void mergeInto(NodeItem keep, NodeItem from) {
+        keep.clickable |= from.clickable;
+        keep.editableFlag |= from.editableFlag;
+        keep.checkable |= from.checkable;
+        keep.checked |= from.checked;
+        keep.scrollable |= from.scrollable;
+        keep.focused |= from.focused;
+        if (from.clickable) {
+            // A self-target always beats an inherited one.
+            keep.targetId = keep.id;
+            keep.targetCenterX = keep.centerX;
+            keep.targetCenterY = keep.centerY;
+            keep.targetRatio = 1;
+            keep.tapReason = null;
+        } else if (from.targetId > 0 && keep.targetId <= 0) {
+            keep.targetId = from.targetId;
+            keep.targetCenterX = from.targetCenterX;
+            keep.targetCenterY = from.targetCenterY;
+            keep.targetRatio = from.targetRatio;
+            keep.tapReason = from.tapReason;
+        }
+    }
+
+    /**
+     * Second pass: drop inherited click targets that would actively mislead.
+     *
+     * Two shapes are worse than no answer at all:
+     *   - a scrollable container inheriting a target: tapping its centre just scrolls,
+     *     and the model reads that as "the tap did nothing";
+     *   - a target covering more than half the screen: it is a layout wrapper, not a
+     *     control, so the tap lands wherever the wrapper happens to be centred.
+     * The node keeps its own `click`; only the inherited `tap` goes away, and `why` says so.
+     */
+    private static void suppressUnusableTargets(List<NodeItem> list, int dispW, int dispH) {
+        long screenArea = (dispW > 0 && dispH > 0) ? (long) dispW * dispH : 0L;
+        for (NodeItem n : list) {
+            if (n.targetId <= 0 || n.targetId == n.id) continue;
+            if (n.scrollable) {
+                n.targetId = -1;
+                n.tapReason = "scrollable";
+                continue;
+            }
+            if (screenArea > 0) {
+                long selfArea = Math.max(1L, (long) (n.right - n.left) * (n.bottom - n.top));
+                long targetArea = selfArea * Math.max(1, n.targetRatio); // target ~ ratio x self
+                if (targetArea > screenArea * MAX_ANCESTOR_SCREEN_FRACTION) {
+                    n.targetId = -1;
+                    n.tapReason = "target>halfscreen";
+                }
+            }
+        }
+    }
+
+    /**
+     * Order nodes so that if the budget runs out, it runs out on the least useful content.
+     *
+     * The salary of this pass is the bottom of the screen: the old greedy tree-order fill
+     * stopped dead at y=2444 on Taobao and the model never learned the rest existed.
+     * Ranking keeps a node's absolute position as the final tiebreak, so the emitted list
+     * still reads roughly top-to-bottom.
+     *
+     * Tiers, best first:
+     *   0  on-screen label with a resolved tap target (the model can act on it now)
+     *   1  on-screen, actionable on its own `click`
+     *   2  off-screen but actionable (a valid target once scrolled to)
+     *   3  disabled
+     *   4  on-screen, nothing to act on (labels and context)
+     *   5  off-screen, nothing to act on
+     */
+    private static void rankForBudget(List<NodeItem> list) {
+        List<Ranked> ranked = new ArrayList<Ranked>(list.size());
+        for (int i = 0; i < list.size(); i++) {
+            NodeItem n = list.get(i);
+            n.priority = priorityOf(n);
+            // Document order is both the tiebreak and the keeper of the reading order.
+            ranked.add(new Ranked(n, i));
+        }
+        Collections.sort(ranked);
+        for (int i = 0; i < ranked.size(); i++) list.set(i, ranked.get(i).node);
+    }
+
+    private static int priorityOf(NodeItem n) {
+        boolean interactive = n.clickable || n.checkable || n.editableFlag;
+        if (!interactive) return n.visibleToUser ? 4 : 5;
+        if (!n.enabled) return 3;
+        if (n.visibleToUser) return (n.targetId > 0 && n.targetId != n.id) ? 0 : 1;
+        return 2;
+    }
+
+    /** Sort key: usefulness tier, then document order. */
+    static class Ranked implements Comparable<Ranked> {
+        final NodeItem node;
+        final int seq;
+
+        Ranked(NodeItem node, int seq) {
+            this.node = node;
+            this.seq = seq;
+        }
+
+        public int compareTo(Ranked o) {
+            if (node.priority != o.node.priority) return node.priority - o.node.priority;
+            if (seq != o.seq) return seq - o.seq;
+            return node.id - o.node.id;
+        }
+    }
+
+    private static String norm(String s) {
+        return s == null ? "" : s.trim();
+    }
+
     /**
      * Serialize the observation.
      *
@@ -268,15 +515,41 @@ public class ToolMain {
      * dump failed. Each node carries only raw signals plus a resolved click target.
      */
     private static void emitEnvelope(int displayId, int dispW, int dispH,
-                                     int windowCount, List<NodeItem> list) {
+                                     int windowCount, List<NodeItem> list,
+                                     int droppedDup, int clipped, boolean paged,
+                                     int scanAttempts) {
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;
         boolean truncated = false;
+        int lastBottom = 0;
+        int omitted = 0;
+        int omittedMinPriority = Integer.MAX_VALUE;
+        boolean omittedTopTier = false;
+        int fullMinX = Integer.MAX_VALUE, fullMaxX = Integer.MIN_VALUE;
+        int fullMinY = Integer.MAX_VALUE, fullMaxY = Integer.MIN_VALUE;
+
+        for (int i = 0; i < total; i++) {
+            NodeItem n = list.get(i);
+            if (n.left < fullMinX) fullMinX = n.left;
+            if (n.right > fullMaxX) fullMaxX = n.right;
+            if (n.top < fullMinY) fullMinY = n.top;
+            if (n.bottom > fullMaxY) fullMaxY = n.bottom;
+        }
 
         for (int i = 0; i < total; i++) {
             if (emitted >= MAX_NODES || nodes.length() >= MAX_NODES_CHARS) {
+                // Everything still queued is a candidate for omission, but only nodes that
+                // would actually have rendered count — otherwise `omitted` reports noise
+                // the caller was never going to see.
                 truncated = true;
+                for (int k = i; k < total; k++) {
+                    NodeItem n = list.get(k);
+                    if (!isEmittable(n, dispW, dispH)) continue;
+                    omitted++;
+                    if (n.priority < omittedMinPriority) omittedMinPriority = n.priority;
+                    if (n.priority <= 1) omittedTopTier = true;
+                }
                 break;
             }
             String s = renderNode(list.get(i), dispW, dispH);
@@ -284,6 +557,7 @@ public class ToolMain {
             if (emitted > 0) nodes.append(",");
             nodes.append(s);
             emitted++;
+            if (list.get(i).bottom > lastBottom) lastBottom = list.get(i).bottom;
         }
 
         StringBuilder sb = new StringBuilder();
@@ -292,9 +566,38 @@ public class ToolMain {
         sb.append(",\"width\":").append(dispW);
         sb.append(",\"height\":").append(dispH);
         sb.append(",\"windows\":").append(windowCount);
+        if (fullMinX != Integer.MAX_VALUE && (fullMinX < 0 || fullMaxX > dispW)) {
+            sb.append(",\"x_extent\":[").append(fullMinX).append(",").append(fullMaxX).append("]");
+        }
+        if (fullMinY != Integer.MAX_VALUE && (fullMinY < 0 || fullMaxY > dispH)) {
+            sb.append(",\"y_extent\":[").append(fullMinY).append(",").append(fullMaxY).append("]");
+        }
         sb.append(",\"total\":").append(total);
+        if (scanAttempts > 0) sb.append(",\"retries\":").append(scanAttempts);
+        if (windowCount == 0) {
+            // Distinguish "the screen is empty" from "the engine gave us nothing".
+            // These look identical in `nodes:[]` and mean opposite things to the model.
+            sb.append(",\"empty_scan\":1");
+        }
+        if (droppedDup > 0) sb.append(",\"dup\":").append(droppedDup);
+        if (paged) sb.append(",\"clipped\":").append(clipped);
         sb.append(",\"returned\":").append(emitted);
         sb.append(",\"truncated\":").append(truncated);
+        if (truncated) {
+            // Say WHAT was lost, not just that something was. "omitted":73 alone tells the
+            // model nothing about whether it needs to page; combined with the top tier it
+            // does.
+            sb.append(",\"omitted\":").append(omitted);
+            if (omittedTopTier) sb.append(",\"omitted_top\":1");
+            if (omittedMinPriority != Integer.MAX_VALUE) {
+                sb.append(",\"omitted_min\":").append(omittedMinPriority);
+            }
+            if (lastBottom > 0) {
+                // Where the emitted list stops, so the model can page instead of
+                // concluding the rest of the screen is empty.
+                sb.append(",\"next_y\":").append(lastBottom);
+            }
+        }
         sb.append(",\"nodes\":[").append(nodes).append("]");
         sb.append("}");
         System.out.print(sb.toString());
@@ -302,22 +605,17 @@ public class ToolMain {
 
     /** Renders one node, or null when it must be dropped as noise. */
     private static String renderNode(NodeItem n, int dispW, int dispH) {
-        // A node with no semantics AND no interaction is noise for the model.
-        boolean hasSemantic = nonEmpty(n.text) || nonEmpty(n.desc);
-        boolean interactive = n.clickable || n.checkable || n.scrollable || n.editableFlag;
-        if (!hasSemantic && !interactive) return null;
-
-        // isVisibleToUser can lag for off-screen content; the geometry check is the
-        // reliable part and the two agree on the rows we measured.
+        if (!isEmittable(n, dispW, dispH)) return null;
         boolean visible = n.visibleToUser && withinScreen(n, dispW, dispH);
-        // Drop only invisible content that offers nothing to act on. Invisible but
-        // clickable nodes stay, flagged, because they are still valid tap targets
-        // once the user scrolls.
-        if (!visible && !interactive) return null;
 
         StringBuilder sb = new StringBuilder();
         sb.append("{\"id\":").append(n.id);
         if (n.depth > 0) sb.append(",\"d\":").append(n.depth);
+        if (n.windowIndex > 0) {
+            // Only windows above the base one are tagged: `w` appearing at all means a
+            // dialog/overlay is on screen, and anything from a LOWER window is covered.
+            sb.append(",\"w\":").append(n.windowIndex);
+        }
         sb.append(",\"type\":\"").append(escapeJson(n.type)).append("\"");
         if (nonEmpty(n.text)) sb.append(",\"text\":\"").append(escapeJson(n.text)).append("\"");
         if (nonEmpty(n.desc)) sb.append(",\"desc\":\"").append(escapeJson(n.desc)).append("\"");
@@ -339,9 +637,35 @@ public class ToolMain {
             sb.append(",\"tap\":[").append(n.targetCenterX).append(",").append(n.targetCenterY).append("]");
             sb.append(",\"tap_id\":").append(n.targetId);
             sb.append(",\"tap_x\":").append(n.targetRatio);
+        } else if (n.tapReason != null) {
+            // Say why there is no target — silence here reads as "not clickable", and the
+            // model goes looking for a worse coordinate on its own.
+            sb.append(",\"why\":\"").append(escapeJson(n.tapReason)).append("\"");
         }
         sb.append("}");
         return sb.toString();
+    }
+
+    /**
+     * Whether a node earns its place in the output.
+     *
+     * Kept separate from renderNode so the omission count and the renderer can never
+     * disagree about what counts as content.
+     */
+    private static boolean isEmittable(NodeItem n, int dispW, int dispH) {
+        // A node with no semantics AND no interaction is noise for the model.
+        boolean hasSemantic = nonEmpty(n.text) || nonEmpty(n.desc);
+        boolean interactive = n.clickable || n.checkable || n.scrollable || n.editableFlag;
+        if (!hasSemantic && !interactive) return false;
+
+        // isVisibleToUser can lag for off-screen content; the geometry check is the
+        // reliable part and the two agree on the rows we measured.
+        boolean visible = n.visibleToUser && withinScreen(n, dispW, dispH);
+        // Drop only invisible content that offers nothing to act on. Invisible but
+        // clickable nodes stay, flagged, because they are still valid tap targets
+        // once the user scrolls.
+        if (!visible && !interactive) return false;
+        return true;
     }
 
     private static boolean withinScreen(NodeItem n, int dispW, int dispH) {
@@ -407,6 +731,7 @@ public class ToolMain {
             item.checkable = checkable;
             item.checked = checked;
             item.scrollable = scrollable;
+            item.windowIndex = winIndex;
             try { item.enabled = node.isEnabled(); } catch (Throwable ignored) { item.enabled = true; }
             try { item.focusable = node.isFocusable(); } catch (Throwable ignored) {}
             try { item.focused = node.isFocused(); } catch (Throwable ignored) {}
