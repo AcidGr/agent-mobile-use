@@ -34,23 +34,27 @@ Read it like this: `trunc=true` on its own is not a problem. `trunc=true` with
 
 ## Baseline at the time of writing
 
-`check-completeness.py` output, with the system browser (`com.heytap.browser`) for the
-WebView rows. `act` is `act_sent/act_total`.
+`check-completeness.py` output. `act` is `act_sent/act_total`.
 
 ```
-淘宝        cp=7186  trunc=True   nodes=132 ret=65  act=45/45  ommin=4   OK
-小红书      cp=7090  trunc=True   nodes=50  ret=49  act=29/29  ommin=4   OK
-抖音        cp=7171  trunc=True   nodes=65  ret=52  act=40/40  ommin=4   OK
-美团        cp=6529  trunc=False  nodes=58  ret=58  act=32/32  ommin=None OK
-知乎        cp=7185  trunc=True   nodes=86  ret=59  act=43/43  ommin=4   OK
-QQ          cp=7077  trunc=True   nodes=73  ret=51  act=51/51  ommin=4   OK
-微博        cp=7077  trunc=True   nodes=73  ret=51  act=51/51  ommin=4   OK
-支付宝      cp=7105  trunc=True   nodes=74  ret=50  act=37/37  ommin=4   OK
-qq.com      cp=7126  trunc=True   nodes=114 ret=64  act=61/61  ommin=4   OK
+淘宝        cp=7166  trunc=True   nodes=135 ret=65  act=45/45  ommin=4    OK
+小红书      cp=7097  trunc=True   nodes=50  ret=49  act=29/29  ommin=4    OK
+抖音        cp=7181  trunc=True   nodes=65  ret=52  act=40/40  ommin=4    OK
+美团        cp=6581  trunc=False  nodes=58  ret=58  act=32/32  ommin=None OK
+知乎        cp=7236  trunc=True   nodes=85  ret=59  act=42/42  ommin=4    OK
+QQ          cp=7077  trunc=True   nodes=73  ret=51  act=51/51  ommin=4    OK
+支付宝      cp=7193  trunc=True   nodes=75  ret=51  act=37/37  ommin=4    OK
+qq.com      cp=7126  trunc=True   nodes=114 ret=64  act=61/61  ommin=4    OK
 m.zhihu     cp=5664  trunc=False  nodes=48  ret=48  act=35/35  ommin=None OK
 ```
 
-Worst payload is 7186 code points against the 8192 prune limit.
+Worst payload is 7236 code points against the 8192 prune limit, and every screen
+delivers every control in a single call. Amap is the exception — see below.
+
+The harness refuses to report a screen it did not actually reach. A launch that fails
+leaves the previous app on top, so it checks the resumed package and prints SKIPPED
+rather than measuring the wrong app; that is how a phantom 微博 row was caught
+(`com.sina.weibo` is not installed on this device).
 
 ## Dense screens need a paged read
 

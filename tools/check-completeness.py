@@ -19,7 +19,6 @@ APPS = [
     ("com.sankuai.meituan", "美团"),
     ("com.zhihu.android", "知乎"),
     ("com.tencent.mobileqq", "QQ"),
-    ("com.sina.weibo", "微博"),
     ("com.eg.android.AlipayGphone", "支付宝"),
 ]
 WEB = [("https://www.qq.com", "qq.com"), ("https://m.zhihu.com", "m.zhihu")]
@@ -32,6 +31,17 @@ def sh(cmd, timeout=300):
         headers={"Content-Type": "application/json"},
     )
     return json.load(urllib.request.urlopen(req, timeout=timeout)).get("output", "")
+
+
+def foreground():
+    """Package currently resumed on the target display, or None."""
+    out = sh("dumpsys activity activities --display 3 2>/dev/null "
+             "| grep topResumedActivity | head -1")
+    # ActivityRecord{... u0 <pkg>/<cls> tNNNN}
+    for tok in out.split():
+        if "/" in tok and not tok.startswith("ActivityRecord"):
+            return tok.split("/")[0]
+    return None
 
 
 def measure(label):
@@ -63,13 +73,26 @@ def main():
     # "app launches" then land inside a WebView instead of the app under test.
     sh("am force-stop com.heytap.browser >/dev/null 2>&1; sleep 1;")
     for pkg, name in APPS:
-        sh("am start --display 3 -n $(cmd package resolve-activity --brief %s 2>/dev/null | tail -1) "
-           ">/dev/null 2>&1; sleep 9;" % pkg)
+        started = sh("cmd package resolve-activity --brief %s 2>/dev/null | tail -1" % pkg).strip()
+        if not started or "No activity found" in started:
+            # Skipping loudly. Measured the hard way: a launch that fails silently leaves
+            # the PREVIOUS app on screen, so the script cheerfully reports that app twice
+            # under two different names — which is exactly what happened with 微博.
+            print("%-12s SKIPPED (not installed)" % name)
+            continue
+        sh("am start --display 3 -n %s >/dev/null 2>&1; sleep 9;" % started)
+        fg = foreground()
+        if fg and fg != pkg:
+            print("%-12s SKIPPED (foreground is %s, launch did not take)" % (name, fg))
+            continue
         measure(name)
     sh("am force-stop com.heytap.browser >/dev/null 2>&1; sleep 2;")
     for url, name in WEB:
         sh('am force-stop com.heytap.browser >/dev/null 2>&1; sleep 2; am start --display 3 '
            '-a android.intent.action.VIEW -d "%s" com.heytap.browser >/dev/null 2>&1; sleep 9;' % url)
+        if foreground() != "com.heytap.browser":
+            print("%-12s SKIPPED (browser not in foreground)" % name)
+            continue
         measure(name)
     return 0
 
