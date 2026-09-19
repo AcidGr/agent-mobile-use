@@ -167,6 +167,26 @@ public class ToolMain {
             }
             int displayId = Integer.parseInt(args[1]);
             injectType(displayId, args[2]);
+        } else if ("tapfocus".equals(cmd)) {
+            // The focus-chain click, i.e. what a screen reader actually does.
+            //
+            // Measured on this device: a WeChat bottom-tab container reports
+            // actions=[1,4,8,16,32,64,16908342] — it DOES advertise ACTION_CLICK (16) —
+            // while performAction(ACTION_CLICK) on it changes nothing observable. A screen
+            // reader does not do that: it moves ACCESSIBILITY focus onto the node first
+            // (ACTION_ACCESSIBILITY_FOCUS, id 64) and activates from there. TalkBack can
+            // operate this exact control, so the difference must be the focus step, not
+            // the click.
+            //
+            // This command exists to test that hypothesis. It is deliberately separate
+            // from tapnode so the two can be compared on the same node without either
+            // one's behaviour hiding the other's.
+            if (args.length < 4) {
+                System.err.println("Usage: tapfocus <displayId> <x> <y>");
+                System.exit(2);
+            }
+            int displayId = Integer.parseInt(args[1]);
+            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]), true);
         } else if ("tapnode".equals(cmd)) {
             // A click that NEVER injects a touch event. This exists because injected touches
             // and a real finger collide: measured on this device, `input -d 0 swipe` running
@@ -182,7 +202,7 @@ public class ToolMain {
                 System.exit(2);
             }
             int displayId = Integer.parseInt(args[1]);
-            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]));
+            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]), false);
         } else if ("clicknode".equals(cmd)) {
             // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
             // or description matches, then performAction(ACTION_CLICK) on it. See
@@ -1110,6 +1130,10 @@ public class ToolMain {
      * the call FAILS and says why, leaving the decision to the caller.
      */
     private static void tapNode(int targetDisplayId, int x, int y) {
+        tapNode(targetDisplayId, x, y, false);
+    }
+
+    private static void tapNode(int targetDisplayId, int x, int y, boolean focusChain) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -1165,7 +1189,24 @@ public class ToolMain {
             AccessibilityNodeInfo best = findActionableAt(all, x, y);
 
             StringBuilder sb = new StringBuilder();
-            sb.append("{\"ok\":").append(best != null);
+            boolean acted = false;
+            String actionErr = null;
+            if (best == null) {
+                actionErr = "no_actionable_node_at_point";
+            } else {
+                // Set accessibility focus first when asked, mirroring what a screen reader
+                // does before activating a control. ACTION_ACCESSIBILITY_FOCUS is id 64.
+                if (focusChain) {
+                    try {
+                        best.performAction(0x00000040);
+                        Thread.sleep(120);
+                    } catch (Throwable ignored) {}
+                }
+                acted = best.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (!acted) actionErr = "performAction(ACTION_CLICK) returned false";
+            }
+
+            sb.append("{\"ok\":").append(acted);
             sb.append(",\"display_id\":").append(targetDisplayId);
             sb.append(",\"point\":[").append(x).append(",").append(y).append("]");
             sb.append(",\"nodes\":").append(all.size());
@@ -1189,6 +1230,8 @@ public class ToolMain {
                   .append(r.right).append(",").append(r.bottom).append("]");
                 sb.append(",\"via\":\"performAction\"");
                 sb.append(",\"injected_touch\":false");
+                sb.append(",\"actions\":").append(actionIds(best));
+                sb.append(",\"clickable_flag\":").append(best.isClickable());
             }
             sb.append("}");
             System.out.print(sb.toString());
@@ -1204,6 +1247,33 @@ public class ToolMain {
                 } catch (Throwable ignored) {}
             }
             if (ht != null) ht.quitSafely();
+        }
+    }
+
+    /**
+     * Serialises the accessibility actions a node actually declares, as a JSON array of
+     * ids, e.g. [1,4,8,16,32,64].
+     *
+     * WHY THIS EXISTS: the dump has only ever emitted `clickable = isClickable()`, and a
+     * comment in NodeItem claimed that was "measured identical to ACTION_CLICK across 115
+     * nodes / 3 apps". That sample never covered the case that breaks — a textless layout
+     * container reporting isClickable()=true. getActionList() is the signal that separates
+     * "the app handles an accessibility click here" from "the View merely claims to be
+     * clickable", which is exactly the difference between a control a screen reader can
+     * activate and one that only a real touch reaches. ACTION_CLICK is id 16.
+     */
+    private static String actionIds(AccessibilityNodeInfo node) {
+        try {
+            List<AccessibilityNodeInfo.AccessibilityAction> acts = node.getActionList();
+            if (acts == null) return "null";
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < acts.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(acts.get(i).getId());
+            }
+            return sb.append("]").toString();
+        } catch (Throwable t) {
+            return "null";
         }
     }
 
