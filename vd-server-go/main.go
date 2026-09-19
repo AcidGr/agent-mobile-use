@@ -496,10 +496,12 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		var p struct {
-			Title   string `json:"title"`
-			Content string `json:"content"`
-			Tag     string `json:"tag"`
-			URL     string `json:"url"`
+			Title     string `json:"title"`
+			Content   string `json:"content"`
+			Tag       string `json:"tag"`
+			URL       string `json:"url"`
+			Total     int    `json:"total"`
+			Completed int    `json:"completed"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -517,12 +519,16 @@ func main() {
 		}
 
 		// Primary: Send broadcast to com.agent.mobileuse/.NotifyReceiver (native Android App notification with click jump & black whale avatar)
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL"`)
+		// Ensure process is thawed if frozen by ColorOS Hans/Freezer, and pass --receiver-foreground for immediate dispatch
+		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
 			"NOTIFY_URL="+p.URL,
+			fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
+			fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
 		)
 		out, err := cmd.CombinedOutput()
 		if err == nil && strings.Contains(string(out), "result=0") {

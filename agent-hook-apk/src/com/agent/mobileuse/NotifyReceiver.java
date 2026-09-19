@@ -10,6 +10,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
+import android.text.Html;
 import android.util.Log;
 
 import java.lang.reflect.Constructor;
@@ -54,6 +55,9 @@ public class NotifyReceiver extends BroadcastReceiver {
             String title = intent.getStringExtra("title");
             String content = intent.getStringExtra("content");
             String url = intent.getStringExtra("url");
+            int total = intent.getIntExtra("total", 0);
+            int completed = intent.getIntExtra("completed", 0);
+
             if (url == null || url.isEmpty()) {
                 url = DEFAULT_URL;
             }
@@ -61,17 +65,29 @@ public class NotifyReceiver extends BroadcastReceiver {
             if (title == null) title = "DeepSeek Mobile Agent";
             if (content == null) content = "";
 
-            postNotification(context, nm, tag, id, title, content, url);
+            postNotification(context, nm, tag, id, title, content, url, total, completed);
+        }
+    }
+
+    private static CharSequence parseHtml(String text) {
+        if (text == null) return "";
+        if (!text.contains("<") && !text.contains("&")) {
+            return text;
+        }
+        try {
+            String formatted = text.replace("\n", "<br>");
+            return Html.fromHtml(formatted);
+        } catch (Throwable t) {
+            return text;
         }
     }
 
     private void ensureChannel(NotificationManager nm) {
         if (Build.VERSION.SDK_INT >= 26) {
             try {
-                // android.app.NotificationChannel(String id, CharSequence name, int importance)
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                // IMPORTANCE_DEFAULT = 3, IMPORTANCE_HIGH = 4
+                // IMPORTANCE_DEFAULT = 3
                 Object channel = ctor.newInstance(CHANNEL_ID, CHANNEL_NAME, 3);
 
                 Method setDesc = channelClass.getMethod("setDescription", String.class);
@@ -87,7 +103,8 @@ public class NotifyReceiver extends BroadcastReceiver {
     }
 
     private void postNotification(Context context, NotificationManager nm, String tag, int id,
-                                  String title, String content, String url) {
+                                  String title, String content, String url,
+                                  int total, int completed) {
         try {
             ensureChannel(nm);
 
@@ -101,25 +118,39 @@ public class NotifyReceiver extends BroadcastReceiver {
                 }
             }
 
-            builder.setContentTitle(title);
+            builder.setContentTitle(parseHtml(title));
 
-            // Extract first non-empty line as brief summary
+            // Summary text for collapsed notification view
             String summary = "";
-            String[] lines = content.split("\n");
+            String[] lines = content.split("<br\\s*/?>|\n");
             for (String l : lines) {
-                String trimmed = l.trim();
-                if (!trimmed.isEmpty()) {
-                    summary = trimmed;
+                String plain = l.replaceAll("<[^>]*>", "").trim();
+                if (!plain.isEmpty()) {
+                    summary = plain;
                     break;
                 }
             }
-            if (summary.isEmpty()) summary = content;
-            builder.setContentText(summary);
+            if (summary.isEmpty()) summary = content.replaceAll("<[^>]*>", "");
+            builder.setContentText(parseHtml(summary));
 
-            // BigTextStyle for expandable multiline view
+            // Native Progress Bar & SubText
+            if (total > 0) {
+                if (completed == total) {
+                    builder.setProgress(0, 0, false);
+                    builder.setSubText("已完成 • 100%");
+                } else {
+                    builder.setProgress(total, completed, false);
+                    int pct = (int) Math.round(((double) completed / (double) total) * 100);
+                    builder.setSubText("执行中 • " + completed + "/" + total + " (" + pct + "%)");
+                }
+            } else {
+                builder.setSubText("DeepSeek Harness");
+            }
+
+            // BigTextStyle for rich HTML expandable view
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            bigStyle.setBigContentTitle(title);
-            bigStyle.bigText(content);
+            bigStyle.setBigContentTitle(parseHtml(title));
+            bigStyle.bigText(parseHtml(content));
             builder.setStyle(bigStyle);
 
             // Set Icons
@@ -134,26 +165,32 @@ public class NotifyReceiver extends BroadcastReceiver {
             }
 
             // Click Jump PendingIntent -> Web UI
+            PendingIntent pi = null;
             try {
                 Intent viewIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                 viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                // 0x04000000 = PendingIntent.FLAG_IMMUTABLE, 0x08000000 = FLAG_UPDATE_CURRENT
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                 if (Build.VERSION.SDK_INT >= 23) {
-                    flags |= 0x04000000;
+                    flags |= 0x04000000; // FLAG_IMMUTABLE
                 }
-                PendingIntent pi = PendingIntent.getActivity(context, 0, viewIntent, flags);
+                pi = PendingIntent.getActivity(context, 0, viewIntent, flags);
                 builder.setContentIntent(pi);
             } catch (Throwable t) {
                 Log.e(TAG, "Failed to create PendingIntent: " + t.getMessage(), t);
             }
 
+            if (pi != null) {
+                builder.addAction(R.drawable.dsh_whale_icon, "进入控制台", pi);
+            }
+
+            builder.setPriority(1); // Notification.PRIORITY_HIGH = 1
+            builder.setShowWhen(true);
             builder.setOngoing(false);
             builder.setAutoCancel(false);
 
             Notification notification = builder.build();
             nm.notify(tag, id, notification);
-            Log.i(TAG, "Notification posted successfully: tag=" + tag + ", id=" + id);
+            Log.i(TAG, "Rich HTML Notification posted successfully: tag=" + tag + ", id=" + id);
         } catch (Throwable t) {
             Log.e(TAG, "postNotification failed: " + t.getMessage(), t);
         }
