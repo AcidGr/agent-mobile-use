@@ -29,6 +29,9 @@ import java.util.Map;
  */
 public class ToolMain {
 
+    /** Why the last dispatchGesture() attempt failed. Null when it succeeded. */
+    private static String lastGestureError = null;
+
     /** Fields kept per node. The wire format is written by hand in dumpTree(). */
     public static class NodeItem {
         public int id;
@@ -202,7 +205,30 @@ public class ToolMain {
                 System.exit(2);
             }
             int displayId = Integer.parseInt(args[1]);
-            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]), false);
+            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]), false, "a11y");
+        } else if ("tapgesture".equals(cmd)) {
+            // MEASURED NEGATIVE RESULT — this command cannot succeed in this environment.
+            //
+            // It was written to test whether a dispatchGesture() tap could activate a node
+            // without the side effect performAction has (moving the input method's token to
+            // this display, dumpsys input_method mCurTokenDisplayId 0 -> 3, which collapses
+            // the user's soft keyboard).
+            //
+            // It cannot: the UiAutomation reachable from app_process here does not expose
+            // dispatchGesture at all. Enumerated on-device with reflection, its full method
+            // set is connect/connect(int)/connectWithTimeout/disconnect/getConnectionId/
+            // performGlobalAction/syncInputTransactions — no gesture API. So this always
+            // returns ok:false with gesture_error set. Kept as a documented dead end rather
+            // than deleted, so the next person does not spend the same time on it.
+            //
+            // GestureDescription itself DOES exist on this device (API 24+); it is
+            // UiAutomation's exposure of it that is missing.
+            if (args.length < 4) {
+                System.err.println("Usage: tapgesture <displayId> <x> <y>");
+                System.exit(2);
+            }
+            int displayId = Integer.parseInt(args[1]);
+            tapNode(displayId, Integer.parseInt(args[2]), Integer.parseInt(args[3]), false, "gesture");
         } else if ("clicknode".equals(cmd)) {
             // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
             // or description matches, then performAction(ACTION_CLICK) on it. See
@@ -220,7 +246,7 @@ public class ToolMain {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|tapnode|clicknode> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|tapnode|tapgesture|tapfocus|clicknode> [args...]");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1133,7 +1159,72 @@ public class ToolMain {
         tapNode(targetDisplayId, x, y, false);
     }
 
+    /**
+     * Inject a tap as a real gesture at (x, y) through the UiAutomation connection.
+     *
+     * This is the second activation path. It does inject an InputEvent into the display's
+     * input pipeline (unlike performAction), so it is subject to touch arbitration — but it
+     * targets a display explicitly instead of relying on "whichever display owns the device",
+     * which is exactly the limitation of the `input` tool (its shell command's device shows
+     * AssociatedDisplayPort: <none>, so it only reaches the focused display).
+     *
+     * GestureDescription is API 24+ and this tool compiles against an API 23 jar, so every
+     * step is reflective. Written as a separate method so tapNode() stays readable.
+     */
+    private static boolean dispatchGestureTap(Object uiAutomation, Class<?> uiClass, int x, int y) {
+        lastGestureError = null;
+        try {
+            Class<?> pathClass = Class.forName("android.graphics.Path");
+            Object path = pathClass.getConstructor().newInstance();
+            pathClass.getMethod("moveTo", float.class, float.class)
+                    .invoke(path, (float) x, (float) y);
+
+            Class<?> strokeClass = Class.forName("android.accessibilityservice.GestureDescription$StrokeDescription");
+            Object stroke = strokeClass
+                    .getConstructor(pathClass, long.class, long.class)
+                    .newInstance(path, 0L, 120L);
+
+            Class<?> gdClass = Class.forName("android.accessibilityservice.GestureDescription");
+            Object builder = Class.forName("android.accessibilityservice.GestureDescription$Builder")
+                    .getConstructor().newInstance();
+            builder.getClass().getMethod("addStroke", strokeClass).invoke(builder, stroke);
+            Object gesture = builder.getClass().getMethod("build").invoke(builder);
+
+            // dispatchGesture() requires a Handler whose Looper is alive, or it throws/returns
+            // false. Passing null works only when the calling thread already has one, which is
+            // why the first attempt silently failed.
+            Object handler = null;
+            try {
+                Class<?> handlerClass = Class.forName("android.os.Handler");
+                handler = handlerClass.getConstructor(android.os.Looper.class)
+                        .newInstance(android.os.Looper.myLooper() != null
+                                ? android.os.Looper.myLooper()
+                                : android.os.Looper.getMainLooper());
+            } catch (Throwable ignored) {}
+
+            for (Method m : uiClass.getMethods()) {
+                if (!"dispatchGesture".equals(m.getName())) continue;
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length == 3) {
+                    Object r = m.invoke(uiAutomation, gesture, null, handler);
+                    return Boolean.TRUE.equals(r);
+                }
+            }
+            lastGestureError = "no dispatchGesture(GestureDescription,*,Handler) method found";
+            return false;
+        } catch (Throwable t) {
+            lastGestureError = t.getClass().getSimpleName() + ": " + t.getMessage();
+            Throwable c = t.getCause();
+            if (c != null) lastGestureError += " | cause=" + c.getClass().getSimpleName() + ": " + c.getMessage();
+            return false;
+        }
+    }
+
     private static void tapNode(int targetDisplayId, int x, int y, boolean focusChain) {
+        tapNode(targetDisplayId, x, y, focusChain, "a11y");
+    }
+
+    private static void tapNode(int targetDisplayId, int x, int y, boolean focusChain, String mode) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -1193,6 +1284,10 @@ public class ToolMain {
             String actionErr = null;
             if (best == null) {
                 actionErr = "no_actionable_node_at_point";
+            } else if ("gesture".equals(mode)) {
+                // Activation path B: inject a real gesture at the node's centre.
+                acted = dispatchGestureTap(uiAutomation, uiClass, x, y);
+                if (!acted) actionErr = "dispatchGesture returned false";
             } else {
                 // Set accessibility focus first when asked, mirroring what a screen reader
                 // does before activating a control. ACTION_ACCESSIBILITY_FOCUS is id 64.
@@ -1202,6 +1297,8 @@ public class ToolMain {
                         Thread.sleep(120);
                     } catch (Throwable ignored) {}
                 }
+                // Activation path A: ask the system to run the View's click handler.
+                // Measured side effect: this moves the input method to this display.
                 acted = best.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 if (!acted) actionErr = "performAction(ACTION_CLICK) returned false";
             }
@@ -1228,10 +1325,16 @@ public class ToolMain {
                 }
                 sb.append(",\"b\":[").append(r.left).append(",").append(r.top).append(",")
                   .append(r.right).append(",").append(r.bottom).append("]");
-                sb.append(",\"via\":\"performAction\"");
-                sb.append(",\"injected_touch\":false");
+                sb.append(",\"via\":\"").append("gesture".equals(mode) ? "dispatchGesture" : "performAction").append("\"");
+                // Reported honestly instead of hardcoded: only the gesture path puts an
+                // InputEvent into the pipeline. A caller that trusts this field needs it to
+                // be true only when a touch really was injected.
+                sb.append(",\"injected_touch\":").append("gesture".equals(mode));
                 sb.append(",\"actions\":").append(actionIds(best));
                 sb.append(",\"clickable_flag\":").append(best.isClickable());
+            }
+            if (lastGestureError != null) {
+                sb.append(",\"gesture_error\":\"").append(escapeJson(lastGestureError)).append("\"");
             }
             sb.append("}");
             System.out.print(sb.toString());
