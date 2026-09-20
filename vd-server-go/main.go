@@ -61,9 +61,17 @@ func setCurrentMode(m string) string {
 
 func setEdgeGlow(enable bool) {
 	if enable {
-		exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService").Run()
+		// 启动前先强行清理残留或被冻结的进程，彻底打破 ColorOS Hans 的拦截
+		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse").Run()
+		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Printf("[setEdgeGlow] START error: %v, output: %s\n", err, string(out))
+		}
 	} else {
-		exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a STOP com.agent.mobileuse/.GlowService").Run()
+		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a STOP com.agent.mobileuse/.GlowService")
+		_ = cmd.Run()
 	}
 }
 
