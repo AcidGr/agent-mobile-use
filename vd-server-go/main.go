@@ -257,7 +257,114 @@ func stopVirtualDisplay() StatusResp {
 	return getStatus()
 }
 
+// ── Accessibility service, on only for the duration of one tree read ──
+//
+// WeChat only exposes its node tree while a genuine accessibility service is bound.
+// Measured on this device (2026-09-20):
+//
+//	enabled=0, service list empty       -> tree_blocked, 0 nodes
+//	enabled=1, service list empty       -> tree_blocked, 0 nodes   <- the boolean alone does nothing
+//	enabled=0, service list has SelectToSpeak -> 68 nodes, readable
+//	enabled=1, service list has it      -> 68 nodes, readable
+//
+// So the ONLY thing that matters is that a real service is bound. Every tree read is
+// therefore wrapped: put the service in the list, run the tool, put the list back.
+//
+// Timings measured here, which is what this is built on:
+//
+//	bind    write returns +19..47ms, service bound +51..76ms warm; ~700ms cold
+//	        (cold = the TalkBack process has to be started, e.g. after a reboot)
+//	unbind  delete returns +21ms, state cleared by +53ms
+//	wait    NOT needed: with delays of 0 / 300 / 1000ms before the dump, WeChat read
+//	        68 nodes in 9/9 trials, including one where TalkBack was force-stopped
+//	        immediately before the write
+//	total   enable + dump + restore = 2383ms against a 2218ms plain dump, so +165ms
+//
+// What the earlier version of this got wrong, and is not repeated here:
+//   - it also wrote `accessibility_enabled`; the boolean has no effect on binding, and
+//     neither does leaving it as "0" on the way out
+//   - it slept 1000ms before every call; the nine trials above say that wait buys nothing
+//
+// It only appends to whatever the user already had, and only undoes what it itself did:
+// if the service is already in the list it is left alone.
+const a11yService = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+
+const a11yKey = "enabled_accessibility_services"
+
+// Serialises the toggle so two concurrent tool calls cannot interleave their
+// save/restore and leave the list in a state neither of them intended.
+var a11yToggleMu sync.Mutex
+
+func readSecure(key string) string {
+	out, err := exec.Command("/system/bin/settings", "get", "secure", key).Output()
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "null" {
+		return ""
+	}
+	return v
+}
+
+func writeSecure(key, value string) {
+	_ = exec.Command("/system/bin/settings", "put", "secure", key, value).Run()
+}
+
+func deleteSecure(key string) {
+	_ = exec.Command("/system/bin/settings", "delete", "secure", key).Run()
+}
+
+// toolReadsTree reports whether a tool command reads the accessibility tree. `type`
+// does not, so it is left alone rather than paying the switch for nothing.
+func toolReadsTree(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode":
+		return true
+	}
+	return false
+}
+
+// withA11yService binds the accessibility service around fn and then restores the
+// device's setting exactly as it was.
+func withA11yService(fn func() (string, error)) (string, error) {
+	a11yToggleMu.Lock()
+	defer a11yToggleMu.Unlock()
+
+	orig := readSecure(a11yKey)
+	if strings.Contains(orig, a11yService) {
+		// Already there — either the user enabled it, or it is left over from an
+		// interrupted call. Either way it is not ours to remove.
+		return fn()
+	}
+
+	merged := a11yService
+	if orig != "" {
+		merged = orig + ":" + a11yService
+	}
+	writeSecure(a11yKey, merged)
+
+	out, err := fn()
+
+	if orig == "" {
+		deleteSecure(a11yKey)
+	} else {
+		writeSecure(a11yKey, orig)
+	}
+	return out, err
+}
+
 func runTool(args ...string) (string, error) {
+	if toolReadsTree(args) {
+		return withA11yService(func() (string, error) { return runToolRaw(args...) })
+	}
+	return runToolRaw(args...)
+}
+
+func runToolRaw(args ...string) (string, error) {
 	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
 	if _, err := os.Stat(dexPath); err != nil {
 		dexPath = "/data/local/tmp/agent_tools.dex"
