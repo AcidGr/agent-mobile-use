@@ -10,7 +10,9 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -55,6 +57,7 @@ public class ToolMain {
         public boolean checked;
         public boolean selected;
         public boolean scrollable;
+        public boolean folded;
 
         // ---- resolved click target ----
         public int targetId = -1;      // self if clickable, else nearest clickable ancestor
@@ -403,10 +406,11 @@ public class ToolMain {
             }
             if (list == null) list = new ArrayList<NodeItem>();
 
-            // Order matters all the way through: dedup -> tap suppression -> ranking.
+            // Order matters all the way through: dedup -> semantic hoisting/folding -> tap suppression -> ranking.
             // Each stage removes or reorders nodes, so it has to see the output of the
             // one before it.
             int droppedDup = dedupeIdenticalNodes(list);
+            hoistAndFoldCards(list, dispW, dispH);
             suppressUnusableTargets(list, dispW, dispH);
 
             rankForBudget(list);
@@ -545,6 +549,7 @@ public class ToolMain {
         keep.selected |= from.selected;
         keep.scrollable |= from.scrollable;
         keep.focused |= from.focused;
+        keep.folded |= from.folded;
         // A label is the whole reason a node is worth keeping; never let a merge that
         // only happens to reconstruct interaction state throw one away. The later node
         // fills only what the keeper is still missing.
@@ -885,6 +890,7 @@ public class ToolMain {
         // geometric test also catches the ancestor chains AutoDroid clears with
         // _adjust_view_clickability, without mutating the tree.
         if (containsClickable(n, list)) return "wraps";
+        if (containsAnySemantic(n, list)) return "wraps";
         return "unlabeled";
     }
 
@@ -901,6 +907,139 @@ public class ToolMain {
             if (area * 10L < selfArea * 9L) return true;
         }
         return false;
+    }
+
+    /** Whether any node with non-empty text or desc lies strictly inside this node's box. */
+    private static boolean containsAnySemantic(NodeItem n, List<NodeItem> list) {
+        long selfArea = Math.max(1L, (long) (n.right - n.left) * (n.bottom - n.top));
+        for (NodeItem m : list) {
+            if (m == n || m.id == n.id) continue;
+            if (!nonEmpty(m.text) && !nonEmpty(m.desc)) continue;
+            if (m.left < n.left || m.top < n.top || m.right > n.right || m.bottom > n.bottom) continue;
+            long area = Math.max(1L, (long) (m.right - m.left) * (m.bottom - m.top));
+            if (area * 10L < selfArea * 9L) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Hoist semantic text from non-interactive children into textless clickable containers (cards/items),
+     * and fold the consumed text-only leaf nodes to save tokens and eliminate misleading "unlabeled" nodes.
+     *
+     * Guards:
+     *   - Only containers <= 40% of the screen area and height <= 900px (no screen-wide wrappers / backgrounds).
+     *   - Only non-interactive children (clickable/checkable/editable children are NEVER folded).
+     *   - Text children belonging to a nested smaller clickable container are NOT stolen by the outer parent.
+     *   - Concatenated text length is capped to prevent long body text from blowing up the label.
+     */
+    private static void hoistAndFoldCards(List<NodeItem> list, int dispW, int dispH) {
+        if (list == null || list.isEmpty()) return;
+        long screenArea = (dispW > 0 && dispH > 0) ? (long) dispW * dispH : 0L;
+
+        for (int i = 0; i < list.size(); i++) {
+            NodeItem parent = list.get(i);
+            if (!parent.clickable) continue;
+            if (parent.scrollable) continue;
+            if (nonEmpty(parent.text) || nonEmpty(parent.desc)) continue;
+
+            long parentArea = Math.max(1L, (long) (parent.right - parent.left) * (parent.bottom - parent.top));
+            if (screenArea > 0 && parentArea > screenArea * 2 / 5) continue;
+            if (parent.bottom - parent.top > 900) continue;
+
+            List<NodeItem> textChildren = new ArrayList<NodeItem>();
+            boolean hasSubClickable = false;
+
+            for (int j = 0; j < list.size(); j++) {
+                if (i == j) continue;
+                NodeItem child = list.get(j);
+                if (child.windowIndex != parent.windowIndex) continue;
+                if (child.left < parent.left || child.top < parent.top
+                        || child.right > parent.right || child.bottom > parent.bottom) {
+                    continue;
+                }
+                if (child.depth <= parent.depth) continue;
+
+                if (child.clickable || child.checkable || child.editableFlag) {
+                    long childArea = Math.max(1L, (long) (child.right - child.left) * (child.bottom - child.top));
+                    if (childArea * 10L < parentArea * 9L) {
+                        hasSubClickable = true;
+                    }
+                    continue;
+                }
+
+                if (nonEmpty(child.text) || nonEmpty(child.desc)) {
+                    textChildren.add(child);
+                }
+            }
+
+            if (textChildren.isEmpty()) continue;
+
+            List<NodeItem> directTextChildren = new ArrayList<NodeItem>();
+            for (NodeItem tc : textChildren) {
+                boolean insideSub = false;
+                if (hasSubClickable) {
+                    for (int j = 0; j < list.size(); j++) {
+                        if (i == j) continue;
+                        NodeItem mid = list.get(j);
+                        if (!mid.clickable && !mid.checkable) continue;
+                        if (mid.depth <= parent.depth || tc.depth <= mid.depth) continue;
+                        if (tc.left >= mid.left && tc.top >= mid.top && tc.right <= mid.right && tc.bottom <= mid.bottom) {
+                            insideSub = true;
+                            break;
+                        }
+                    }
+                }
+                if (!insideSub) {
+                    directTextChildren.add(tc);
+                }
+            }
+
+            if (directTextChildren.isEmpty()) continue;
+
+            Collections.sort(directTextChildren, new Comparator<NodeItem>() {
+                @Override
+                public int compare(NodeItem a, NodeItem b) {
+                    if (Math.abs(a.top - b.top) > 15) {
+                        return Integer.compare(a.top, b.top);
+                    }
+                    return Integer.compare(a.left, b.left);
+                }
+            });
+
+            StringBuilder hoisted = new StringBuilder();
+            String lastText = "";
+            for (NodeItem tc : directTextChildren) {
+                String t = nonEmpty(tc.text) ? tc.text.trim() : (nonEmpty(tc.desc) ? tc.desc.trim() : "");
+                if (t.isEmpty() || t.equals(lastText)) continue;
+                if (hoisted.length() > 0) {
+                    if (hoisted.toString().contains(t)) continue;
+                    hoisted.append(' ');
+                }
+                hoisted.append(t);
+                lastText = t;
+                if (hoisted.length() >= 64) break;
+            }
+
+            if (hoisted.length() == 0) continue;
+
+            parent.text = hoisted.toString();
+            parent.targetId = parent.id;
+            parent.targetCenterX = parent.centerX;
+            parent.targetCenterY = parent.centerY;
+            parent.targetRatio = 1;
+            parent.tapReason = null;
+
+            for (NodeItem tc : directTextChildren) {
+                tc.folded = true;
+            }
+        }
+
+        Iterator<NodeItem> it = list.iterator();
+        while (it.hasNext()) {
+            if (it.next().folded) {
+                it.remove();
+            }
+        }
     }
 
     /** `com.sankuai.meituan:id/k71` -> `k71`; the package is screen-constant noise. */
