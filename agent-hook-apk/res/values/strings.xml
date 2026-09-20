@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Agent Mobile Use Hook</string>
-    <!-- Shown in Settings > Accessibility. Named for what it does, not for the project:
-         a user who goes looking should be able to tell what they are enabling. -->
-    <string name="a11y_service_summary">让微信等应用开放界面节点树</string>
-    <string name="a11y_service_description">不朗读、不改变触摸操作、不显示悬浮按钮。存在的唯一目的是让把界面节点树锁起来的应用（目前是微信）检测到无障碍客户端并开放节点树，从而使自动化工具能够读取界面结构。</string>
     <string-array name="xposedscope">
         <item>android</item>
         <item>com.android.systemui</item>

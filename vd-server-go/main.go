@@ -257,103 +257,7 @@ func stopVirtualDisplay() StatusResp {
 	return getStatus()
 }
 
-// ── Accessibility service, switched on only for the duration of a tool call ──
-//
-// WeChat only exposes its node tree to a genuinely registered accessibility service;
-// without one, `tree` on its chat list returns zero nodes (tree_blocked). The user does
-// not want that service resident — it is a device-wide accessibility setting, and leaving
-// it on changes how the whole phone behaves and costs battery.
-//
-// So it is enabled immediately before a tool call that reads the tree, and switched back
-// to whatever it was before, right after.
-//
-// Measured timing on this device:
-//   enable  -> takes effect about 1s later (at +0s the tree is still blocked, at +1s it reads)
-//   disable -> asynchronous; the tree stays readable for ~2s after the value flips
-// which is why a single fixed wait is needed on the enable side and none on the disable side.
-const selectToSpeakService = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
-
-const a11yEnableWait = 1000 * time.Millisecond
-
-// Serialises the toggle so two concurrent tool calls cannot interleave their
-// save/restore and leave the setting stuck on.
-var a11yToggleMu sync.Mutex
-
-func readSecure(key string) string {
-	out, err := exec.Command("/system/bin/settings", "get", "secure", key).Output()
-	if err != nil {
-		return ""
-	}
-	v := strings.TrimSpace(string(out))
-	if v == "null" {
-		return ""
-	}
-	return v
-}
-
-func writeSecure(key, value string) {
-	_ = exec.Command("/system/bin/settings", "put", "secure", key, value).Run()
-}
-
-// toolNeedsA11yService reports whether a tool command reads the accessibility tree.
-// `type` does not, so it is left alone rather than paying the switch cost.
-func toolNeedsA11yService(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	switch args[0] {
-	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode":
-		return true
-	}
-	return false
-}
-
-// withA11yService runs fn with the accessibility service temporarily enabled and then
-// restores the device's accessibility settings exactly as they were.
-//
-// It APPENDS to whatever services the user already had rather than replacing them, so a
-// user running their own screen reader does not lose it for the duration of a dump.
-func withA11yService(fn func() (string, error)) (string, error) {
-	a11yToggleMu.Lock()
-	defer a11yToggleMu.Unlock()
-
-	origEnabled := readSecure("accessibility_enabled")
-	origServices := readSecure("enabled_accessibility_services")
-
-	// Already on: toggling would cost a second and change nothing.
-	if origEnabled == "1" && strings.Contains(origServices, "SelectToSpeakService") {
-		return fn()
-	}
-
-	merged := selectToSpeakService
-	if origServices != "" && !strings.Contains(origServices, selectToSpeakService) {
-		merged = origServices + ":" + selectToSpeakService
-	}
-	writeSecure("enabled_accessibility_services", merged)
-	writeSecure("accessibility_enabled", "1")
-	time.Sleep(a11yEnableWait)
-
-	out, err := fn()
-
-	// Put it back. An unset accessibility_enabled restores as "0" rather than "" so the
-	// setting is left in a defined state.
-	writeSecure("enabled_accessibility_services", origServices)
-	if origEnabled == "" {
-		writeSecure("accessibility_enabled", "0")
-	} else {
-		writeSecure("accessibility_enabled", origEnabled)
-	}
-	return out, err
-}
-
 func runTool(args ...string) (string, error) {
-	if toolNeedsA11yService(args) {
-		return withA11yService(func() (string, error) { return runToolRaw(args...) })
-	}
-	return runToolRaw(args...)
-}
-
-func runToolRaw(args ...string) (string, error) {
 	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
 	if _, err := os.Stat(dexPath); err != nil {
 		dexPath = "/data/local/tmp/agent_tools.dex"
@@ -372,32 +276,6 @@ func runToolRaw(args ...string) (string, error) {
 	)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-// a11yTap asks the tool to click the actionable node at (x, y) using only
-// AccessibilityNodeInfo.performAction, which injects no touch event. It returns the raw
-// JSON the tool printed, or nil when the tool could not be run at all.
-//
-// The distinction matters to the caller: nil means "I could not even ask", whereas a
-// parsed {ok:false} means "I asked and there is nothing actionable there". The /api/click
-// handler treats both as a reason to consider a coordinate fallback, but only the second
-// one carries a reason worth reporting back.
-//
-// The tool never falls back to injecting a touch itself, so `ok:false` is a real answer
-// rather than a silent substitution.
-func a11yTap(w http.ResponseWriter, targetDisplayID, x, y int) []byte {
-	out, err := runTool("tapnode", strconv.Itoa(targetDisplayID),
-		strconv.Itoa(x), strconv.Itoa(y))
-	if err != nil && strings.TrimSpace(out) == "" {
-		return nil
-	}
-	s := strings.TrimSpace(out)
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end <= start {
-		return nil
-	}
-	return []byte(s[start : end+1])
 }
 
 func parseKeycode(key string) string {
@@ -588,9 +466,8 @@ func main() {
 			return
 		}
 		var p struct {
-			X   int    `json:"x"`
-			Y   int    `json:"y"`
-			Via string `json:"via"`
+			X int `json:"x"`
+			Y int `json:"y"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -598,123 +475,6 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-
-		// Two delivery channels, both explicit. There is deliberately NO automatic
-		// fallback between them.
-		//
-		// WHY: `input tap` injects a real touch event into InputDispatcher. Measured on this
-		// device, an injected touch issued while the user's finger was on the physical screen
-		// terminated the user's gesture with ACTION_CANCEL. performAction() calls the View's
-		// click handler directly and produces no InputEvent, so it cannot enter touch
-		// arbitration.
-		//
-		// CORRECTION — this replaces an earlier claim made in this file. performAction is NOT
-		// harmless to the user's foreground session: measured with 25Hz sampling, BOTH
-		// channels move the input method's token to this display (dumpsys input_method
-		// mCurTokenDisplayId 0 -> 3), which collapses the user's soft keyboard. What actually
-		// separates them is narrower than "disturbs / does not disturb": only the coordinate
-		// tap ALSO cancels an in-flight user gesture.
-		//
-		// WHY no fallback between the two: each channel is one real click. Chaining "try
-		// accessibility, then try a coordinate tap" means the second attempt fires blind at
-		// whatever the first attempt left on screen. The tool cannot tell whether the first
-		// attempt landed, so the caller must decide — it can dump the screen and see.
-		//
-		// `via`:
-		//   a11y  (default) - AccessibilityNodeInfo.performAction only.
-		//   coord           - an injected `input tap`; the caller explicitly wants a real
-		//                     touch event and accepts that it can cancel their gesture.
-		mode := strings.ToLower(strings.TrimSpace(p.Via))
-		if mode == "" {
-			mode = "a11y"
-		}
-		if mode != "a11y" && mode != "coord" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{
-				Success: false,
-				Message: "unknown via " + strconv.Quote(p.Via) + ": use \"a11y\" or \"coord\"",
-			})
-			return
-		}
-
-		if mode == "a11y" {
-			a := a11yTap(w, targetDid, p.X, p.Y)
-			if a == nil {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success":     false,
-					"via":         "a11y",
-					"error":       "tool_unavailable",
-					"side_effect": false,
-					"hint":        "could not run the accessibility tool at all; nothing was clicked",
-				})
-				return
-			}
-			var res struct {
-				OK    bool   `json:"ok"`
-				Error string `json:"error"`
-				Type  string `json:"type"`
-				Desc  string `json:"desc"`
-				Text  string `json:"text"`
-				Vid   string `json:"vid"`
-				B     []int  `json:"b"`
-			}
-			if json.Unmarshal(a, &res) != nil {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success":     false,
-					"via":         "a11y",
-					"error":       "unparseable_tool_output",
-					"side_effect": false,
-					"hint":        strings.TrimSpace(string(a)),
-				})
-				return
-			}
-			if res.OK {
-				label := res.Desc
-				if label == "" {
-					label = res.Text
-				}
-				// type/bounds are reported even when label is empty, because an empty label
-				// is NOT a miss: nodes that carry no text (layout containers) are the common
-				// case in apps like Meituan, and without type/bounds the caller has no way to
-				// tell "clicked a textless container" from "clicked nothing".
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true,
-					"via":     "a11y",
-					"label":   label,
-					"vid":     res.Vid,
-					"type":    res.Type,
-					"bounds":  res.B,
-					"detail": "clicked via performAction; no touch event was injected, so this " +
-						"cannot cancel the user's own gesture. It does still move the input " +
-						"method's token to this display. An empty label alongside a type and " +
-						"bounds means the target carries no text: that is a hit, not a miss",
-				})
-				return
-			}
-			// The two failure reasons have opposite consequences, so they must never be
-			// collapsed into one "failed" answer:
-			//   no_actionable_node_at_point       - performAction was never called, so the
-			//                                       screen is untouched and retrying with
-			//                                       via=coord is safe.
-			//   performAction(...) returned false - an action WAS dispatched and refused.
-			//                                       State is unknown; dump before retrying.
-			sideEffect := res.Error != "no_actionable_node_at_point"
-			hint := "nothing was clicked and the screen is unchanged; retrying with via=coord " +
-				"is safe if an injected touch is what you want"
-			if sideEffect {
-				hint = "an action was dispatched and refused; do NOT retry blindly — dump the " +
-					"screen first to see what state it is in"
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success":     false,
-				"via":         "a11y",
-				"error":       res.Error,
-				"side_effect": sideEffect,
-				"hint":        hint,
-			})
-			return
-		}
-
 		if targetDid == 0 {
 			broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
 		}
@@ -723,15 +483,7 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		// Reached only when the caller asked for via=coord explicitly — there is no path
-		// here that arrived by falling back from an accessibility failure.
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":     true,
-			"via":         "coord",
-			"side_effect": true,
-			"detail": "injected a coordinate tap (via=coord): this is a real touch event and can " +
-				"interrupt the user's own gesture or collapse the soft keyboard",
-		})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true})
 	})
 
 	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
