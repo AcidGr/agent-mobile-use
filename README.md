@@ -83,7 +83,9 @@
 由纯静态 Go 服务 `vd_server` 提供：
 - `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供手动刷新快照、当前状态指示与**副屏开关按钮**（副屏运行中显示「关闭副屏」，已休眠显示「开启副屏」，网关不可达时按钮置灰）。快照区高度按浏览器视口自适应，无需滚动即可整屏查看。
 - `GET http://127.0.0.1:3070/api/status`：获取副屏 JSON 状态（`{"status":"running","display_id":5,"width":1272,"height":2800,"dpi":560}`）。
-- `GET http://127.0.0.1:3070/api/screenshot`：获取副屏当前实时快照图像流。
+- `GET http://127.0.0.1:3070/api/screenshot`：获取副屏当前画面。**默认直接返回守护进程缓存的 JPEG**（副屏运行时，全分辨率 1272×2800，约 270 KB），守护进程未运行或尚未出帧时回退到 `screencap -p` 的 PNG 路径。
+  - 为什么要这么绕：`screencap -p` 编一张全分辨率 PNG 要烧掉约 **1.8 秒 CPU**、产出 2.9 MB；而守护进程本来就持有副屏的输出 Surface，每帧在手，编成 JPEG 只要 **约 18 ms**、270 KB。实测同一条取图链路端到端从 **2520 ms 降到 63 ms（约 40 倍）**。
+  - ⚠️ **JPEG 必须保持副屏全分辨率**：截图工具（`mobile_screenshot`）是用返回图片的像素尺寸去推算投递给视觉模型时的缩放比例的，一旦这里预降采样，工具就会告诉模型一个错误的比例，导致点击坐标整体偏移。
 - `GET|POST http://127.0.0.1:3070/api/start`：远程拉起副屏（副屏未启动时 Web 界面按钮自动指向此接口）。
 - `POST http://127.0.0.1:3070/api/stop`：远程关闭副屏。
 
@@ -94,7 +96,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载预编译好的刷机包：
-   **`agent-mobile-use-ksu-v3.8.zip`**
+   **`agent-mobile-use-ksu-v3.9.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -206,7 +208,8 @@ The whole drawing process took place entirely in the background virtual display 
 2. **HTTP / REST Gateway (Port 3070)**:
    - `GET /`: Visual web snapshot monitor with a manual refresh and a state-aware display toggle (shows "关闭副屏" while the display is running and "开启副屏" once it is stopped; greyed out when the gateway is unreachable). The snapshot area sizes itself to the browser viewport, so the whole frame is visible without scrolling.
    - `GET /api/status`: JSON display status.
-   - `GET /api/screenshot`: Current frame image stream.
+   - `GET /api/screenshot`: Current frame of the virtual display. Answers with the daemon's cached **JPEG** (full 1272x2800, ~270 KB) while the display runs, and falls back to the `screencap -p` **PNG** path when the daemon is down or has not produced a frame yet. The daemon already owns the display's output surface, so caching a frame costs ~18 ms of encode against the ~1.8 s of CPU `screencap -p` spends in the PNG encoder — 2520 ms to 63 ms end to end, measured.
+     The cached frame MUST stay at the display's full resolution: the screenshot tool derives the scale factor it reports to the vision model from these pixel dimensions, so serving a downscaled frame would silently shift every tap coordinate.
    - `GET|POST /api/start`: Bring the virtual display up on demand.
    - `POST /api/stop`: Safely release virtual display resources.
 

@@ -21,6 +21,10 @@ var indexHTML []byte
 const (
 	statusFile = "/data/local/tmp/vd_status.json"
 	stopSignal = "/data/local/tmp/vd_stop"
+	// The newest frame of the virtual display, published by the daemon as JPEG. It
+	// already holds the display's output surface, so this costs it one encode per
+	// changed frame instead of the ~1.8s of CPU screencap spends in the PNG encoder.
+	frameCacheFile = "/data/local/tmp/vd_latest.jpg"
 )
 
 type StatusResp struct {
@@ -501,6 +505,25 @@ func main() {
 
 	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// Preferred path: serve the daemon's cached frame. It is the picture the
+		// display last produced, already encoded, so this transfers ~271 KB instead of
+		// screencap's 2.9 MB and spends no CPU on encoding at all.
+		//
+		// Only the virtual display is served this way: in foreground mode the request
+		// means "the physical screen", which the daemon's cache is not.
+		if st := getStatus(); st.Status == "running" && getTargetDisplayID(st) != 0 {
+			if data, err := os.ReadFile(frameCacheFile); err == nil && len(data) > 0 {
+				w.Header().Set("Content-Type", "image/jpeg")
+				w.Header().Set("Cache-Control", "no-store, must-revalidate")
+				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+				w.Write(data)
+				return
+			}
+		}
+
+		// Fallback: no daemon, no frame cached yet, or the physical display is the
+		// target. Unchanged from before, including the on-demand display start.
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
