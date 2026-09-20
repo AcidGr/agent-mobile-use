@@ -172,6 +172,12 @@ public class ToolMain {
     private static final int DUMP_RETRY_SLEEP_MS = 350;
 
     /**
+     * Wait after UiAutomation.connect() to allow system_server service bindings to settle.
+     * Empirically 50ms-100ms achieves 100% window capture; 100ms provides full safety.
+     */
+    private static final int CONNECT_STABILIZE_SLEEP_MS = 100;
+
+    /**
      * Wait between the two passes. A WebView re-enables its renderer accessibility when it
      * is queried, but not synchronously, so reading twice in a row without a gap sees the
      * same disabled tree both times.
@@ -278,7 +284,7 @@ public class ToolMain {
             info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
 
-            Thread.sleep(400);
+            Thread.sleep(CONNECT_STABILIZE_SLEEP_MS);
 
             // Display geometry: an observation without it leaves the model unable to judge
             // whether a coordinate is even inside the screen.
@@ -382,6 +388,21 @@ public class ToolMain {
                     firstSize = list.size();
                     firstList = list;
                     firstWindows = windowCount;
+
+                    // Fast-path: if the screen already yielded a populated node tree and does
+                    // not contain a dormant WebView awaiting accessibility initialization,
+                    // return immediately without paying the 600ms wake sleep and duplicate scan.
+                    boolean needWakePass = false;
+                    if (firstWindows > 0 && firstSize == 0) {
+                        needWakePass = true; // WeChat intermittent empty window: retry with sleep
+                    } else if (hasDormantWebView(list, firstSize)) {
+                        needWakePass = true; // Dormant Chromium WebView: wake and rescan
+                    }
+
+                    if (!needWakePass) {
+                        break;
+                    }
+
                     // Give a not-yet-ready tree time to appear: a WebView's page content, or
                     // WeChat's intermittently empty window. The second read is the difference
                     // between a blank tree and the real one.
@@ -437,6 +458,22 @@ public class ToolMain {
                 ht.quit();
             }
         }
+    }
+
+    /**
+     * Detect a WebView whose DOM accessibility tree has not yet populated.
+     * Chromium tears down its accessibility tree after 5s without an active a11y service;
+     * querying it re-enables it asynchronously, returning only outer chrome initially.
+     */
+    private static boolean hasDormantWebView(List<NodeItem> list, int totalSize) {
+        if (list == null || list.isEmpty()) return false;
+        if (totalSize >= 15) return false; // Already populated with page content
+        for (NodeItem n : list) {
+            if (n.type != null && n.type.contains("WebView")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
