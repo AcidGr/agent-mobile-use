@@ -37,7 +37,24 @@ type StatusResp struct {
 var (
 	modeMu      sync.Mutex
 	currentMode = "background" // "background" (default) or "foreground"
+
+	noticeMu             sync.Mutex
+	pendingHandoffNotice string
 )
+
+func setPendingHandoffNotice(notice string) {
+	noticeMu.Lock()
+	defer noticeMu.Unlock()
+	pendingHandoffNotice = notice
+}
+
+func popPendingHandoffNotice() string {
+	noticeMu.Lock()
+	defer noticeMu.Unlock()
+	n := pendingHandoffNotice
+	pendingHandoffNotice = ""
+	return n
+}
 
 func getCurrentMode() string {
 	modeMu.Lock()
@@ -123,6 +140,9 @@ func handoffToBackground() map[string]interface{} {
 
 	// 3. 模式设置为 background，并熄灭光效
 	setCurrentMode("background")
+
+	// 4. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
+	setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display by user. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
 
 	return map[string]interface{}{
 		"success":            true,
@@ -421,6 +441,7 @@ type ActionResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
 	Data    any    `json:"data,omitempty"`
+	Notice  string `json:"notice,omitempty"`
 }
 
 func main() {
@@ -530,11 +551,13 @@ func main() {
 		// one, next_y=2800, second page empty. A silent dead end is worse than no paging.
 		out, err := runTool("tree", did)
 		trimmed := strings.TrimSpace(out)
+		notice := popPendingHandoffNotice()
 		if err != nil || trimmed == "" {
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: false,
 				Message: "UI dump failed: the accessibility tree could not be read for this display",
 				Data:    trimmed,
+				Notice:  notice,
 			})
 			return
 		}
@@ -548,12 +571,16 @@ func main() {
 				Success: false,
 				Message: "UI dump returned malformed JSON",
 				Data:    trimmed,
+				Notice:  notice,
 			})
 			return
 		}
 
 		env["mode"] = getCurrentMode()
 		env["target_display_id"] = targetDid
+		if notice != "" {
+			env["notice"] = notice
+		}
 		if wv, ok := env["width"].(float64); !ok || int(wv) <= 0 {
 			dw, dh := displaySize(targetDid, st)
 			env["width"] = dw
@@ -572,8 +599,9 @@ func main() {
 			return
 		}
 		var p struct {
-			X int `json:"x"`
-			Y int `json:"y"`
+			X          int `json:"x"`
+			Y          int `json:"y"`
+			DurationMs int `json:"duration_ms"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -582,14 +610,24 @@ func main() {
 		}
 		did := strconv.Itoa(targetDid)
 		if targetDid == 0 {
-			broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
+			if p.DurationMs > 0 {
+				broadcastTouch(2, 0, 0, p.X, p.Y, p.X, p.Y, p.DurationMs)
+			} else {
+				broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
+			}
 		}
-		cmd := exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
+		var cmd *exec.Cmd
+		if p.DurationMs > 0 {
+			cmd = exec.Command("/system/bin/input", "-d", did, "swipe",
+				strconv.Itoa(p.X), strconv.Itoa(p.Y), strconv.Itoa(p.X), strconv.Itoa(p.Y), strconv.Itoa(p.DurationMs))
+		} else {
+			cmd = exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
+		}
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
@@ -623,10 +661,10 @@ func main() {
 		cmd := exec.Command("/system/bin/input", "-d", did, "swipe",
 			strconv.Itoa(p.X1), strconv.Itoa(p.Y1), strconv.Itoa(p.X2), strconv.Itoa(p.Y2), strconv.Itoa(p.Duration))
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/type", func(w http.ResponseWriter, r *http.Request) {
@@ -649,10 +687,10 @@ func main() {
 		did := strconv.Itoa(targetDid)
 		out, err := runTool("type", did, p.Text)
 		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out, Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/key", func(w http.ResponseWriter, r *http.Request) {
@@ -676,10 +714,10 @@ func main() {
 		kc := parseKeycode(p.Key)
 		cmd := exec.Command("/system/bin/input", "-d", did, "keyevent", kc)
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/launch", func(w http.ResponseWriter, r *http.Request) {
@@ -723,10 +761,10 @@ func main() {
 		cmd := exec.Command("/system/bin/am", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out), Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out), Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/notify", func(w http.ResponseWriter, r *http.Request) {
