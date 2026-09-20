@@ -156,7 +156,7 @@ public class ToolMain {
             + " hint= input-hint tip= tooltip";
 
     /** Longest free-text field emitted per node; a label is a label, not a paragraph. */
-    private static final int MAX_FIELD_CHARS = 72;
+    private static final int MAX_FIELD_CHARS = 140;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -1008,16 +1008,31 @@ public class ToolMain {
 
             StringBuilder hoisted = new StringBuilder();
             String lastText = "";
+            List<NodeItem> consumed = new ArrayList<NodeItem>();
             for (NodeItem tc : directTextChildren) {
                 String t = nonEmpty(tc.text) ? tc.text.trim() : (nonEmpty(tc.desc) ? tc.desc.trim() : "");
-                if (t.isEmpty() || t.equals(lastText)) continue;
+                if (t.isEmpty() || t.equals(lastText)) {
+                    consumed.add(tc);
+                    continue;
+                }
                 if (hoisted.length() > 0) {
-                    if (hoisted.toString().contains(t)) continue;
+                    if (hoisted.toString().contains(t)) {
+                        consumed.add(tc);
+                        continue;
+                    }
+                    if (hoisted.length() + 1 + t.length() > MAX_FIELD_CHARS) {
+                        break;
+                    }
                     hoisted.append(' ');
+                } else {
+                    if (t.length() > MAX_FIELD_CHARS) {
+                        break;
+                    }
                 }
                 hoisted.append(t);
                 lastText = t;
-                if (hoisted.length() >= 64) break;
+                consumed.add(tc);
+                if (hoisted.length() >= MAX_FIELD_CHARS) break;
             }
 
             if (hoisted.length() == 0) continue;
@@ -1029,7 +1044,7 @@ public class ToolMain {
             parent.targetRatio = 1;
             parent.tapReason = null;
 
-            for (NodeItem tc : directTextChildren) {
+            for (NodeItem tc : consumed) {
                 tc.folded = true;
             }
         }
