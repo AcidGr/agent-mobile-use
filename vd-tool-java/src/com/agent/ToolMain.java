@@ -4,7 +4,6 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.graphics.Rect;
 import android.os.HandlerThread;
 import android.os.Looper;
-import android.text.TextUtils;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.lang.reflect.Method;
@@ -996,20 +995,12 @@ public class ToolMain {
 
             if (directTextChildren.isEmpty()) continue;
 
-            Collections.sort(directTextChildren, new Comparator<NodeItem>() {
-                @Override
-                public int compare(NodeItem a, NodeItem b) {
-                    if (Math.abs(a.top - b.top) > 15) {
-                        return Integer.compare(a.top, b.top);
-                    }
-                    return Integer.compare(a.left, b.left);
-                }
-            });
+            List<NodeItem> orderedChildren = sortVisuallyInReadingOrder(directTextChildren);
 
             StringBuilder hoisted = new StringBuilder();
             String lastText = "";
             List<NodeItem> consumed = new ArrayList<NodeItem>();
-            for (NodeItem tc : directTextChildren) {
+            for (NodeItem tc : orderedChildren) {
                 String t = nonEmpty(tc.text) ? tc.text.trim() : (nonEmpty(tc.desc) ? tc.desc.trim() : "");
                 if (t.isEmpty() || t.equals(lastText)) {
                     consumed.add(tc);
@@ -1020,10 +1011,14 @@ public class ToolMain {
                         consumed.add(tc);
                         continue;
                     }
-                    if (hoisted.length() + 1 + t.length() > MAX_FIELD_CHARS) {
+                    boolean glue = shouldGlue(lastText, t);
+                    int addedLen = (glue ? 0 : 1) + t.length();
+                    if (hoisted.length() + addedLen > MAX_FIELD_CHARS) {
                         break;
                     }
-                    hoisted.append(' ');
+                    if (!glue) {
+                        hoisted.append(' ');
+                    }
                 } else {
                     if (t.length() > MAX_FIELD_CHARS) {
                         break;
@@ -1055,6 +1050,97 @@ public class ToolMain {
                 it.remove();
             }
         }
+    }
+
+    private static class VisualLine {
+        int top = Integer.MAX_VALUE;
+        int bottom = Integer.MIN_VALUE;
+        List<NodeItem> nodes = new ArrayList<NodeItem>();
+    }
+
+    /**
+     * Group items into visual lines based on vertical overlap (>=40%), then sort within each
+     * line strictly by X coordinate (left-to-right), and finally flatten lines top-to-bottom.
+     * This eliminates text inversion caused by baseline-aligned small currency symbols or subscripts.
+     */
+    private static List<NodeItem> sortVisuallyInReadingOrder(List<NodeItem> items) {
+        if (items == null || items.size() <= 1) return items;
+
+        List<NodeItem> sorted = new ArrayList<NodeItem>(items);
+        Collections.sort(sorted, new Comparator<NodeItem>() {
+            @Override
+            public int compare(NodeItem a, NodeItem b) {
+                if (a.top != b.top) return Integer.compare(a.top, b.top);
+                return Integer.compare(a.left, b.left);
+            }
+        });
+
+        List<VisualLine> lines = new ArrayList<VisualLine>();
+        for (NodeItem item : sorted) {
+            int h = Math.max(1, item.bottom - item.top);
+            VisualLine bestLine = null;
+            double maxOverlapRatio = 0.0;
+
+            for (VisualLine line : lines) {
+                int overlap = Math.max(0, Math.min(item.bottom, line.bottom) - Math.max(item.top, line.top));
+                if (overlap > 0) {
+                    int lineH = Math.max(1, line.bottom - line.top);
+                    int minH = Math.min(h, lineH);
+                    double ratio = (double) overlap / minH;
+                    if (ratio >= 0.4 && ratio > maxOverlapRatio) {
+                        maxOverlapRatio = ratio;
+                        bestLine = line;
+                    }
+                }
+            }
+
+            if (bestLine != null) {
+                bestLine.nodes.add(item);
+                bestLine.top = Math.min(bestLine.top, item.top);
+                bestLine.bottom = Math.max(bestLine.bottom, item.bottom);
+            } else {
+                VisualLine newLine = new VisualLine();
+                newLine.top = item.top;
+                newLine.bottom = item.bottom;
+                newLine.nodes.add(item);
+                lines.add(newLine);
+            }
+        }
+
+        Collections.sort(lines, new Comparator<VisualLine>() {
+            @Override
+            public int compare(VisualLine a, VisualLine b) {
+                return Integer.compare(a.top, b.top);
+            }
+        });
+
+        List<NodeItem> result = new ArrayList<NodeItem>(items.size());
+        for (VisualLine line : lines) {
+            Collections.sort(line.nodes, new Comparator<NodeItem>() {
+                @Override
+                public int compare(NodeItem a, NodeItem b) {
+                    return Integer.compare(a.left, b.left);
+                }
+            });
+            result.addAll(line.nodes);
+        }
+        return result;
+    }
+
+    private static boolean shouldGlue(String prev, String curr) {
+        if (prev == null || prev.isEmpty() || curr == null || curr.isEmpty()) return false;
+        if (isCurrencySymbol(prev)) return true;
+        if (curr.startsWith(".")) return true;
+        if (prev.endsWith(".") && Character.isDigit(curr.charAt(0))) return true;
+        return false;
+    }
+
+    private static boolean isCurrencySymbol(String s) {
+        if (s == null || s.isEmpty()) return false;
+        String trimmed = s.trim();
+        return trimmed.equals("¥") || trimmed.equals("￥") || trimmed.equals("$")
+                || trimmed.equals("€") || trimmed.equals("£") || trimmed.equals("¢")
+                || trimmed.equals("RMB") || trimmed.equals("USD");
     }
 
     /** `com.sankuai.meituan:id/k71` -> `k71`; the package is screen-constant noise. */
