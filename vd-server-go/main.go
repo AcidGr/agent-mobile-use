@@ -448,6 +448,135 @@ type ActionResponse struct {
 	Notice  string `json:"notice,omitempty"`
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Flat UI observation: header line + column line + one row per element.
+//
+// ToolMain writes this shape; the daemon only decorates the header. Everything
+// below exists so the two halves stay independent: the rows are the model's
+// interface and may change freely, while the header is the machine's and must
+// keep the keys check-completeness.py and the plugin read.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// headerInts are the header keys the callers on the other side parse as numbers.
+var headerInts = map[string]bool{
+	"display": true, "width": true, "height": true, "windows": true,
+	"total": true, "returned": true, "act_sent": true, "act_total": true,
+	"truncated": true, "omitted": true, "omitted_top": true, "omitted_min": true,
+	"dup": true, "retries": true, "recovered": true, "no_windows": true,
+	"tree_blocked": true,
+}
+
+// headerOrder keeps the decorated header in the order ToolMain emits it, so a
+// human diffing two dumps is not confused by Go's map iteration order.
+var headerOrder = []string{
+	"display", "width", "height", "windows", "mode", "target_display_id",
+	"total", "retries", "recovered", "no_windows", "tree_blocked", "dup",
+	"returned", "act_sent", "act_total", "truncated", "omitted", "omitted_top",
+	"omitted_min", "x_extent", "y_extent",
+}
+
+// splitObservation separates ToolMain's output into its header line and the
+// remaining lines (column line + element rows), unchanged.
+//
+// The tool's own header carries `size=WxH`, which is moved to the width/height
+// keys the rest of the stack already reads. A body that does not start with a
+// header is rejected rather than passed through: a caller that cannot tell a
+// failed dump from an empty screen is worse off than one that gets nothing.
+func splitObservation(body string) (map[string]any, string, bool) {
+	// A failure is a SINGLE line with no column line and no rows, because there is
+	// nothing to tabulate. Requiring a newline here would classify "the tool threw" as
+	// "unparseable output", and the model would be told the read failed for the wrong
+	// reason.
+	if strings.HasPrefix(body, "fail error=") {
+		// Store the message, not the wire quoting: observationText re-quotes it with
+		// %q, and doing both would deliver `error="\"...\""` to the model.
+		message := strings.TrimPrefix(body, "fail error=")
+		message = strings.TrimSuffix(strings.TrimPrefix(message, "\""), "\"")
+		return map[string]any{
+			"ok":    false,
+			"error": message,
+		}, "", true
+	}
+	nl := strings.IndexByte(body, '\n')
+	if nl < 0 {
+		return nil, "", false
+	}
+	header, rows := body[:nl], body[nl+1:]
+	fields := strings.Fields(header)
+	if len(fields) == 0 || fields[0] != "ok" {
+		return nil, "", false
+	}
+	env := map[string]any{"ok": true}
+	for _, kv := range fields[1:] {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		key, value := kv[:eq], kv[eq+1:]
+		if key == "size" {
+			if x := strings.IndexByte(value, 'x'); x > 0 {
+				if w, err := strconv.Atoi(value[:x]); err == nil {
+					env["width"] = w
+				}
+				if h, err := strconv.Atoi(value[x+1:]); err == nil {
+					env["height"] = h
+				}
+			}
+			continue
+		}
+		if headerInts[key] {
+			if n, err := strconv.Atoi(value); err == nil {
+				env[key] = n
+				continue
+			}
+		}
+		env[key] = value
+	}
+	return env, rows, true
+}
+
+// observationText rebuilds the body the model reads, with the daemon's own
+// additions folded back into the header line. The rows pass through untouched.
+func observationText(env map[string]any, rows string) string {
+	var b strings.Builder
+	// The first token is the status and it must survive the round trip: a tool that
+	// threw gives `fail error="..."`, and rebuilding that as `ok error="..."` would
+	// tell the model the read succeeded while handing it an exception message.
+	status := "ok"
+	if ok, isBool := env["ok"].(bool); isBool && !ok {
+		status = "fail"
+	}
+	b.WriteString(status)
+	if status == "fail" {
+		if errText, present := env["error"]; present {
+			fmt.Fprintf(&b, " error=%q", fmt.Sprint(errText))
+		}
+		b.WriteString("\n")
+		b.WriteString(rows)
+		return b.String()
+	}
+	for _, key := range headerOrder {
+		value, present := env[key]
+		if !present {
+			continue
+		}
+		fmt.Fprintf(&b, " %s=%v", key, value)
+	}
+	b.WriteString("\n")
+	b.WriteString(rows)
+	return b.String()
+}
+
+// observationStatus is the one-line summary the plugin shows beside the result. A
+// failed read must not be summarised as "0 nodes": that reads exactly like an empty
+// screen, which is the distinction the status line exists to preserve.
+func observationStatus(env map[string]any) string {
+	if ok, isBool := env["ok"].(bool); isBool && !ok {
+		return fmt.Sprintf("dump failed: %v", env["error"])
+	}
+	return fmt.Sprintf("tree %v nodes, %v/%v actionable", env["returned"], env["act_sent"], env["act_total"])
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -585,14 +714,21 @@ func main() {
 			return
 		}
 
-		// ToolMain emits a JSON envelope. Decode, decorate, re-encode: this adds the
-		// geometry and mode that only the daemon knows, so every observation reaches the
-		// model together with the coordinate space it is expressed in.
-		var env map[string]interface{}
-		if jsonErr := json.Unmarshal([]byte(trimmed), &env); jsonErr != nil {
+		// ToolMain emits a flat observation: a machine-readable header line, a column
+		// line, then ONE LINE PER ELEMENT. Decode the header, decorate it with the
+		// geometry and mode only the daemon knows, and reply with that whole body as a
+		// JSON string plus the fields a machine needs to read without parsing rows.
+		//
+		// This used to `json.Unmarshal` the dump into a map and re-encode it, because
+		// ToolMain used to emit a JSON envelope. It no longer does: repeating `"id"`,
+		// `"type"` and `"b"` on every node was 62% of the payload, all of it pure key
+		// name tax. The rows are the model's interface; the envelope here is the
+		// caller's, and the two must not be entangled again.
+		env, rows, ok := splitObservation(trimmed)
+		if !ok {
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: false,
-				Message: "UI dump returned malformed JSON",
+				Message: "UI dump did not start with a readable status header",
 				Data:    trimmed,
 				Notice:  notice,
 			})
@@ -601,19 +737,23 @@ func main() {
 
 		env["mode"] = getCurrentMode()
 		env["target_display_id"] = targetDid
-		if notice != "" {
-			env["notice"] = notice
-		}
-		if wv, ok := env["width"].(float64); !ok || int(wv) <= 0 {
+		// The daemon is the only party that knows the real display geometry: the tool
+		// asks DisplayManager for it and can come back with 0x0 on a fresh virtual
+		// display. Without this the model is handed coordinates in an unknown space.
+		if wv, okW := env["width"].(int); !okW || wv <= 0 {
 			dw, dh := displaySize(targetDid, st)
 			env["width"] = dw
 			env["height"] = dh
 		}
-		json.NewEncoder(w).Encode(env)
+		json.NewEncoder(w).Encode(ActionResponse{
+			Success: true,
+			Message: observationStatus(env),
+			Data:    observationText(env, rows),
+			Notice:  notice,
+		})
 	})
 
-	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
