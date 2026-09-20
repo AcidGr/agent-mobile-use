@@ -81,9 +81,10 @@
 #### 2. HTTP / REST 监控网关 (Port 3070)
 
 由纯静态 Go 服务 `vd_server` 提供：
-- `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供手动刷新快照、当前状态指示与副屏注销按钮。
+- `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供手动刷新快照、当前状态指示与**副屏开关按钮**（副屏运行中显示「关闭副屏」，已休眠显示「开启副屏」，网关不可达时按钮置灰）。快照区高度按浏览器视口自适应，无需滚动即可整屏查看。
 - `GET http://127.0.0.1:3070/api/status`：获取副屏 JSON 状态（`{"status":"running","display_id":5,"width":1272,"height":2800,"dpi":560}`）。
 - `GET http://127.0.0.1:3070/api/screenshot`：获取副屏当前实时快照图像流。
+- `GET|POST http://127.0.0.1:3070/api/start`：远程拉起副屏（副屏未启动时 Web 界面按钮自动指向此接口）。
 - `POST http://127.0.0.1:3070/api/stop`：远程关闭副屏。
 
 ---
@@ -93,7 +94,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载预编译好的刷机包：
-   **`agent-mobile-use-ksu-v3.5.zip`**
+   **`agent-mobile-use-ksu-v3.8.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -107,6 +108,23 @@
 - 编译 Java 组件：进入 `vd-tool-java/` 目录，执行 `./build.sh`。
 - 编译 Go 服务：进入 `vd-server-go/` 目录，执行 `./build.sh`（静态交叉编译）。
 - 组装并打包：在 `ksu-module/` 执行 `./pack.sh` 生成模块 zip。
+
+#### 热更新线上 `vd_server`（不刷模块）
+
+`index.html` 由 `//go:embed` 编进 `vd_server`，**只改 HTML 不重新编译等于没改**。更新一个已部署设备时：
+
+1. 重新编译后，把新二进制放进模块目录：`/data/adb/modules/agent_mobile_use/bin/vd_server`，
+   并把 `ksu-module/bin/vd_server`、`release/`、`release-packages/` 一并刷新，保证仓库、发行包、
+   生产三者 md5 一致（`md5sum` 逐个比对即可）。
+2. **先 kill 再替换**：运行中的可执行文件被 `cp` 覆盖会 `ETXTBSY`，必须先 `kill -9 $(pidof vd_server)`，
+   再 `mv` 新文件就位，最后用 `setsid`/`nohup` 重新拉起，并让它跑在 Android 挂载命名空间内
+   （否则看不到 `/system/bin` 与 `/data/local/tmp`）。
+3. ⚠️ **切勿在 `mobile_shell` 通道里 kill `vd_server`**：DSH 预设的 `mobile_shell` 走的正是
+   `POST http://127.0.0.1:3070/api/shell`（见 `dsh-preset-mobile-use/preset/mobile-use/mobile_plugin.js`），
+   kill 掉网关会同时切断自己的执行通道，导致重启脚本执行到一半就失联。请从宿主/容器侧用
+   `nsenter -t 1 -m -- /system/bin/sh -c 'nohup setsid /data/adb/modules/agent_mobile_use/bin/vd_server ...'`
+   完成「停旧 + 起新」，或让重启用一条独立于该会话的后台命令执行。
+4. 更新完成自检：`curl -s http://127.0.0.1:3070/ | diff - vd-server-go/index.html` 应无差异。
 
 ---
 
@@ -186,9 +204,10 @@ The whole drawing process took place entirely in the background virtual display 
    - `vd screenshot [path]`: Take a direct frame capture of the virtual display.
 
 2. **HTTP / REST Gateway (Port 3070)**:
-   - `GET /`: Visual web snapshot monitor.
+   - `GET /`: Visual web snapshot monitor with a manual refresh and a state-aware display toggle (shows "关闭副屏" while the display is running and "开启副屏" once it is stopped; greyed out when the gateway is unreachable). The snapshot area sizes itself to the browser viewport, so the whole frame is visible without scrolling.
    - `GET /api/status`: JSON display status.
    - `GET /api/screenshot`: Current frame image stream.
+   - `GET|POST /api/start`: Bring the virtual display up on demand.
    - `POST /api/stop`: Safely release virtual display resources.
 
 ---
