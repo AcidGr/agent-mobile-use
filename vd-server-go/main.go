@@ -739,10 +739,7 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-		args := []string{"start"}
-		if targetDid != 0 {
-			args = append(args, "--display", did)
-		}
+		args := []string{"start", "--display", did}
 		if p.Activity != "" {
 			args = append(args, "-n", p.Package+"/"+p.Activity)
 		} else {
