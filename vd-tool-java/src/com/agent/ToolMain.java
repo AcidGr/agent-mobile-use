@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.graphics.Rect;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.lang.reflect.Method;
@@ -29,13 +30,15 @@ import java.util.Map;
  */
 public class ToolMain {
 
-    /** Fields kept per node. The wire format is written by hand in dumpTree(). */
+    /** Fields kept per node. The wire format is written by hand in renderNode(). */
     public static class NodeItem {
         public int id;
         public int depth;
         public String type;
         public String text;
         public String desc;
+        public String hint;
+        public String tooltip;
         public String viewId;
         public int left, top, right, bottom;
         public int centerX, centerY;
@@ -50,6 +53,7 @@ public class ToolMain {
         public boolean focused;
         public boolean checkable;
         public boolean checked;
+        public boolean selected;
         public boolean scrollable;
 
         // ---- resolved click target ----
@@ -123,6 +127,33 @@ public class ToolMain {
      */
     private static final int MAX_NODES = 1000;
     private static final int MAX_NODES_CHARS = 20000;
+
+    /**
+     * The one column order every element row uses. Stated once here, emitted once per
+     * dump as the second header line, and never repeated per element — which is the
+     * whole point of the flat format. Before this, every node carried the strings
+     * "id", "type", "b" and so on, and those key names alone were 62% of the payload.
+     *
+     * Fields that contain free text (`name=`, `d=`, `id=`, `hint=`, `tip=`) always sit
+     * at the END, so the rows stay splittable on whitespace no matter what an app puts
+     * in its labels.
+     *
+     * Rows are ordered by usefulness (see rankForBudget) and that order is the ONLY
+     * place the tier is stated: a per-row `pr=` field cost 9% of the payload to repeat
+     * what the line's position already said. The column lines therefore spell the
+     * ordering and the flag letters out ONCE, instead of coding them into every row.
+     */
+    private static final String NODE_COLUMNS =
+            "# one element per row, most useful first: tappable, then own-click, then"
+            + " offscreen-actionable, disabled, label-only, offscreen\n"
+            + "# columns: id type name x1,y1,x2,y2 flags"
+            + " | flags: c=clickable e=editable s=scrollable k+=checked-or-selected k-=unchecked"
+            + " off=disabled gone=offscreen focus=focused wN=window dN=depth"
+            + " | optional: d= extra-desc id= resource how= why-unnamed target= ancestorId@x,y"
+            + " hint= input-hint tip= tooltip";
+
+    /** Longest free-text field emitted per node; a label is a label, not a paragraph. */
+    private static final int MAX_FIELD_CHARS = 72;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -385,12 +416,13 @@ public class ToolMain {
 
         } catch (Throwable t) {
             // Never die silently. Emit the SAME shape as a success so "did this fail?"
-            // is answered by an explicit `ok` field rather than by the absence of one:
-            // success carries ok:true, failure carries ok:false plus `error`, and an
-            // empty tree carries ok:true with nodes:[] and a reason field. Callers that
-            // only check for a missing key cannot misread a failure as an empty screen.
+            // is answered by an explicit status on the header line rather than by the
+            // absence of one: success starts with `ok display=...`, failure starts with
+            // `fail error=...`, and an empty tree carries `ok` plus tree_blocked=1 on the
+            // header and no rows after the column line. A caller that only looks for the
+            // header token cannot misread a failure as an empty screen.
             StringBuilder sb = new StringBuilder();
-            sb.append("{\"ok\":false,\"error\":\"").append(escapeJson(String.valueOf(t))).append("\"}");
+            sb.append("fail error=\"").append(oneLine(String.valueOf(t))).append("\"");
             System.out.print(sb.toString());
         } finally {
             if (uiAutomation != null) {
@@ -488,7 +520,8 @@ public class ToolMain {
                 continue;
             }
             NodeItem keep = out.get(at);
-            boolean keepHasOwnSemantic = nonEmpty(keep.text) || nonEmpty(keep.desc);
+            boolean keepHasOwnSemantic = nonEmpty(keep.text) || nonEmpty(keep.desc)
+                    || nonEmpty(keep.hint) || nonEmpty(keep.tooltip);
             if (keep.clickable || !keepHasOwnSemantic) {
                 mergeInto(keep, n);
                 dropped++;
@@ -509,8 +542,17 @@ public class ToolMain {
         keep.editableFlag |= from.editableFlag;
         keep.checkable |= from.checkable;
         keep.checked |= from.checked;
+        keep.selected |= from.selected;
         keep.scrollable |= from.scrollable;
         keep.focused |= from.focused;
+        // A label is the whole reason a node is worth keeping; never let a merge that
+        // only happens to reconstruct interaction state throw one away. The later node
+        // fills only what the keeper is still missing.
+        if (!nonEmpty(keep.text) && nonEmpty(from.text)) keep.text = from.text;
+        if (!nonEmpty(keep.desc) && nonEmpty(from.desc)) keep.desc = from.desc;
+        if (!nonEmpty(keep.hint) && nonEmpty(from.hint)) keep.hint = from.hint;
+        if (!nonEmpty(keep.tooltip) && nonEmpty(from.tooltip)) keep.tooltip = from.tooltip;
+        if (!nonEmpty(keep.viewId) && nonEmpty(from.viewId)) keep.viewId = from.viewId;
         if (from.clickable) {
             // A self-target always beats an inherited one.
             keep.targetId = keep.id;
@@ -684,34 +726,31 @@ public class ToolMain {
                 }
                 break;
             }
-            String s = renderNode(list.get(i), dispW, dispH);
+            String s = renderNode(list.get(i), dispW, dispH, list);
             if (s == null) continue;
-            if (emitted > 0) nodes.append(",");
+            if (emitted > 0) nodes.append("\n");
             nodes.append(s);
             emitted++;
             if (list.get(i).clickable || list.get(i).checkable) actSent++;
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"ok\":true");
-        sb.append(",\"display_id\":").append(displayId);
-        sb.append(",\"width\":").append(dispW);
-        sb.append(",\"height\":").append(dispH);
-        sb.append(",\"windows\":").append(windowCount);
+        sb.append("ok display=").append(displayId);
+        sb.append(" size=").append(dispW).append("x").append(dispH);
+        sb.append(" windows=").append(windowCount);
         if (fullMinX != Integer.MAX_VALUE && (fullMinX < 0 || fullMaxX > dispW)) {
-            sb.append(",\"x_extent\":[").append(fullMinX).append(",").append(fullMaxX).append("]");
+            sb.append(" x_extent=").append(fullMinX).append(",").append(fullMaxX);
         }
         if (fullMinY != Integer.MAX_VALUE && (fullMinY < 0 || fullMaxY > dispH)) {
-            sb.append(",\"y_extent\":[").append(fullMinY).append(",").append(fullMaxY).append("]");
+            sb.append(" y_extent=").append(fullMinY).append(",").append(fullMaxY);
         }
-        sb.append(",\"total\":").append(total);
-        if (scanAttempts > 0) sb.append(",\"retries\":").append(scanAttempts);
+        sb.append(" total=").append(total);
+        if (scanAttempts > 0) sb.append(" retries=").append(scanAttempts);
         // The tree was not there on the first read and appeared on a retry. Reported
         // because it changes how a later empty result should be read: WeChat returns an
         // empty window intermittently rather than refusing outright (measured 0,0,0,68,0,70
         // on one unchanged screen), so "it worked a minute ago" is not a contradiction.
-        if (recovered) sb.append(",\"recovered\":1");
+        if (recovered) sb.append(" recovered=1");
         // Three ways to end up with no nodes, and they call for different reactions.
         // Each is now named for what it actually is:
         //   no_windows   the engine returned no window object at all (a scan failure)
@@ -723,15 +762,15 @@ public class ToolMain {
         //                `recovered` on a later call.
         // Both are `ok:true` — the call succeeded, the screen just has no readable tree.
         if (windowCount == 0) {
-            sb.append(",\"no_windows\":1");
+            sb.append(" no_windows=1");
         } else if (total == 0) {
-            sb.append(",\"tree_blocked\":1");
+            sb.append(" tree_blocked=1");
         }
-        if (droppedDup > 0) sb.append(",\"dup\":").append(droppedDup);
-        sb.append(",\"returned\":").append(emitted);
-        sb.append(",\"act_total\":").append(actTotal);
-        sb.append(",\"act_sent\":").append(actSent);
-        sb.append(",\"truncated\":").append(truncated);
+        if (droppedDup > 0) sb.append(" dup=").append(droppedDup);
+        sb.append(" returned=").append(emitted);
+        sb.append(" act_sent=").append(actSent);
+        sb.append(" act_total=").append(actTotal);
+        sb.append(" truncated=").append(truncated ? 1 : 0);
         if (truncated) {
             // Say WHAT was lost, not just that something was. "omitted":73 alone tells the
             // model nothing about how much of the screen it is missing; combined with the
@@ -744,61 +783,148 @@ public class ToolMain {
             // the screen. A caller that followed it got an empty second page and no reason
             // to doubt it. Nothing replaces it: the budget is instead sized so that a dense
             // screen arrives whole, and `truncated` is the honest signal that it did not.
-            sb.append(",\"omitted\":").append(omitted);
-            if (omittedTopTier) sb.append(",\"omitted_top\":1");
+            sb.append(" omitted=").append(omitted);
+            if (omittedTopTier) sb.append(" omitted_top=1");
             if (omittedMinPriority != Integer.MAX_VALUE) {
-                sb.append(",\"omitted_min\":").append(omittedMinPriority);
+                sb.append(" omitted_min=").append(omittedMinPriority);
             }
         }
-        sb.append(",\"nodes\":[").append(nodes).append("]");
-        sb.append("}");
+        sb.append("\n").append(NODE_COLUMNS).append("\n");
+        sb.append(nodes);
         System.out.print(sb.toString());
     }
 
-    /** Renders one node, or null when it must be dropped as noise. */
-    private static String renderNode(NodeItem n, int dispW, int dispH) {
+    /**
+     * Renders one node as ONE line, or null when it must be dropped as noise.
+     *
+     * Shape: id type "label" x1,y1,x2,y2 flags, then optional labelled fields, then the
+     * free-text fields last. `list` is the full ranked list, needed only to answer one
+     * question about a silent node — "is everything it contains also tappable on its
+     * own?" — which is what tells a real unlabelled control apart from a layout wrapper.
+     */
+    private static String renderNode(NodeItem n, int dispW, int dispH, List<NodeItem> list) {
         if (!isEmittable(n, dispW, dispH)) return null;
         boolean visible = n.visibleToUser && withinScreen(n, dispW, dispH);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"id\":").append(n.id);
-        if (n.depth > 0) sb.append(",\"d\":").append(n.depth);
-        if (n.windowIndex > 0) {
-            // Only windows above the base one are tagged: `w` appearing at all means a
-            // dialog/overlay is on screen, and anything from a LOWER window is covered.
-            sb.append(",\"w\":").append(n.windowIndex);
+        // One label, not two. When the app gives both text and a content-desc, the
+        // richer one is worth a look instead of a mechanical preference for `text`:
+        // Settings rows carry the short title in `text` and the sentence that says what
+        // the row does in `desc`, and only the second one tells the model what it gets.
+        String text = nonEmpty(n.text) ? n.text : "";
+        String desc = nonEmpty(n.desc) ? n.desc : "";
+        String label;
+        String extra = null;
+        if (nonEmpty(text) && nonEmpty(desc) && !text.equals(desc)) {
+            label = text.length() >= desc.length() ? text : desc;
+            extra = desc;
+        } else {
+            label = nonEmpty(text) ? text : desc;
         }
-        sb.append(",\"type\":\"").append(escapeJson(n.type)).append("\"");
-        if (nonEmpty(n.text)) sb.append(",\"text\":\"").append(escapeJson(n.text)).append("\"");
-        if (nonEmpty(n.desc)) sb.append(",\"desc\":\"").append(escapeJson(n.desc)).append("\"");
-        if (nonEmpty(n.viewId)) sb.append(",\"vid\":\"").append(escapeJson(n.viewId)).append("\"");
-        sb.append(",\"b\":[").append(n.left).append(",").append(n.top).append(",")
-          .append(n.right).append(",").append(n.bottom).append("]");
-        // No `ctr`: it is exactly [(left+right)/2, (top+bottom)/2], so emitting it cost
-        // ~15% of the payload for zero information (measured on Amap: 1950 of 12780 bytes).
-        // `tap` below is still emitted because that is an ANCESTOR's centre, which the
-        // node's own bounds cannot reconstruct.
+        // An icon-only control often explains itself in one of the two fields the tool
+        // used to never read, so a node that is silent everywhere else is not yet silent.
+        boolean hasLabel = nonEmpty(label) || nonEmpty(n.hint) || nonEmpty(n.tooltip);
+        String how = null;
+        if (!hasLabel) how = maybeReason(n, list, visible);
 
-        if (n.clickable) sb.append(",\"click\":1");
-        if (!n.enabled) sb.append(",\"enabled\":0");
-        if (!visible) sb.append(",\"visible\":0");
-        if (n.checkable) sb.append(",\"checkable\":1,\"checked\":").append(n.checked ? 1 : 0);
-        if (n.scrollable) sb.append(",\"scroll\":1");
-        if (n.focused) sb.append(",\"focused\":1");
+        StringBuilder row = new StringBuilder();
+        row.append(n.id).append(' ').append(simplifyType(n.type));
+        if (hasLabel) row.append(" \"").append(oneLine(label)).append('"');
+        row.append(' ').append(n.left).append(',').append(n.top).append(',')
+           .append(n.right).append(',').append(n.bottom);
 
-        // Resolved click target. Only emitted when it differs from the node itself,
-        // so the model never has to work out Android's touch bubbling on its own.
+        if (n.clickable) row.append(" c");
+        if (n.editableFlag) row.append(" e");
+        if (n.scrollable) row.append(" s");
+        if (n.checkable) row.append(n.checked ? " k+" : " k-");
+        else if (n.selected) row.append(" k+");
+        if (!n.enabled) row.append(" off");
+        if (!visible) row.append(" gone");
+        if (n.focused) row.append(" focus");
+        if (n.windowIndex > 0) row.append(" w").append(n.windowIndex);
+        if (n.depth > 0) row.append(" d").append(n.depth);
+
+        // `desc` only when the label above is the other field's text.
+        if (extra != null) row.append(" d=\"").append(oneLine(extra)).append('"');
+        // The resource name is the only identifier a caller can echo back verbatim, so
+        // it is worth its bytes even though it repeats part of the label. Package is
+        // dropped: the package is constant for a whole screen and identifies nothing.
+        if (nonEmpty(n.viewId)) row.append(" id=").append(shortResource(n.viewId));
+        if (how != null) row.append(" how=").append(how);
+
+        // The resolved ancestor target. Only when it actually differs from this node's
+        // own box: `tap_x=1` used to emit the node's own centre (and its id, and its
+        // ratio) three more times per node, which is pure duplication.
         if (n.targetId > 0 && n.targetId != n.id) {
-            sb.append(",\"tap\":[").append(n.targetCenterX).append(",").append(n.targetCenterY).append("]");
-            sb.append(",\"tap_id\":").append(n.targetId);
-            sb.append(",\"tap_x\":").append(n.targetRatio);
-        } else if (n.tapReason != null) {
-            // Say why there is no target — silence here reads as "not clickable", and the
-            // model goes looking for a worse coordinate on its own.
-            sb.append(",\"why\":\"").append(escapeJson(n.tapReason)).append("\"");
+            row.append(" target=").append(n.targetId).append('@')
+               .append(n.targetCenterX).append(',').append(n.targetCenterY);
         }
-        sb.append("}");
-        return sb.toString();
+        if (nonEmpty(n.hint)) row.append(" hint=\"").append(oneLine(n.hint)).append('"');
+        if (nonEmpty(n.tooltip)) row.append(" tip=\"").append(oneLine(n.tooltip)).append('"');
+        return row.toString();
+    }
+
+    /**
+     * Why a node is worth emitting even though it says nothing about itself.
+     *
+     * Silence used to be ambiguous in the worst way: the model could not tell an
+     * unlabelled button — which it should try — from a layout wrapper that only looks
+     * tappable because a child inside it is, which it should not. Measured on this
+     * tool's own logs, 433 of 1239 actionable nodes carried no readable name, and 65 of
+     * those were full-screen wrappers.
+     */
+    private static String maybeReason(NodeItem n, List<NodeItem> list, boolean visible) {
+        if (!visible) return "offscreen";
+        if (!n.enabled) return "disabled";
+        if (!n.clickable && !n.checkable) {
+            // Nothing acts here; the node is only a spatial anchor, so there is no
+            // ambiguity to resolve and no reason to spend bytes on one.
+            return n.scrollable ? "scrollonly" : null;
+        }
+        // "Everything I contain is tappable on its own" is the definition of a wrapper:
+        // tapping it lands on whatever child happens to sit at its centre. The same
+        // geometric test also catches the ancestor chains AutoDroid clears with
+        // _adjust_view_clickability, without mutating the tree.
+        if (containsClickable(n, list)) return "wraps";
+        return "unlabeled";
+    }
+
+    /** Whether any other tappable node lies strictly inside this node's box. */
+    private static boolean containsClickable(NodeItem n, List<NodeItem> list) {
+        long selfArea = Math.max(1L, (long) (n.right - n.left) * (n.bottom - n.top));
+        for (NodeItem m : list) {
+            if (m == n || m.id == n.id) continue;
+            if (!(m.clickable || m.checkable)) continue;
+            if (m.left < n.left || m.top < n.top || m.right > n.right || m.bottom > n.bottom) continue;
+            long area = Math.max(1L, (long) (m.right - m.left) * (m.bottom - m.top));
+            // A child that is not meaningfully smaller is the same element re-reported,
+            // not a nested target.
+            if (area * 10L < selfArea * 9L) return true;
+        }
+        return false;
+    }
+
+    /** `com.sankuai.meituan:id/k71` -> `k71`; the package is screen-constant noise. */
+    private static String shortResource(String viewId) {
+        int slash = viewId.lastIndexOf('/');
+        String local = slash >= 0 ? viewId.substring(slash + 1) : viewId;
+        return local.length() > 0 ? local : viewId;
+    }
+
+    /** Cap and flatten a free-text field so it can never break the one-row-per-node grid. */
+    private static String oneLine(String s) {
+        if (s == null) return "";
+        StringBuilder out = new StringBuilder(Math.min(s.length(), MAX_FIELD_CHARS + 8));
+        boolean lastSpace = false;
+        for (int i = 0; i < s.length() && out.length() < MAX_FIELD_CHARS; i++) {
+            char c = s.charAt(i);
+            if (c == '\n' || c == '\r' || c == '\t' || c == '"') c = ' ';
+            boolean space = Character.isWhitespace(c);
+            if (space && lastSpace) continue;
+            out.append(c);
+            lastSpace = space;
+        }
+        if (s.length() > MAX_FIELD_CHARS) out.append("~");
+        return out.toString();
     }
 
     /**
@@ -836,6 +962,24 @@ public class ToolMain {
         return false;
     }
 
+    /**
+     * Call a no-argument getter that returns CharSequence and coerce it to String.
+     *
+     * Returns null when the method does not exist on this device's API level or when it
+     * throws — both are normal on an OEM tree, and neither may cost us the dump. Same
+     * reflection pattern this file already uses for AccessibilityNodeInfo methods that
+     * postdate the android-23 jar it compiles against.
+     */
+    private static String reflectString(Object target, String method) {
+        try {
+            Object value = target.getClass().getMethod(method).invoke(target);
+            if (value == null) return null;
+            return value.toString();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Collection
     // ─────────────────────────────────────────────────────────────────────────
@@ -857,8 +1001,24 @@ public class ToolMain {
         boolean checked = node.isChecked();
         boolean scrollable = node.isScrollable();
 
+        // Fields the tree carries but this tool used to never read. Each of the three is
+        // the ONLY semantics an element has when its text and content-desc are empty:
+        //   hintText     an empty search box is anonymous without it
+        //   tooltipText  an icon-only button explains itself here
+        //   isSelected   which tab of a tab bar is the current one
+        // Read through reflection for the same reason the whole file is: this is compiled
+        // against android-23, where getHintText() (API 26) and getTooltipText() (API 24)
+        // do not exist yet, while the device runs Android 15/16. `isSelected` is old
+        // enough to call directly, but one style for all three is easier to verify.
+        String hintStr = reflectString(node, "getHintText");
+        String tooltipStr = reflectString(node, "getTooltipText");
+        boolean selected = false;
+        try { selected = node.isSelected(); } catch (Throwable ignored) {}
+
         boolean hasTextOrDesc = (text != null && text.length() > 0)
-                || (desc != null && desc.length() > 0);
+                || (desc != null && desc.length() > 0)
+                || nonEmpty(hintStr)
+                || nonEmpty(tooltipStr);
 
         Rect bounds = new Rect();
         node.getBoundsInScreen(bounds);
@@ -875,6 +1035,8 @@ public class ToolMain {
             item.type = cls != null ? simplifyType(cls.toString()) : "View";
             item.text = text != null ? text.toString() : null;
             item.desc = desc != null ? desc.toString() : null;
+            item.hint = hintStr;
+            item.tooltip = tooltipStr;
             item.viewId = viewId;
             item.left = bounds.left; item.top = bounds.top;
             item.right = bounds.right; item.bottom = bounds.bottom;
@@ -885,6 +1047,7 @@ public class ToolMain {
             item.editableFlag = editable;
             item.checkable = checkable;
             item.checked = checked;
+            item.selected = selected;
             item.scrollable = scrollable;
             item.windowIndex = winIndex;
             try { item.enabled = node.isEnabled(); } catch (Throwable ignored) { item.enabled = true; }
