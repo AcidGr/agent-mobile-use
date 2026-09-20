@@ -257,7 +257,103 @@ func stopVirtualDisplay() StatusResp {
 	return getStatus()
 }
 
+// ── Accessibility service, switched on only for the duration of a tool call ──
+//
+// WeChat only exposes its node tree to a genuinely registered accessibility service;
+// without one, `tree` on its chat list returns zero nodes (tree_blocked). The user does
+// not want that service resident — it is a device-wide accessibility setting, and leaving
+// it on changes how the whole phone behaves and costs battery.
+//
+// So it is enabled immediately before a tool call that reads the tree, and switched back
+// to whatever it was before, right after.
+//
+// Measured timing on this device:
+//   enable  -> takes effect about 1s later (at +0s the tree is still blocked, at +1s it reads)
+//   disable -> asynchronous; the tree stays readable for ~2s after the value flips
+// which is why a single fixed wait is needed on the enable side and none on the disable side.
+const selectToSpeakService = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+
+const a11yEnableWait = 1000 * time.Millisecond
+
+// Serialises the toggle so two concurrent tool calls cannot interleave their
+// save/restore and leave the setting stuck on.
+var a11yToggleMu sync.Mutex
+
+func readSecure(key string) string {
+	out, err := exec.Command("/system/bin/settings", "get", "secure", key).Output()
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "null" {
+		return ""
+	}
+	return v
+}
+
+func writeSecure(key, value string) {
+	_ = exec.Command("/system/bin/settings", "put", "secure", key, value).Run()
+}
+
+// toolNeedsA11yService reports whether a tool command reads the accessibility tree.
+// `type` does not, so it is left alone rather than paying the switch cost.
+func toolNeedsA11yService(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode":
+		return true
+	}
+	return false
+}
+
+// withA11yService runs fn with the accessibility service temporarily enabled and then
+// restores the device's accessibility settings exactly as they were.
+//
+// It APPENDS to whatever services the user already had rather than replacing them, so a
+// user running their own screen reader does not lose it for the duration of a dump.
+func withA11yService(fn func() (string, error)) (string, error) {
+	a11yToggleMu.Lock()
+	defer a11yToggleMu.Unlock()
+
+	origEnabled := readSecure("accessibility_enabled")
+	origServices := readSecure("enabled_accessibility_services")
+
+	// Already on: toggling would cost a second and change nothing.
+	if origEnabled == "1" && strings.Contains(origServices, "SelectToSpeakService") {
+		return fn()
+	}
+
+	merged := selectToSpeakService
+	if origServices != "" && !strings.Contains(origServices, selectToSpeakService) {
+		merged = origServices + ":" + selectToSpeakService
+	}
+	writeSecure("enabled_accessibility_services", merged)
+	writeSecure("accessibility_enabled", "1")
+	time.Sleep(a11yEnableWait)
+
+	out, err := fn()
+
+	// Put it back. An unset accessibility_enabled restores as "0" rather than "" so the
+	// setting is left in a defined state.
+	writeSecure("enabled_accessibility_services", origServices)
+	if origEnabled == "" {
+		writeSecure("accessibility_enabled", "0")
+	} else {
+		writeSecure("accessibility_enabled", origEnabled)
+	}
+	return out, err
+}
+
 func runTool(args ...string) (string, error) {
+	if toolNeedsA11yService(args) {
+		return withA11yService(func() (string, error) { return runToolRaw(args...) })
+	}
+	return runToolRaw(args...)
+}
+
+func runToolRaw(args ...string) (string, error) {
 	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
 	if _, err := os.Stat(dexPath); err != nil {
 		dexPath = "/data/local/tmp/agent_tools.dex"
