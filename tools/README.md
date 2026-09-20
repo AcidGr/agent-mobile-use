@@ -40,23 +40,41 @@ Consequences:
 
 - A dump never needed to be kept small to "get through". The truncation being fought was
   self-inflicted by `MAX_NODES_CHARS`, not imposed.
-- Paging is therefore an **optimisation, not a necessity** — it lets a caller take one
-  region instead of paying for the whole screen, which is a real but different benefit.
 - `thresholdChars` still matters: it decides how aggressively old results are pruned
   during compaction. The two values below are kept in step so a dump survives compaction
-  intact rather than being cut mid-array.
+  intact rather than being cut mid-list.
 
 | number | where | value |
 | --- | --- | --- |
-| `MAX_NODES_CHARS` | `agent-mobile-use/vd-tool-java/src/com/agent/ToolMain.java` | 12000 |
-| `thresholdChars` | `dsh-preset-mobile-use/preset/mobile-use/agent.cordis.yml` | 14000 |
+| `MAX_NODES_CHARS` | `agent-mobile-use/vd-tool-java/src/com/agent/ToolMain.java` | 20000 |
+| `thresholdChars` | `dsh-preset-mobile-use/preset/mobile-use/agent.cordis.yml` | 23000 |
 
 Neither is a platform limit: `thresholdChars` is ordinary config (8192 is only the
-plugin's default), and `MAX_NODES_CHARS` is a constant we wrote.
+plugin's default), and `MAX_NODES_CHARS` is a constant we wrote. `MAX_NODES_CHARS` is
+counted in code points over the element rows only, so the header and column lines are
+free.
+
+**An earlier revision of this file also described paging as a fallback, driven by
+`mobile_dump_ui y_min=...` and resumed from a `next_y` hint. None of that exists any
+more.** `y_min`/`y_max`/`next_y` were removed in `cf40ba4`: the hint was wrong whenever
+the budget cut into the ranking rather than into the screen (nodes are ordered by
+usefulness, so the omitted ones are scattered rather than sitting below the last emitted
+one, and `next_y` pointed at the bottom of the screen — measured on Amap with a
+3000-char budget, 39/88 controls on page one, `next_y=2800`, second page empty). Today
+there is no second page to fetch: `truncated=1` on the status line is the honest signal,
+and `omitted`/`omitted_top`/`omitted_min` say what it cost.
 
 ## Baseline at the time of writing
 
-Full run, all nine screens. `act` is `act_sent/act_total`; `cp` is code points.
+`act` is `act_sent/act_total`; `cp` is code points of the observation text the model
+reads — the status line, the column line, and the element rows — not the JSON envelope
+around it.
+
+The element rows are one line per element, so this table is directly comparable to the
+figures recorded before that change only in the sense that both measure the same thing,
+the delivered observation. Round-tripping the same nodes through the two representations
+shows the flat form is ~40% smaller for identical information (165 real nodes: 106.8 ->
+61.2 code points per node), and the screens below land where that predicts.
 
 ```
 淘宝        cp=11660  trunc=False  nodes=129 ret=129  act=45/45  OK
