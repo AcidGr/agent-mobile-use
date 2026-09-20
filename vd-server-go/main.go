@@ -403,26 +403,17 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-		// Optional vertical paging window (?y_min=&y_max=, both half-open in layout
-		// coordinates). Lets the caller fetch the part of a long screen that the
-		// budget could not fit, instead of guessing what is down there.
-		args := []string{"tree", did}
-		if yMin := r.URL.Query().Get("y_min"); yMin != "" {
-			if _, convErr := strconv.Atoi(yMin); convErr != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "y_min must be an integer"})
-				return
-			}
-			args = append(args, yMin)
-			yMax := r.URL.Query().Get("y_max")
-			if _, convErr := strconv.Atoi(yMax); yMax != "" && convErr != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "y_max must be an integer"})
-				return
-			}
-			args = append(args, yMax)
-		}
-		out, err := runTool(args...)
+		// No paging parameters. The dump budget is sized to deliver a dense screen whole
+		// in one call (see ToolMain's MAX_NODES_CHARS), so there is nothing to page to.
+		//
+		// This used to accept ?y_min=&y_max= as a window, paired with a `next_y` hint the
+		// tool emitted so a caller could fetch whatever the budget could not fit. That
+		// hint was wrong whenever the budget cut into the node RANKING rather than into
+		// the screen: nodes are ordered by usefulness, so the omitted ones are scattered
+		// instead of sitting below the last emitted one, and next_y pointed at the bottom
+		// of the screen. Measured on Amap with a 3000-char budget: 39/88 controls on page
+		// one, next_y=2800, second page empty. A silent dead end is worse than no paging.
+		out, err := runTool("tree", did)
 		trimmed := strings.TrimSpace(out)
 		if err != nil || trimmed == "" {
 			json.NewEncoder(w).Encode(ActionResponse{

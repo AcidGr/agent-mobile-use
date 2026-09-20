@@ -104,15 +104,25 @@ public class ToolMain {
      * thresholdChars with a fixed marker, keeping only headChars + tailChars — so an
      * over-budget dump reaches the model as a corrupt, silently incomplete node list.
      * The budget below must therefore stay under the preset's thresholdChars (raised to
-     * 14000 alongside this change) with room for the envelope and the fields the Go
+     * 23000 alongside this change) with room for the envelope and the fields the Go
      * server adds.
      *
+     * Sized so that a dense screen arrives WHOLE in one call, because there is no paging
+     * to fall back on any more. Measured worst case over five dense apps: Amap 10403
+     * chars / 120 nodes, Taobao 11010 / 125, WeChat 7319 / 67, Meituan 4241 / 45,
+     * Settings 3920 / 34. 20000 therefore leaves roughly 2x headroom over everything
+     * measured, while still staying clear of the pruner's line.
+     *
+     * MAX_NODES is deliberately far above what the char budget can ever admit (a node
+     * costs roughly 100 chars, so 20000 is about 200 nodes). Keeping it that high means
+     * the char budget is the ONLY thing that can truncate a dump, so there is one place
+     * to reason about rather than two.
+     *
      * `ctr` used to be ~15% of this payload for zero information, which is what made
-     * 6800 too small for a dense screen. With it gone, 12000 fits Amap's whole tree
-     * (~10500 after the removal) in one call.
+     * 6800 too small for a dense screen.
      */
-    private static final int MAX_NODES = 200;
-    private static final int MAX_NODES_CHARS = 12000;
+    private static final int MAX_NODES = 1000;
+    private static final int MAX_NODES_CHARS = 20000;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -150,16 +160,22 @@ public class ToolMain {
         String cmd = args[0];
         if ("tree".equals(cmd) || "dump".equals(cmd)) {
             int displayId = args.length > 1 ? Integer.parseInt(args[1]) : 0;
-            // Optional paging window. -1 means "unbounded" so the shell can pass empty
-            // slots without the caller having to build a different argv shape.
-            int yMin = args.length > 2 && args[2].length() > 0 ? Integer.parseInt(args[2]) : -1;
-            int yMax = args.length > 3 && args[3].length() > 0 ? Integer.parseInt(args[3]) : -1;
-            // Diagnostic escape hatch: raise the node budget so a full tree can be
+            // Diagnostic escape hatch: raise the char budget so a full tree can be
             // compared against what the model actually receives. Never sent by the
             // server, so production behaviour is unchanged.
-            int budgetOverride = args.length > 4 && args[4].length() > 0
-                    ? Integer.parseInt(args[4]) : 0;
-            dumpTree(displayId, yMin, yMax, budgetOverride);
+            //
+            // There is deliberately no paging argument any more. An earlier design
+            // exposed y_min/y_max plus a next_y hint so a caller could fetch the part
+            // of a screen the budget could not fit. It was removed because the hint was
+            // wrong in the common case: nodes are ranked by usefulness, not by position,
+            // so when the budget runs out the omitted nodes are scattered across the
+            // whole screen rather than sitting below the last emitted one. next_y then
+            // pointed at the bottom of the screen and "page from here" returned nothing
+            // (measured: 39/88 controls on page 1, next_y=2800, page 2 empty). The
+            // budget is sized instead so a dense screen arrives whole in one call.
+            int budgetOverride = args.length > 2 && args[2].length() > 0
+                    ? Integer.parseInt(args[2]) : 0;
+            dumpTree(displayId, budgetOverride);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
                 System.err.println("Usage: type <displayId> <text>");
@@ -191,7 +207,7 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static void dumpTree(int targetDisplayId, int yMin, int yMax, int budgetOverride) {
+    private static void dumpTree(int targetDisplayId, int budgetOverride) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -251,9 +267,6 @@ public class ToolMain {
             // model that knows this will not conclude the screen is empty.
             boolean recovered = false;
             int attempt = 0;
-            // Set once the paging window is applied, BEFORE the scan loop: the loop reads it
-            // to decide whether a second read is worth its wait.
-            boolean paged = yMin >= 0 || yMax >= 0;
 
             // Reading a tree is a race, so no single scan is trusted on its own. Three shapes
             // of "not ready yet" were measured on this device, and they need DIFFERENT
@@ -339,9 +352,7 @@ public class ToolMain {
                     // Give a not-yet-ready tree time to appear: a WebView's page content, or
                     // WeChat's intermittently empty window. The second read is the difference
                     // between a blank tree and the real one.
-                    if (!paged) {
-                        try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
-                    }
+                    try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
                 } else {
                     // Keep whichever pass saw more. A thin second pass must not replace a
                     // thin first one, and a richer second pass is exactly the wake.
@@ -361,30 +372,16 @@ public class ToolMain {
             }
             if (list == null) list = new ArrayList<NodeItem>();
 
-            // Order matters all the way through: dedup -> tap suppression -> paging ->
-            // ranking. Each stage removes or reorders nodes, so it has to see the output
-            // of the one before it.
+            // Order matters all the way through: dedup -> tap suppression -> ranking.
+            // Each stage removes or reorders nodes, so it has to see the output of the
+            // one before it.
             int droppedDup = dedupeIdenticalNodes(list);
             suppressUnusableTargets(list, dispW, dispH);
-
-            // Paging window. The full tree geometry is reported in the envelope even when
-            // a window is applied, so the caller always knows what it is not seeing.
-            int clipped = 0;
-            if (paged) {
-                List<NodeItem> windowed = new ArrayList<NodeItem>(list.size());
-                for (NodeItem n : list) {
-                    boolean above = yMin >= 0 && n.bottom <= yMin;
-                    boolean below = yMax >= 0 && n.top >= yMax;
-                    if (above || below) { clipped++; continue; }
-                    windowed.add(n);
-                }
-                list = windowed;
-            }
 
             rankForBudget(list);
 
             emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
-                    droppedDup, clipped, paged, scanAttempts, recovered, budgetOverride);
+                    droppedDup, scanAttempts, recovered, budgetOverride);
 
         } catch (Throwable t) {
             // Never die silently. Emit the SAME shape as a success so "did this fail?"
@@ -635,13 +632,12 @@ public class ToolMain {
      */
     private static void emitEnvelope(int displayId, int dispW, int dispH,
                                      int windowCount, List<NodeItem> list,
-                                     int droppedDup, int clipped, boolean paged,
+                                     int droppedDup,
                                      int scanAttempts, boolean recovered, int budgetOverride) {
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;
         boolean truncated = false;
-        int lastBottom = 0;
         int omitted = 0;
         // Lossless accounting: how many nodes in the ENTIRE tree are actionable
         // (clickable / checkable), and how many of those actually reached the model.
@@ -694,7 +690,6 @@ public class ToolMain {
             nodes.append(s);
             emitted++;
             if (list.get(i).clickable || list.get(i).checkable) actSent++;
-            if (list.get(i).bottom > lastBottom) lastBottom = list.get(i).bottom;
         }
 
         StringBuilder sb = new StringBuilder();
@@ -733,24 +728,26 @@ public class ToolMain {
             sb.append(",\"tree_blocked\":1");
         }
         if (droppedDup > 0) sb.append(",\"dup\":").append(droppedDup);
-        if (paged) sb.append(",\"clipped\":").append(clipped);
         sb.append(",\"returned\":").append(emitted);
         sb.append(",\"act_total\":").append(actTotal);
         sb.append(",\"act_sent\":").append(actSent);
         sb.append(",\"truncated\":").append(truncated);
         if (truncated) {
             // Say WHAT was lost, not just that something was. "omitted":73 alone tells the
-            // model nothing about whether it needs to page; combined with the top tier it
-            // does.
+            // model nothing about how much of the screen it is missing; combined with the
+            // top tier it does.
+            //
+            // There is no "where to resume" field. An earlier next_y was removed because it
+            // was wrong whenever the budget cut into the ranking rather than the screen:
+            // nodes are ordered by usefulness, so the omitted ones are scattered rather
+            // than sitting below the last emitted one, and next_y pointed at the bottom of
+            // the screen. A caller that followed it got an empty second page and no reason
+            // to doubt it. Nothing replaces it: the budget is instead sized so that a dense
+            // screen arrives whole, and `truncated` is the honest signal that it did not.
             sb.append(",\"omitted\":").append(omitted);
             if (omittedTopTier) sb.append(",\"omitted_top\":1");
             if (omittedMinPriority != Integer.MAX_VALUE) {
                 sb.append(",\"omitted_min\":").append(omittedMinPriority);
-            }
-            if (lastBottom > 0) {
-                // Where the emitted list stops, so the model can page instead of
-                // concluding the rest of the screen is empty.
-                sb.append(",\"next_y\":").append(lastBottom);
             }
         }
         sb.append(",\"nodes\":[").append(nodes).append("]");
