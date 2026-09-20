@@ -1,6 +1,6 @@
 id=agent_mobile_use
 name=Agent Mobile Sandbox & Tools
-version=v3.9
-versionCode=39
+version=v4.0
+versionCode=40
 author=酸小明
 description=工业级后台独立虚拟副屏与全能 Mobile Use 最终完全体 (前后台模式无缝切换、前台自适应边缘呼吸光效、物理屏幕自适应、REST API、主屏100%隐形静默)
