@@ -91,7 +91,7 @@ func setCurrentMode(m string) string {
 
 func setEdgeGlow(enable bool) {
 	if enable {
-		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse; echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
 		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
