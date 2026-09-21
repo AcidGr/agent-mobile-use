@@ -123,19 +123,14 @@ public class QuestionActivity extends Activity {
         final boolean isMultiSelect = qObj.optBoolean("multi_select", false);
         final JSONArray options = qObj.optJSONArray("options");
 
-        // Root Container: Dimmed backdrop, tap to dismiss
+        // Root Container: Dimmed backdrop, non-dismissible to prevent accidental touches
         FrameLayout rootLayout = new FrameLayout(this);
         rootLayout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
         rootLayout.setBackgroundColor(0x70000000); // 44% black dim
-        rootLayout.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                finish();
-            }
-        });
+        rootLayout.setClickable(true); // Consume clicks so they don't pass through to underlying windows
 
         // Bottom Sheet Card
         LinearLayout card = new LinearLayout(this);
@@ -146,7 +141,7 @@ public class QuestionActivity extends Activity {
             Gravity.BOTTOM
         );
         card.setLayoutParams(cardLp);
-        card.setClickable(true); // Don't trigger root dismiss when tapping card
+        card.setClickable(true);
 
         // Rounded top corners gradient background
         GradientDrawable cardBg = new GradientDrawable();
@@ -171,13 +166,55 @@ public class QuestionActivity extends Activity {
         handle.setBackground(handleBg);
         card.addView(handle);
 
+        // Header Row: Title on left, Close button on right
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams headerRowLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        headerRow.setLayoutParams(headerRowLp);
+
         // Header Title
         TextView titleTv = new TextView(this);
         titleTv.setText(header);
         titleTv.setTextColor(Color.WHITE);
         titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(titleTv);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+            0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            1.0f
+        );
+        titleTv.setLayoutParams(titleLp);
+        headerRow.addView(titleTv);
+
+        // Close Button (✕)
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(0xFFB0B5C0);
+        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        closeBtn.setGravity(Gravity.CENTER);
+        int btnSize = dpToPx(32);
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(btnSize, btnSize);
+        closeLp.leftMargin = dpToPx(12);
+        closeBtn.setLayoutParams(closeLp);
+
+        GradientDrawable closeBg = new GradientDrawable();
+        closeBg.setColor(0x22FFFFFF); // Subtle circular translucent container
+        closeBg.setCornerRadius(btnSize / 2f);
+        closeBtn.setBackground(closeBg);
+        closeBtn.setClickable(true);
+        closeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
+        headerRow.addView(closeBtn);
+
+        card.addView(headerRow);
 
         // Question Description
         if (!questionText.isEmpty()) {
@@ -194,7 +231,7 @@ public class QuestionActivity extends Activity {
             questionTv.setLayoutParams(qLp);
             card.addView(questionTv);
         } else {
-            ((LinearLayout.LayoutParams) titleTv.getLayoutParams()).bottomMargin = dpToPx(16);
+            ((LinearLayout.LayoutParams) headerRow.getLayoutParams()).bottomMargin = dpToPx(16);
         }
 
         // Scrollable Options List

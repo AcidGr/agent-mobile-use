@@ -13,7 +13,10 @@ cp "$WORKSPACE/vd-server-go/vd_server" "$SCRIPT_DIR/bin/vd_server"
 cp "$WORKSPACE/vd-tool-java/bin/agent_tools.dex" "$SCRIPT_DIR/bin/agent_tools.dex"
 cp "$WORKSPACE/vd-tool-java/bin/agent_vd.dex" "$SCRIPT_DIR/bin/agent_vd.dex"
 
-# 3. Create zip
+# 3. Copy Hook APK
+cp "$WORKSPACE/agent-hook-apk/build/agent_hook.apk" "$SCRIPT_DIR/apk/agent_hook.apk"
+
+# 4. Create zip
 cd "$SCRIPT_DIR"
 echo "[ksu-pack] Building agent-mobile-use-ksu.zip..."
 rm -f "$WORKSPACE/agent-mobile-use-ksu.zip"
