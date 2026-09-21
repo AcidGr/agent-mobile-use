@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -1259,6 +1260,122 @@ func main() {
 			Summary:   "New task session dispatched",
 			Timestamp: time.Now().UnixMilli(),
 		}
+
+		// Spawn real DSH headless session in /storage/emulated/0/workspace
+		go func(userPrompt string) {
+			defer func() {
+				taskMu.Lock()
+				isTaskActive = false
+				taskMu.Unlock()
+			}()
+
+			// DSH runs in its own rootfs container. Find the container PID from ps.
+			pidBytes, _ := exec.Command("/system/bin/sh", "-c", `ps -ef | grep "dsh web" | grep -v grep | awk '{print $2}' | head -n 1`).Output()
+			dshPid := strings.TrimSpace(string(pidBytes))
+			if dshPid == "" {
+				dshPid = "14347" // Fallback
+			}
+
+			// Escape single quotes for shell string
+			escapedPrompt := strings.ReplaceAll(userPrompt, "'", "'\\''")
+			chrootCmd := fmt.Sprintf(`chroot /proc/%s/root /bin/sh -c "cd /storage/emulated/0/workspace && /usr/local/bin/dsh --profile headless --json '%s'"`, dshPid, escapedPrompt)
+
+			cmd := exec.Command("/system/bin/sh", "-c", chrootCmd)
+
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				taskMu.Lock()
+				lastEvent = &TaskEvent{
+					Type:      "tool_end",
+					Tool:      "system",
+					Success:   false,
+					Error:     "Failed to start DSH: " + err.Error(),
+					Timestamp: time.Now().UnixMilli(),
+				}
+				taskMu.Unlock()
+				return
+			}
+
+			if err := cmd.Start(); err != nil {
+				taskMu.Lock()
+				lastEvent = &TaskEvent{
+					Type:      "tool_end",
+					Tool:      "system",
+					Success:   false,
+					Error:     "DSH execution failed: " + err.Error(),
+					Timestamp: time.Now().UnixMilli(),
+				}
+				taskMu.Unlock()
+				return
+			}
+
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" {
+					continue
+				}
+
+				var ev map[string]any
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					continue
+				}
+
+				evType, _ := ev["type"].(string)
+				taskMu.Lock()
+				if evType == "session" {
+					sessID, _ := ev["sessionId"].(string)
+					lastEvent = &TaskEvent{
+						Type:      "session_created",
+						Summary:   "Session: " + sessID,
+						Timestamp: time.Now().UnixMilli(),
+					}
+				} else if evType == "tool_call" {
+					toolName, _ := ev["tool"].(string)
+					inputMap, _ := ev["input"].(map[string]any)
+					summary := ""
+					if inputMap != nil {
+						if desc, ok := inputMap["description"].(string); ok && desc != "" {
+							summary = desc
+						} else if cmdStr, ok := inputMap["command"].(string); ok {
+							summary = cmdStr
+						} else {
+							b, _ := json.Marshal(inputMap)
+							summary = string(b)
+						}
+					}
+					lastEvent = &TaskEvent{
+						Type:      "tool_start",
+						Tool:      toolName,
+						Summary:   summary,
+						Timestamp: time.Now().UnixMilli(),
+					}
+				} else if evType == "tool_result" {
+					statusStr, _ := ev["status"].(string)
+					lastEvent = &TaskEvent{
+						Type:      "tool_end",
+						Tool:      "tool",
+						Success:   statusStr == "completed",
+						Summary:   "Result: " + statusStr,
+						Timestamp: time.Now().UnixMilli(),
+					}
+				} else if evType == "final" {
+					ansText, _ := ev["text"].(string)
+					if len(ansText) > 120 {
+						ansText = ansText[:120] + "..."
+					}
+					lastEvent = &TaskEvent{
+						Type:      "task_completed",
+						Summary:   ansText,
+						Timestamp: time.Now().UnixMilli(),
+					}
+				}
+				taskMu.Unlock()
+			}
+
+			_ = cmd.Wait()
+		}(activePrompt)
+
 		taskMu.Unlock()
 
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1266,6 +1383,23 @@ func main() {
 			"message": "Task queued successfully",
 			"prompt":  activePrompt,
 		})
+	})
+
+	mux.HandleFunc("/api/chat/claim", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		taskMu.Lock()
+		activePrompt = "" // Cleared after being claimed by DSH agent
+		lastEvent = &TaskEvent{
+			Type:      "task_dispatched",
+			Summary:   "Prompt claimed by DSH, starting agent turn",
+			Timestamp: time.Now().UnixMilli(),
+		}
+		taskMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	})
 
 	mux.HandleFunc("/api/chat/stop", func(w http.ResponseWriter, r *http.Request) {
