@@ -62,6 +62,7 @@ public class DemoDialogActivity extends Activity {
                     public void run() {
                         mActivity.hideSoftInput();
                         mActivity.moveTaskToBack(true);
+                        mActivity.overridePendingTransition(0, 0);
                     }
                 });
             }
@@ -74,6 +75,7 @@ public class DemoDialogActivity extends Activity {
                     @Override
                     public void run() {
                         mActivity.finish();
+                        mActivity.overridePendingTransition(0, 0);
                     }
                 });
             }
@@ -94,6 +96,7 @@ public class DemoDialogActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        overridePendingTransition(0, 0);
 
         mMainHandler = new Handler(Looper.getMainLooper());
 
@@ -102,7 +105,35 @@ public class DemoDialogActivity extends Activity {
         if (window != null) {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            window.setStatusBarColor(Color.TRANSPARENT);
+            window.setNavigationBarColor(Color.TRANSPARENT);
+
+            try {
+                java.lang.reflect.Method m1 = Window.class.getMethod("setStatusBarContrastEnforced", boolean.class);
+                m1.invoke(window, false);
+                java.lang.reflect.Method m2 = Window.class.getMethod("setNavigationBarContrastEnforced", boolean.class);
+                m2.invoke(window, false);
+            } catch (Throwable ignored) {}
+
+            try {
+                WindowManager.LayoutParams lp = window.getAttributes();
+                java.lang.reflect.Field f = WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode");
+                f.setInt(lp, 1); // LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1
+                window.setAttributes(lp);
+            } catch (Throwable ignored) {}
+
+            View decorView = window.getDecorView();
+            if (decorView != null) {
+                decorView.setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                );
+            }
+
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            window.setWindowAnimations(0);
         }
 
         initBaseUI();
@@ -118,36 +149,22 @@ public class DemoDialogActivity extends Activity {
     }
 
     private void initBaseUI() {
-        DisplayMetrics dm = getResources().getDisplayMetrics();
-
-        // 1. Root backdrop: transparent, click outside to close
+        // 1. Root backdrop: transparent
         mRootLayout = new FrameLayout(this);
         mRootLayout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
         mRootLayout.setBackgroundColor(Color.TRANSPARENT);
-        mRootLayout.setClickable(true);
-        mRootLayout.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                finish();
-            }
-        });
 
-        // 2. Bottom-aligned Floating Card
+        // 2. Full-screen Floating Card
         mCard = new LinearLayout(this);
         mCard.setOrientation(LinearLayout.VERTICAL);
 
-        int cardWidth = Math.min(dm.widthPixels - dpToPx(16), dpToPx(560));
-        int cardHeight = (int) (dm.heightPixels * 0.90f);
-
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
-            cardWidth,
-            cardHeight,
-            Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
         );
-        cardLp.bottomMargin = dpToPx(8);
         mCard.setLayoutParams(cardLp);
         mCard.setClickable(false);
 
@@ -440,6 +457,7 @@ public class DemoDialogActivity extends Activity {
         } else {
             hideSoftInput();
             moveTaskToBack(true);
+            overridePendingTransition(0, 0);
         }
     }
 
@@ -447,11 +465,13 @@ public class DemoDialogActivity extends Activity {
     public void finish() {
         hideSoftInput();
         super.finish();
+        overridePendingTransition(0, 0);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        overridePendingTransition(0, 0);
         if (mWebView != null) {
             mWebView.onResume();
         }
@@ -460,6 +480,7 @@ public class DemoDialogActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        overridePendingTransition(0, 0);
         if (mWebView != null) {
             mWebView.onPause();
         }
