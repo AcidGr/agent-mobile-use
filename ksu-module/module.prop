@@ -1,6 +1,6 @@
 id=agent_mobile_use
 name=Agent Mobile Sandbox & Tools
-version=v5.0
+version=5.0
 versionCode=50
 author=酸小明
 description=工业级后台独立虚拟副屏与全能 Mobile Use 最终完全体 (侧键Action物理按键唤出沉浸Web控制台、Cookie免密鉴权、Display状态驱动自愈点灯、前后台无缝切换、REST API、主屏100%隐形静默)
