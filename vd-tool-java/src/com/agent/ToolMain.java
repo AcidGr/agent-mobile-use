@@ -217,11 +217,25 @@ public class ToolMain {
             dumpTree(displayId, budgetOverride);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
-                System.err.println("Usage: type <displayId> <text>");
+                System.err.println("Usage: type <displayId> [targetSpec] <text> [submit:true|false]");
                 return;
             }
             int displayId = Integer.parseInt(args[1]);
-            injectType(displayId, args[2]);
+            if (args.length == 3) {
+                // Legacy invocation: type <displayId> <text>
+                smartType(displayId, "focused", args[2], false);
+            } else if (args.length == 4) {
+                boolean submit = "true".equalsIgnoreCase(args[3]) || "submit".equalsIgnoreCase(args[3]);
+                if (submit) {
+                    smartType(displayId, "focused", args[2], true);
+                } else {
+                    smartType(displayId, args[2], args[3], false);
+                }
+            } else {
+                // type <displayId> <targetSpec> <text> <submit>
+                boolean submit = "true".equalsIgnoreCase(args[4]) || "submit".equalsIgnoreCase(args[4]);
+                smartType(displayId, args[2], args[3], submit);
+            }
         } else if ("clicknode".equals(cmd)) {
             // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
             // or description matches, then performAction(ACTION_CLICK) on it. See
@@ -233,13 +247,20 @@ public class ToolMain {
             int displayId = Integer.parseInt(args[1]);
             boolean contains = args.length > 3 && "contains".equals(args[3]);
             clickNode(displayId, args[2], contains);
+        } else if ("settext".equals(cmd)) {
+            if (args.length < 4) {
+                System.err.println("Usage: settext <displayId> <target: first|focused|id:<res>|text:<txt>|idx:<N>> <text>");
+                return;
+            }
+            int displayId = Integer.parseInt(args[1]);
+            smartType(displayId, args[2], args[3], false);
         } else {
             printUsage();
         }
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|clicknode> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|clicknode|settext> [args...]");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1512,6 +1533,315 @@ public class ToolMain {
         }
         sb.append("}");
         System.out.print(sb.toString());
+    }
+
+    /**
+     * Smart hybrid injection pipeline:
+     * 1. If targetSpec is provided (and not pure "focused"), find target node.
+     * 2. Attempt instant zero-focus ACTION_SET_TEXT. Verify equality.
+     * 3. If ACTION_SET_TEXT fails or target is not immediately editable, fall back to:
+     *    tap target coordinates -> wait 100ms -> clipboard paste -> verify.
+     * 4. If submit is true, dispatch KEYCODE_ENTER.
+     * 5. Return structured JSON with verification status.
+     */
+    private static void smartType(int targetDisplayId, String targetSpec, String text, boolean submit) {
+        HandlerThread ht = null;
+        Object uiAutomation = null;
+        String err = null;
+        String mode = "unknown";
+        String beforeTxt = null;
+        String afterTxt = null;
+        String vid = null;
+        String cls = null;
+        boolean ok = false;
+        long start = System.currentTimeMillis();
+
+        try {
+            ht = new HandlerThread("SmartTypeThread");
+            ht.start();
+            Object uac = Class.forName("android.app.UiAutomationConnection")
+                    .getConstructor().newInstance();
+            Class<?> uiClass = Class.forName("android.app.UiAutomation");
+            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
+            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
+                    .newInstance(ht.getLooper(), uac);
+            try {
+                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
+            } catch (NoSuchMethodException e) {
+                uiClass.getMethod("connect").invoke(uiAutomation);
+            }
+            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+            info.eventTypes = -1;
+            info.feedbackType = 16;
+            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
+            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
+            Thread.sleep(200);
+
+            List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
+            for (int scanPass = 0; scanPass < 3; scanPass++) {
+                all.clear();
+                Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+                if (displays != null) {
+                    Class<?> saClass = displays.getClass();
+                    int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+                    Method keyAt = saClass.getMethod("keyAt", int.class);
+                    Method valueAt = saClass.getMethod("valueAt", int.class);
+                    for (int i = 0; i < sizeN; i++) {
+                        int dId = (Integer) keyAt.invoke(displays, i);
+                        if (dId != targetDisplayId) continue;
+                        List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                        if (wins == null) continue;
+                        for (Object win : wins) {
+                            Object rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                            if (rootObj instanceof AccessibilityNodeInfo) {
+                                collectAll((AccessibilityNodeInfo) rootObj, 0, all);
+                            }
+                        }
+                    }
+                }
+                if (!all.isEmpty()) break;
+                Thread.sleep(300);
+            }
+
+            AccessibilityNodeInfo targetNode = null;
+            if (targetSpec != null && !targetSpec.isEmpty() && !"focused".equals(targetSpec)) {
+                if (targetSpec.startsWith("idx:")) {
+                    int idx = Integer.parseInt(targetSpec.substring(4));
+                    List<AccessibilityNodeInfo> editables = new ArrayList<AccessibilityNodeInfo>();
+                    for (AccessibilityNodeInfo an : all) {
+                        CharSequence cName = an.getClassName();
+                        if (an.isEditable() || (cName != null && cName.toString().contains("Edit"))) {
+                            editables.add(an);
+                        }
+                    }
+                    if (idx >= 0 && idx < editables.size()) targetNode = editables.get(idx);
+                } else if (targetSpec.startsWith("id:") || !targetSpec.matches("^\\d+$")) {
+                    String idPattern = targetSpec.startsWith("id:") ? targetSpec.substring(3) : targetSpec;
+                    for (AccessibilityNodeInfo an : all) {
+                        if (an.getViewIdResourceName() != null && an.getViewIdResourceName().contains(idPattern)) {
+                            // If this node is a container (like FrameLayout), try to find editable child inside it
+                            if (!an.isEditable()) {
+                                AccessibilityNodeInfo editChild = findFirstEditable(an);
+                                if (editChild != null) {
+                                    targetNode = editChild;
+                                    break;
+                                }
+                            }
+                            targetNode = an;
+                            break;
+                        }
+                    }
+                } else {
+                    // Try numeric ID from dump_ui
+                    try {
+                        int numericId = Integer.parseInt(targetSpec);
+                        // In dumpTree idCounter is 1-based traversal
+                        int count = 1;
+                        for (AccessibilityNodeInfo an : all) {
+                            if (an.getText() != null || an.getContentDescription() != null || an.isClickable() || an.isEditable()) {
+                                if (count == numericId) {
+                                    targetNode = an;
+                                    break;
+                                }
+                                count++;
+                            }
+                        }
+                    } catch (NumberFormatException ignored) {}
+
+                    if (targetNode == null) {
+                        // Match text/desc
+                        for (AccessibilityNodeInfo an : all) {
+                            if (labelMatches(an.getText(), targetSpec, true) || labelMatches(an.getContentDescription(), targetSpec, true)) {
+                                targetNode = an;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If no specific target, look for currently focused node
+            if (targetNode == null) {
+                for (AccessibilityNodeInfo an : all) {
+                    if (an.isFocused() && an.isEditable()) {
+                        targetNode = an;
+                        break;
+                    }
+                }
+            }
+
+            // Path 1: Direct ACTION_SET_TEXT (Fast-path: 0 click, 0 side-effects)
+            if (targetNode != null) {
+                vid = targetNode.getViewIdResourceName();
+                cls = targetNode.getClassName() != null ? targetNode.getClassName().toString() : null;
+                beforeTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+
+                android.os.Bundle args = new android.os.Bundle();
+                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+                boolean setOk = false;
+                try {
+                    setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                } catch (Throwable ignored) {}
+
+                if (setOk) {
+                    Thread.sleep(60);
+                    targetNode.refresh();
+                    afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+                    if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
+                        ok = true;
+                        mode = "action_set_text";
+                    }
+                }
+            }
+
+            // Path 2 (Pattern C): Smart Auto-Focus & Retry for defensive custom inputs (e.g. WeChat, custom chat edittext)
+            if (!ok && targetNode != null) {
+                Rect bounds = new Rect();
+                targetNode.getBoundsInScreen(bounds);
+                int cx = bounds.centerX();
+                int cy = bounds.centerY();
+                if (cx > 0 && cy > 0) {
+                    // Step 2.1: Micro-touch activation (wake up InputConnection)
+                    Runtime.getRuntime().exec(new String[] {
+                            "/system/bin/input", "-d", String.valueOf(targetDisplayId), "tap",
+                            String.valueOf(cx), String.valueOf(cy)
+                    }).waitFor();
+
+                    // Step 2.2: Wait briefly for focus establishment
+                    for (int fi = 0; fi < 10; fi++) {
+                        Thread.sleep(25);
+                        targetNode.refresh();
+                        if (targetNode.isFocused()) break;
+                    }
+
+                    // Step 2.3: Re-attempt direct ACTION_SET_TEXT now that node is focused
+                    android.os.Bundle retryArgs = new android.os.Bundle();
+                    retryArgs.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+                    boolean retryOk = false;
+                    try {
+                        retryOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, retryArgs);
+                    } catch (Throwable ignored) {}
+
+                    if (retryOk) {
+                        Thread.sleep(60);
+                        targetNode.refresh();
+                        afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+                        if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
+                            ok = true;
+                            mode = "autofocus_and_set_text";
+                        }
+                    }
+
+                    // Step 2.4: Fallback to clipboard paste if ACTION_SET_TEXT still rejected
+                    if (!ok) {
+                        injectClipboardOnly(text);
+                        Runtime.getRuntime().exec(new String[] {
+                                "/system/bin/input", "-d", String.valueOf(targetDisplayId), "keyevent", "279"
+                        }).waitFor();
+                        Thread.sleep(100);
+                        targetNode.refresh();
+                        afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+                        if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
+                            ok = true;
+                            mode = "fallback_tap_and_paste";
+                        }
+                    }
+                }
+            }
+
+            // Handle optional submit/enter
+            if (ok && submit) {
+                Thread.sleep(50);
+                Runtime.getRuntime().exec(new String[] {
+                        "/system/bin/input", "-d", String.valueOf(targetDisplayId), "keyevent", "66"
+                }).waitFor();
+            }
+
+        } catch (Throwable t) {
+            err = String.valueOf(t);
+        } finally {
+            if (uiAutomation != null) {
+                try {
+                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) ht.quit();
+        }
+
+        long costMs = System.currentTimeMillis() - start;
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"ok\":").append(ok);
+        sb.append(",\"display\":").append(targetDisplayId);
+        sb.append(",\"mode\":\"").append(mode).append("\"");
+        sb.append(",\"cost_ms\":").append(costMs);
+        if (targetSpec != null) sb.append(",\"target\":\"").append(escapeJson(targetSpec)).append("\"");
+        if (vid != null) sb.append(",\"vid\":\"").append(escapeJson(vid)).append("\"");
+        if (cls != null) sb.append(",\"type\":\"").append(escapeJson(cls)).append("\"");
+        if (beforeTxt != null) sb.append(",\"before_text\":\"").append(escapeJson(beforeTxt)).append("\"");
+        if (afterTxt != null) sb.append(",\"verified_text\":\"").append(escapeJson(afterTxt)).append("\"");
+        if (err != null) sb.append(",\"error\":\"").append(escapeJson(err)).append("\"");
+        sb.append("}");
+        System.out.print(sb.toString());
+    }
+
+    private static AccessibilityNodeInfo findFirstEditable(AccessibilityNodeInfo root) {
+        if (root == null) return null;
+        if (root.isEditable()) return root;
+        int count = root.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = root.getChild(i);
+            if (child != null) {
+                if (child.isEditable()) return child;
+                AccessibilityNodeInfo sub = findFirstEditable(child);
+                if (sub != null) return sub;
+            }
+        }
+        return null;
+    }
+
+    private static void injectClipboardOnly(String text) {
+        try {
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            Object clipboardBinder = getService.invoke(null, "clipboard");
+
+            Class<?> stubClass = Class.forName("android.content.IClipboard$Stub");
+            Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
+            Object clipboardService = asInterface.invoke(null, clipboardBinder);
+
+            Class<?> clipDataClass = Class.forName("android.content.ClipData");
+            Method newPlainText = clipDataClass.getMethod("newPlainText", CharSequence.class, CharSequence.class);
+            Object clip = newPlainText.invoke(null, "agent_input", text);
+
+            Method setPrimaryClip = null;
+            for (Method m : clipboardService.getClass().getMethods()) {
+                if ("setPrimaryClip".equals(m.getName())) {
+                    setPrimaryClip = m;
+                    break;
+                }
+            }
+            if (setPrimaryClip != null) {
+                Class<?>[] pTypes = setPrimaryClip.getParameterTypes();
+                Object[] pArgs = new Object[pTypes.length];
+                int stringCount = 0;
+                for (int i = 0; i < pTypes.length; i++) {
+                    Class<?> pt = pTypes[i];
+                    if (pt.isAssignableFrom(clip.getClass()) || pt.getName().contains("ClipData")) {
+                        pArgs[i] = clip;
+                    } else if (pt == String.class) {
+                        pArgs[i] = (stringCount == 0) ? "com.android.shell" : null;
+                        stringCount++;
+                    } else if (pt == int.class || pt == Integer.class) {
+                        pArgs[i] = 0;
+                    } else if (pt == boolean.class || pt == Boolean.class) {
+                        pArgs[i] = false;
+                    } else {
+                        pArgs[i] = null;
+                    }
+                }
+                setPrimaryClip.invoke(clipboardService, pArgs);
+            }
+        } catch (Throwable ignored) {}
     }
 
     /**

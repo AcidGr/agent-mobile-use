@@ -347,14 +347,13 @@ func deleteSecure(key string) {
 	_ = exec.Command("/system/bin/settings", "delete", "secure", key).Run()
 }
 
-// toolReadsTree reports whether a tool command reads the accessibility tree. `type`
-// does not, so it is left alone rather than paying the switch for nothing.
+// toolReadsTree reports whether a tool command reads the accessibility tree.
 func toolReadsTree(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
 	switch args[0] {
-	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode":
+	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode", "type", "settext":
 		return true
 	}
 	return false
@@ -840,7 +839,9 @@ func main() {
 			return
 		}
 		var p struct {
-			Text string `json:"text"`
+			Text   string      `json:"text"`
+			Target interface{} `json:"target"`
+			Submit bool        `json:"submit"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -848,12 +849,31 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-		out, err := runTool("type", did, p.Text)
+		targetStr := "focused"
+		if p.Target != nil {
+			switch v := p.Target.(type) {
+			case string:
+				if v != "" {
+					targetStr = v
+				}
+			case float64:
+				targetStr = strconv.Itoa(int(v))
+			case int:
+				targetStr = strconv.Itoa(v)
+			}
+		}
+
+		submitStr := "false"
+		if p.Submit {
+			submitStr = "true"
+		}
+
+		out, err := runTool("type", did, targetStr, p.Text, submitStr)
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out, Notice: popPendingHandoffNotice()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out, Notice: popPendingHandoffNotice()})
 	})
 
 	mux.HandleFunc("/api/key", func(w http.ResponseWriter, r *http.Request) {
