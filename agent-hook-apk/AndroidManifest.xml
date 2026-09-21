@@ -31,6 +31,7 @@
             android:name=".QuestionActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:launchMode="singleTop"
+            android:taskAffinity="com.agent.mobileuse.question"
             android:excludeFromRecents="true"
             android:exported="true" />
 
@@ -38,6 +39,7 @@
             android:name=".DemoDialogActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:launchMode="singleTop"
+            android:taskAffinity="com.agent.mobileuse.overlay"
             android:excludeFromRecents="true"
             android:exported="true" />
 
