@@ -106,7 +106,7 @@ public class NotifyReceiver extends BroadcastReceiver {
         }
     }
 
-    private void ensureChannel(NotificationManager nm) {
+    public static void ensureChannel(NotificationManager nm) {
         if (Build.VERSION.SDK_INT >= 26) {
             try {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
@@ -142,9 +142,9 @@ public class NotifyReceiver extends BroadcastReceiver {
         }
     }
 
-    private void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
-                                          String title, String content,
-                                          int total, int completed) {
+    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
+                                                 String title, String content,
+                                                 int total, int completed) {
         try {
             ensureChannel(nm);
 

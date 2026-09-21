@@ -87,6 +87,28 @@ public class QuestionActivity extends Activity {
         if (intent != null) {
             mRequestId = intent.getStringExtra("request_id");
             mDataJson = intent.getStringExtra("data");
+
+            boolean isCompleted = intent.getBooleanExtra("is_completed", false);
+            if (isCompleted) {
+                try {
+                    NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                    if (nm != null) {
+                        String title = intent.getStringExtra("title");
+                        String content = intent.getStringExtra("content");
+                        String tag = intent.getStringExtra("tag");
+                        if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
+                        int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
+                        int total = intent.getIntExtra("total", 0);
+                        int completed = intent.getIntExtra("completed", 0);
+                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, content, total, completed);
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "is_completed postCompletedNotification failed: " + t.getMessage(), t);
+                }
+                finish();
+                overridePendingTransition(0, 0);
+                return;
+            }
         }
 
         if (mRequestId == null || mDataJson == null) {

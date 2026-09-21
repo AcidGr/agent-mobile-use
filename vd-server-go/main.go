@@ -1023,9 +1023,29 @@ func main() {
 			isCompletedStr = "true"
 		}
 
-		// Primary: Send broadcast to com.agent.mobileuse/.NotifyReceiver (native Android App notification with click jump & black whale avatar)
-		// Ensure process is thawed if frozen by ColorOS Hans/Freezer, and pass --receiver-foreground for immediate dispatch
-		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		// Ensure process is thawed if frozen by ColorOS Hans/Freezer
+		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
+
+		// If this is a completion notification, use Activity wake-up (am start -f 0x18000000)
+		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
+		if isCompletedStr == "true" {
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+			cmd.Env = append(os.Environ(),
+				"NOTIFY_TITLE="+p.Title,
+				"NOTIFY_TAG="+p.Tag,
+				"NOTIFY_CONTENT="+p.Content,
+				"NOTIFY_URL="+p.URL,
+				fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
+				fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
+			)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
+				return
+			}
+		}
+
+		// For normal in-progress steps or broadcast fallback:
 		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
@@ -1099,9 +1119,9 @@ func main() {
 			questionMu.Unlock()
 		}()
 
-		// Trigger notification banner in dedicated question task without bringing DemoDialogActivity overlay to front
+		// Wake up process and trigger notification banner via Activity launch in 0ms without interactive card
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"REQ_ID="+p.RequestID,
 			"REQ_DATA="+string(bodyBytes),
