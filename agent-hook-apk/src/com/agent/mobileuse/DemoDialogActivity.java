@@ -16,6 +16,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
@@ -156,6 +157,32 @@ public class DemoDialogActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
         mRootLayout.setBackgroundColor(Color.TRANSPARENT);
+
+        // Dynamically handle soft keyboard (IME) insets in edge-to-edge mode
+        mRootLayout.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                int bottom = 0;
+                if (insets != null) {
+                    try {
+                        // API 30+ WindowInsets.Type.ime()
+                        Class<?> typeClass = Class.forName("android.view.WindowInsets$Type");
+                        java.lang.reflect.Method imeMethod = typeClass.getMethod("ime");
+                        int imeType = ((Integer) imeMethod.invoke(null)).intValue();
+                        java.lang.reflect.Method getInsetsMethod = WindowInsets.class.getMethod("getInsets", int.class);
+                        Object insetsObj = getInsetsMethod.invoke(insets, Integer.valueOf(imeType));
+                        if (insetsObj != null) {
+                            java.lang.reflect.Field bottomField = insetsObj.getClass().getField("bottom");
+                            bottom = bottomField.getInt(insetsObj);
+                        }
+                    } catch (Throwable ignored) {
+                        bottom = insets.getSystemWindowInsetBottom();
+                    }
+                    v.setPadding(0, 0, 0, bottom);
+                }
+                return insets;
+            }
+        });
 
         // 2. Full-screen Floating Card
         mCard = new LinearLayout(this);
