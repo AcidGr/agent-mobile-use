@@ -1172,6 +1172,119 @@ func main() {
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 
+	type TaskEvent struct {
+		Type       string `json:"type"`
+		Tool       string `json:"tool,omitempty"`
+		Summary    string `json:"summary,omitempty"`
+		Success    bool   `json:"success,omitempty"`
+		Error      string `json:"error,omitempty"`
+		DurationMs int64  `json:"duration_ms,omitempty"`
+		Timestamp  int64  `json:"timestamp"`
+	}
+
+	var (
+		taskMu       sync.RWMutex
+		isTaskActive bool
+		lastEvent    *TaskEvent
+		activePrompt string
+	)
+
+	mux.HandleFunc("/api/task_event", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		var ev TaskEvent
+		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		taskMu.Lock()
+		lastEvent = &ev
+		if ev.Type == "tool_start" {
+			isTaskActive = true
+		} else if ev.Type == "agent_error" || ev.Type == "session_disposed" {
+			isTaskActive = false
+		}
+		taskMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	mux.HandleFunc("/api/chat/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		taskMu.RLock()
+		resp := map[string]any{
+			"is_active":     isTaskActive,
+			"active_prompt": activePrompt,
+			"workspace":     "/storage/emulated/0/workspace",
+			"last_event":    lastEvent,
+		}
+		taskMu.RUnlock()
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/api/chat/send", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		var p struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil || strings.TrimSpace(p.Prompt) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Prompt cannot be empty"})
+			return
+		}
+
+		taskMu.Lock()
+		if isTaskActive {
+			taskMu.Unlock()
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: false,
+				Message: "Task is currently running in this workspace. Concurrency is forbidden.",
+			})
+			return
+		}
+		isTaskActive = true
+		activePrompt = strings.TrimSpace(p.Prompt)
+		lastEvent = &TaskEvent{
+			Type:      "task_initiated",
+			Summary:   "New task session dispatched",
+			Timestamp: time.Now().UnixMilli(),
+		}
+		taskMu.Unlock()
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "Task queued successfully",
+			"prompt":  activePrompt,
+		})
+	})
+
+	mux.HandleFunc("/api/chat/stop", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		taskMu.Lock()
+		isTaskActive = false
+		lastEvent = &TaskEvent{
+			Type:      "task_stopped",
+			Summary:   "Task stopped by user",
+			Timestamp: time.Now().UnixMilli(),
+		}
+		taskMu.Unlock()
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Task marked as stopped"})
+	})
+
 	mux.HandleFunc("/api/shell", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
