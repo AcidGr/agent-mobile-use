@@ -93,7 +93,7 @@ func setEdgeGlow(enable bool) {
 	if enable {
 		// 启动前先强行清理残留或被冻结的进程，彻底打破 ColorOS Hans 的拦截
 		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse").Run()
-		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
 		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -103,6 +103,42 @@ func setEdgeGlow(enable bool) {
 		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a STOP com.agent.mobileuse/.GlowService")
 		_ = cmd.Run()
 	}
+}
+
+var (
+	glowLastRestartMu sync.Mutex
+	glowLastRestart   time.Time
+)
+
+func isGlowServiceAlive() bool {
+	out, err := exec.Command("/system/bin/pidof", "com.agent.mobileuse").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return false
+	}
+	return true
+}
+
+func ensureGlowServiceAlive() {
+	if getCurrentMode() != "foreground" {
+		return
+	}
+	if isGlowServiceAlive() {
+		return
+	}
+
+	glowLastRestartMu.Lock()
+	now := time.Now()
+	if now.Sub(glowLastRestart) < 2*time.Second {
+		glowLastRestartMu.Unlock()
+		return
+	}
+	glowLastRestart = now
+	glowLastRestartMu.Unlock()
+
+	go func() {
+		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService").Run()
+	}()
 }
 
 func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
@@ -170,6 +206,7 @@ func ensureTargetReady() (StatusResp, int, error) {
 	st := getStatus()
 	targetDid := getTargetDisplayID(st)
 	if targetDid == 0 {
+		ensureGlowServiceAlive()
 		return st, 0, nil
 	}
 	if st.Status != "running" {
