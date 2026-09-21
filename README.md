@@ -96,7 +96,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载预编译好的刷机包：
-   **`agent-mobile-use-ksu-v4.2.zip`**
+   **`agent-mobile-use-ksu-v4.4.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
