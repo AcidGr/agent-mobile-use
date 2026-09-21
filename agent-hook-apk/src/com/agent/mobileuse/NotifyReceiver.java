@@ -65,7 +65,14 @@ public class NotifyReceiver extends BroadcastReceiver {
             if (title == null) title = "DeepSeek Mobile Agent";
             if (content == null) content = "";
 
-            postNotification(context, nm, tag, id, title, content, url, total, completed);
+            Log.i(TAG, "Received TODO signal: " + title + " (" + completed + "/" + total + ") - Notification suppressed");
+
+            // Cancel any existing todo notification to ensure notification drawer stays clean
+            nm.cancel(tag, id);
+
+            // Temporarily suppress native notification bar popup while preserving signal flow.
+            // Reserved for a more elegant notification mechanism in the future.
+            // postNotification(context, nm, tag, id, title, content, url, total, completed);
         }
     }
 

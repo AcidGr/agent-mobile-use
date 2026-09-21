@@ -1095,9 +1095,9 @@ func main() {
 			questionMu.Unlock()
 		}()
 
-		// Send broadcast to com.agent.mobileuse/.QuestionReceiver AND launch QuestionActivity directly!
+		// Wake up app and trigger notification banner in only_notify mode (bypasses ColorOS broadcast freeze, posts banner + sound, 0ms finish without card)
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast -f 0x10000000 --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null; /system/bin/am start -n com.agent.mobileuse/.QuestionActivity --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"REQ_ID="+p.RequestID,
 			"REQ_DATA="+string(bodyBytes),

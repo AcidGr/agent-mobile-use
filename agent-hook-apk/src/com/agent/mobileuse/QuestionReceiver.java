@@ -89,6 +89,16 @@ public class QuestionReceiver extends BroadcastReceiver {
                 Method enableVibration = channelClass.getMethod("enableVibration", boolean.class);
                 enableVibration.invoke(channel, true);
 
+                try {
+                    android.media.AudioAttributes audioAttributes = new android.media.AudioAttributes.Builder()
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .build();
+                    android.net.Uri soundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION);
+                    Method setSound = channelClass.getMethod("setSound", android.net.Uri.class, android.media.AudioAttributes.class);
+                    setSound.invoke(channel, soundUri, audioAttributes);
+                } catch (Throwable ignored) {}
+
                 Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
                 Log.d(TAG, "NotificationChannel created/ensured: " + CHANNEL_ID);
@@ -106,11 +116,21 @@ public class QuestionReceiver extends BroadcastReceiver {
             JSONArray questions = root.optJSONArray("questions");
             if (questions == null || questions.length() == 0) return;
 
+            int qCount = questions.length();
             JSONObject firstQ = questions.getJSONObject(0);
-            String questionId = firstQ.optString("id");
             String header = firstQ.optString("header", "DeepSeek Agent 需要您的选择");
-            String questionText = firstQ.optString("question", "");
-            JSONArray options = firstQ.optJSONArray("options");
+            if (qCount > 1) {
+                header = header + " (共 " + qCount + " 个问题)";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < qCount; i++) {
+                JSONObject q = questions.getJSONObject(i);
+                if (i > 0) sb.append("\n");
+                if (qCount > 1) sb.append((i + 1)).append(". ");
+                sb.append(q.optString("question", ""));
+            }
+            String questionText = sb.toString();
 
             Notification.Builder builder = new Notification.Builder(context);
             if (Build.VERSION.SDK_INT >= 26) {
@@ -124,7 +144,7 @@ public class QuestionReceiver extends BroadcastReceiver {
 
             builder.setContentTitle(header);
             builder.setContentText(questionText);
-            builder.setSubText("Agent 提问交互");
+            builder.setSubText("点击处理交互提问");
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
 
             try {
@@ -142,6 +162,7 @@ public class QuestionReceiver extends BroadcastReceiver {
             Intent cardIntent = new Intent(context, QuestionActivity.class);
             cardIntent.putExtra("request_id", requestId);
             cardIntent.putExtra("data", dataJson);
+            cardIntent.putExtra("only_notify", false);
             cardIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
             int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
@@ -151,24 +172,10 @@ public class QuestionReceiver extends BroadcastReceiver {
             PendingIntent contentPi = PendingIntent.getActivity(context, 101, cardIntent, piFlags);
             builder.setContentIntent(contentPi);
 
-            // If single question and <= 3 options, add direct action buttons on notification!
-            if (questions.length() == 1 && options != null && options.length() <= 3) {
-                for (int i = 0; i < options.length(); i++) {
-                    JSONObject opt = options.getJSONObject(i);
-                    String label = opt.optString("label");
-                    Intent directIntent = new Intent(context, QuestionReceiver.class);
-                    directIntent.setAction(ACTION_QUESTION_DIRECT_ANSWER);
-                    directIntent.putExtra("request_id", requestId);
-                    directIntent.putExtra("question_id", questionId);
-                    directIntent.putExtra("selected", label);
+            // Action button to open card
+            builder.addAction(R.drawable.dsh_whale_icon, "打开作答卡片", contentPi);
 
-                    PendingIntent optPi = PendingIntent.getBroadcast(context, 200 + i, directIntent, piFlags);
-                    builder.addAction(R.drawable.dsh_whale_icon, label, optPi);
-                }
-            } else {
-                builder.addAction(R.drawable.dsh_whale_icon, "打开选项卡片", contentPi);
-            }
-
+            builder.setDefaults(Notification.DEFAULT_ALL);
             builder.setPriority(2); // PRIORITY_MAX = 2
             builder.setAutoCancel(true);
             builder.setShowWhen(true);
