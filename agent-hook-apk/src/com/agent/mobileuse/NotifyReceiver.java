@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.text.Html;
@@ -21,11 +23,10 @@ public class NotifyReceiver extends BroadcastReceiver {
     public static final String ACTION_NOTIFY = "com.agent.mobileuse.ACTION_NOTIFY";
     public static final String ACTION_CLEAR = "com.agent.mobileuse.ACTION_CLEAR";
 
-    public static final String CHANNEL_ID = "dsh_agent_tasks";
-    public static final String CHANNEL_NAME = "DeepSeek Agent 任务待办";
+    public static final String CHANNEL_ID = "dsh_agent_completed";
+    public static final String CHANNEL_NAME = "DeepSeek Agent 任务完成";
     public static final String DEFAULT_TAG = "dsh_agent";
     public static final int DEFAULT_ID = 2020;
-    public static final String DEFAULT_URL = "http://127.0.0.1:3080";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -54,38 +55,53 @@ public class NotifyReceiver extends BroadcastReceiver {
         if (ACTION_NOTIFY.equals(action)) {
             String title = intent.getStringExtra("title");
             String content = intent.getStringExtra("content");
-            String url = intent.getStringExtra("url");
             int total = intent.getIntExtra("total", 0);
             int completed = intent.getIntExtra("completed", 0);
 
-            if (url == null || url.isEmpty()) {
-                url = DEFAULT_URL;
-            }
+            Log.i(TAG, "Received TODO signal: title=" + title + " (" + completed + "/" + total + ")");
 
-            if (title == null) title = "DeepSeek Mobile Agent";
-            if (content == null) content = "";
-
-            Log.i(TAG, "Received TODO signal: " + title + " (" + completed + "/" + total + ") - Notification suppressed");
-
-            // Cancel any existing todo notification to ensure notification drawer stays clean
+            // Cancel any previous notification to keep notification drawer clean
             nm.cancel(tag, id);
 
-            // Temporarily suppress native notification bar popup while preserving signal flow.
-            // Reserved for a more elegant notification mechanism in the future.
-            // postNotification(context, nm, tag, id, title, content, url, total, completed);
+            // Only trigger high-priority heads-up notification when all tasks are completed
+            if (total > 0 && completed >= total) {
+                postCompletedNotification(context, nm, tag, id, title, content, total, completed);
+            } else {
+                Log.i(TAG, "In-progress step (" + completed + "/" + total + ") suppressed to avoid disturbance.");
+            }
         }
     }
 
-    private static CharSequence parseHtml(String text) {
+    /**
+     * Clean all emojis, symbols, and formatting artifacts for a crisp, professional text presentation.
+     */
+    private static String cleanEmoji(String text) {
         if (text == null) return "";
-        if (!text.contains("<") && !text.contains("&")) {
-            return text;
+        // Replace unicode todo indicators with clean text prefixes
+        text = text.replace("☑", "[已完成] ")
+                   .replace("◉", "[进行中] ")
+                   .replace("☐", "[待办] ")
+                   .replace("🎉", "")
+                   .replace(">>", "");
+        // Remove unicode emoji ranges and miscellaneous symbols
+        text = text.replaceAll("[\\p{So}\\p{Cn}]", "");
+        text = text.replaceAll("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF]", "");
+        text = text.replaceAll("[\\u2600-\\u27BF]", "");
+        text = text.replaceAll("[\\uE000-\\uF8FF]", "");
+        return text.trim();
+    }
+
+    private static CharSequence parseCleanHtml(String text) {
+        if (text == null) return "";
+        String cleaned = cleanEmoji(text);
+        if (!cleaned.contains("<") && !cleaned.contains("&")) {
+            return cleaned;
         }
         try {
-            String formatted = text.replace("\n", "<br>");
+            String formatted = cleaned.replace("\n", "<br>");
             return Html.fromHtml(formatted);
         } catch (Throwable t) {
-            return text;
+            return cleaned;
         }
     }
 
@@ -94,11 +110,27 @@ public class NotifyReceiver extends BroadcastReceiver {
             try {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                // IMPORTANCE_DEFAULT = 3
-                Object channel = ctor.newInstance(CHANNEL_ID, CHANNEL_NAME, 3);
+                // IMPORTANCE_HIGH = 4 (Heads-up banner notification with sound and vibration)
+                Object channel = ctor.newInstance(CHANNEL_ID, CHANNEL_NAME, 4);
 
                 Method setDesc = channelClass.getMethod("setDescription", String.class);
-                setDesc.invoke(channel, "DeepSeek Harness Agent 任务待办同步通知");
+                setDesc.invoke(channel, "DeepSeek Harness Agent 任务全部完成提醒");
+
+                Method enableLights = channelClass.getMethod("enableLights", boolean.class);
+                enableLights.invoke(channel, true);
+
+                Method enableVibration = channelClass.getMethod("enableVibration", boolean.class);
+                enableVibration.invoke(channel, true);
+
+                try {
+                    AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .build();
+                    Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                    Method setSound = channelClass.getMethod("setSound", Uri.class, AudioAttributes.class);
+                    setSound.invoke(channel, soundUri, audioAttributes);
+                } catch (Throwable ignored) {}
 
                 Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
@@ -109,9 +141,9 @@ public class NotifyReceiver extends BroadcastReceiver {
         }
     }
 
-    private void postNotification(Context context, NotificationManager nm, String tag, int id,
-                                  String title, String content, String url,
-                                  int total, int completed) {
+    private void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
+                                          String title, String content,
+                                          int total, int completed) {
         try {
             ensureChannel(nm);
 
@@ -125,81 +157,67 @@ public class NotifyReceiver extends BroadcastReceiver {
                 }
             }
 
-            builder.setContentTitle(parseHtml(title));
+            // Crisp title without emoji
+            String cleanTitle = cleanEmoji(title);
+            if (cleanTitle.isEmpty() || !cleanTitle.contains("完成")) {
+                cleanTitle = "[Mobile Agent] 任务已全部完成 (" + completed + "/" + total + ")";
+            }
+            builder.setContentTitle(cleanTitle);
 
             // Summary text for collapsed notification view
             String summary = "";
             String[] lines = content.split("<br\\s*/?>|\n");
             for (String l : lines) {
-                String plain = l.replaceAll("<[^>]*>", "").trim();
-                if (!plain.isEmpty()) {
+                String plain = cleanEmoji(l.replaceAll("<[^>]*>", "").trim());
+                if (!plain.isEmpty() && !plain.startsWith("───")) {
                     summary = plain;
                     break;
                 }
             }
-            if (summary.isEmpty()) summary = content.replaceAll("<[^>]*>", "");
-            builder.setContentText(parseHtml(summary));
+            if (summary.isEmpty()) summary = "所有待办任务均已执行完毕";
+            builder.setContentText(summary);
 
-            // Native Progress Bar & SubText
-            if (total > 0) {
-                if (completed == total) {
-                    builder.setProgress(0, 0, false);
-                    builder.setSubText("已完成 • 100%");
-                } else {
-                    builder.setProgress(total, completed, false);
-                    int pct = (int) Math.round(((double) completed / (double) total) * 100);
-                    builder.setSubText("执行中 • " + completed + "/" + total + " (" + pct + "%)");
-                }
-            } else {
-                builder.setSubText("DeepSeek Harness");
-            }
+            builder.setSubText("执行完毕 · 点击进入控制台");
 
-            // BigTextStyle for rich HTML expandable view
+            // BigTextStyle for rich clean view without emoji
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            bigStyle.setBigContentTitle(parseHtml(title));
-            bigStyle.bigText(parseHtml(content));
+            bigStyle.setBigContentTitle(cleanTitle);
+            bigStyle.bigText(parseCleanHtml(content));
             builder.setStyle(bigStyle);
 
-            // Set Icons
+            // Set SmallIcon
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
+
+            // Set LargeIcon: Green Whale Avatar symbolizing successful completion
             try {
-                Bitmap avatar = BitmapFactory.decodeResource(context.getResources(), R.drawable.dsh_whale_avatar);
-                if (avatar != null) {
-                    builder.setLargeIcon(avatar);
+                Bitmap greenWhale = BitmapFactory.decodeResource(context.getResources(), R.drawable.dsh_whale_avatar_green);
+                if (greenWhale != null) {
+                    builder.setLargeIcon(greenWhale);
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "decodeResource avatar warning: " + t.getMessage());
+                Log.w(TAG, "decodeResource green whale avatar warning: " + t.getMessage());
             }
 
-            // Click Jump PendingIntent -> Web UI
-            PendingIntent pi = null;
-            try {
-                Intent viewIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                if (Build.VERSION.SDK_INT >= 23) {
-                    flags |= 0x04000000; // FLAG_IMMUTABLE
-                }
-                pi = PendingIntent.getActivity(context, 0, viewIntent, flags);
-                builder.setContentIntent(pi);
-            } catch (Throwable t) {
-                Log.e(TAG, "Failed to create PendingIntent: " + t.getMessage(), t);
+            // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
+            Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
+            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) {
+                flags |= 0x04000000; // FLAG_IMMUTABLE
             }
+            PendingIntent pi = PendingIntent.getActivity(context, 0, overlayIntent, flags);
+            builder.setContentIntent(pi);
+            builder.setAutoCancel(true); // Dismiss notification when clicked
 
-            if (pi != null) {
-                builder.addAction(R.drawable.dsh_whale_icon, "进入控制台", pi);
-            }
-
-            builder.setPriority(1); // Notification.PRIORITY_HIGH = 1
+            builder.setPriority(2); // Notification.PRIORITY_MAX = 2
             builder.setShowWhen(true);
             builder.setOngoing(false);
-            builder.setAutoCancel(false);
 
             Notification notification = builder.build();
             nm.notify(tag, id, notification);
-            Log.i(TAG, "Rich HTML Notification posted successfully: tag=" + tag + ", id=" + id);
+            Log.i(TAG, "Task completed heads-up notification posted: tag=" + tag + ", id=" + id);
         } catch (Throwable t) {
-            Log.e(TAG, "postNotification failed: " + t.getMessage(), t);
+            Log.e(TAG, "postCompletedNotification failed: " + t.getMessage(), t);
         }
     }
 }
