@@ -46,6 +46,9 @@ public class HookEntry implements IXposedHookLoadPackage {
 
         // Isolate InputMethodManagerService (IME) to prevent soft keyboard popup on Display 0
         hookImmsDisplayIsolation(cl);
+
+        // Intercept Action Button on OnePlus 13 (ColorOS) to launch DemoDialogActivity
+        hookActionButton(cl);
     }
 
     private void hookSystemUI(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -124,6 +127,50 @@ public class HookEntry implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {
             XposedBridge.log("[AgentMobileUseHook] Failed to hook IMMS: " + t.getMessage());
+        }
+    }
+
+    private void hookActionButton(ClassLoader cl) {
+        try {
+            Class<?> strategyClass = XposedHelpers.findClass("com.android.server.policy.StrategyActionButtonKeyLaunchApp", cl);
+            XposedBridge.hookAllMethods(strategyClass, "interceptActionKeyDown", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    android.util.Log.i("AgentMobileUseHook", "Action Button key down intercepted!");
+                    Context ctx = null;
+                    try {
+                        java.lang.reflect.Field f = param.thisObject.getClass().getDeclaredField("mContext");
+                        f.setAccessible(true);
+                        ctx = (Context) f.get(param.thisObject);
+                    } catch (Throwable t) {
+                        android.util.Log.w("AgentMobileUseHook", "Could not get mContext via reflection: " + t.getMessage());
+                    }
+
+                    if (ctx != null) {
+                        try {
+                            Intent intent = new Intent();
+                            intent.setClassName("com.agent.mobileuse", "com.agent.mobileuse.DemoDialogActivity");
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                            ctx.startActivity(intent);
+                            android.util.Log.i("AgentMobileUseHook", "DemoDialogActivity launched successfully from Action Button!");
+                        } catch (Throwable t) {
+                            android.util.Log.e("AgentMobileUseHook", "Failed to launch DemoDialogActivity: " + t.getMessage(), t);
+                        }
+                    }
+                    param.setResult(null);
+                }
+            });
+
+            XposedBridge.hookAllMethods(strategyClass, "interceptActionKeyUp", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    param.setResult(null);
+                }
+            });
+
+            XposedBridge.log("[AgentMobileUseHook] StrategyActionButtonKeyLaunchApp hooked successfully!");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook StrategyActionButtonKeyLaunchApp: " + t.getMessage());
         }
     }
 }
