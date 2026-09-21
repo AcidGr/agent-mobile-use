@@ -27,6 +27,10 @@
             </intent-filter>
         </service>
 
+        <service
+            android:name="com.agent.mobileuse.NotifyService"
+            android:exported="true" />
+
         <activity
             android:name=".QuestionActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"

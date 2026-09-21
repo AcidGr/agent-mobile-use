@@ -1026,10 +1026,11 @@ func main() {
 		// Ensure process is thawed if frozen by ColorOS Hans/Freezer
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
 
-		// If this is a completion notification, use Activity wake-up (am start -f 0x18000000)
-		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
+		// If this is a completion notification, use NotifyService (am start-service)
+		// which immediately wakes the process in background, posts high-priority notification and stops itself.
+		// Absolutely DOES NOT touch or disrupt ActivityStack, keeping DemoDialogActivity alive in background!
 		if isCompletedStr == "true" {
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_COMPLETED --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"NOTIFY_TITLE="+p.Title,
 				"NOTIFY_TAG="+p.Tag,
@@ -1119,9 +1120,10 @@ func main() {
 			questionMu.Unlock()
 		}()
 
-		// Wake up process and trigger notification banner via Activity launch in 0ms without interactive card
+		// Wake up process and trigger notification banner via NotifyService (am start-service)
+		// Absolutely DOES NOT touch or disrupt ActivityStack, keeping DemoDialogActivity alive in background!
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"REQ_ID="+p.RequestID,
 			"REQ_DATA="+string(bodyBytes),
