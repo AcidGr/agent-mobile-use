@@ -184,13 +184,10 @@ func handoffToBackground() map[string]interface{} {
 		}
 	}
 
-	// 2. 主屏退回桌面
-	_ = exec.Command("/system/bin/input", "-d", "0", "keyevent", "3").Run()
-
-	// 3. 模式设置为 background，并熄灭光效
+	// 2. 模式设置为 background，并熄灭光效
 	setCurrentMode("background")
 
-	// 4. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
+	// 3. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
 	setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display by user. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
 
 	return map[string]interface{}{
