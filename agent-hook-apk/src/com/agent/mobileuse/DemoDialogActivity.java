@@ -55,14 +55,20 @@ public class DemoDialogActivity extends Activity {
         if (window != null) {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-            );
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
 
         initBaseUI();
         queryWorkspaceStatus();
+    }
+
+    @Override
+    public void finish() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null && getCurrentFocus() != null) {
+            imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
+        }
+        super.finish();
     }
 
     @Override
@@ -85,28 +91,43 @@ public class DemoDialogActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        mRootLayout.setBackgroundColor(0x70000000); // 44% dark dim
-        mRootLayout.setClickable(true); // Consume backdrop clicks to prevent dismissal
+        mRootLayout.setBackgroundColor(Color.TRANSPARENT);
+        mRootLayout.setClickable(true);
+        mRootLayout.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
 
         mCard = new LinearLayout(this);
         mCard.setOrientation(LinearLayout.VERTICAL);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM
+            Gravity.CENTER
         );
+        int marginH = dpToPx(24);
+        cardLp.leftMargin = marginH;
+        cardLp.rightMargin = marginH;
         mCard.setLayoutParams(cardLp);
         mCard.setClickable(true);
+        mCard.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                // Consume click inside card to prevent backdrop dismiss
+            }
+        });
 
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setColor(0xFF1E2026); // Dark sleek card
-        float r = dpToPx(24);
-        cardBg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        cardBg.setCornerRadius(dpToPx(20));
+        cardBg.setStroke(dpToPx(1), 0xFF383D4A);
         mCard.setBackground(cardBg);
 
-        int padH = dpToPx(24);
-        int padV = dpToPx(16);
-        mCard.setPadding(padH, padV, padH, padV + dpToPx(24));
+        int padH = dpToPx(20);
+        int padV = dpToPx(20);
+        mCard.setPadding(padH, padV, padH, padV);
 
         mRootLayout.addView(mCard);
         setContentView(mRootLayout);
@@ -168,18 +189,6 @@ public class DemoDialogActivity extends Activity {
         mIsPolling = false;
         mCard.removeAllViews();
 
-        // Top drag handle
-        View handle = new View(this);
-        LinearLayout.LayoutParams handleLp = new LinearLayout.LayoutParams(dpToPx(40), dpToPx(4));
-        handleLp.gravity = Gravity.CENTER_HORIZONTAL;
-        handleLp.bottomMargin = dpToPx(16);
-        handle.setLayoutParams(handleLp);
-        GradientDrawable handleBg = new GradientDrawable();
-        handleBg.setColor(0x44FFFFFF);
-        handleBg.setCornerRadius(dpToPx(2));
-        handle.setBackground(handleBg);
-        mCard.addView(handle);
-
         // Header row
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -195,31 +204,12 @@ public class DemoDialogActivity extends Activity {
         titleTv.setTextColor(Color.WHITE);
         titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
         titleTv.setLayoutParams(titleLp);
         headerRow.addView(titleTv);
-
-        TextView closeBtn = new TextView(this);
-        closeBtn.setText("✕");
-        closeBtn.setTextColor(0xFFB0B5C0);
-        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        closeBtn.setGravity(Gravity.CENTER);
-        int btnSize = dpToPx(32);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(btnSize, btnSize);
-        closeLp.leftMargin = dpToPx(12);
-        closeBtn.setLayoutParams(closeLp);
-        GradientDrawable closeBg = new GradientDrawable();
-        closeBg.setColor(0x22FFFFFF);
-        closeBg.setCornerRadius(btnSize / 2f);
-        closeBtn.setBackground(closeBg);
-        closeBtn.setClickable(true);
-        closeBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                finish();
-            }
-        });
-        headerRow.addView(closeBtn);
         mCard.addView(headerRow);
 
         // Workspace Badge
@@ -371,18 +361,6 @@ public class DemoDialogActivity extends Activity {
         InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (imm != null) imm.hideSoftInputFromWindow(mCard.getWindowToken(), 0);
 
-        // Drag handle
-        View handle = new View(this);
-        LinearLayout.LayoutParams handleLp = new LinearLayout.LayoutParams(dpToPx(40), dpToPx(4));
-        handleLp.gravity = Gravity.CENTER_HORIZONTAL;
-        handleLp.bottomMargin = dpToPx(16);
-        handle.setLayoutParams(handleLp);
-        GradientDrawable handleBg = new GradientDrawable();
-        handleBg.setColor(0x44FFFFFF);
-        handleBg.setCornerRadius(dpToPx(2));
-        handle.setBackground(handleBg);
-        mCard.addView(handle);
-
         // Header Row
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -405,31 +383,12 @@ public class DemoDialogActivity extends Activity {
         mStatusTitle.setTextColor(Color.WHITE);
         mStatusTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         mStatusTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
         mStatusTitle.setLayoutParams(titleLp);
         headerRow.addView(mStatusTitle);
-
-        TextView closeBtn = new TextView(this);
-        closeBtn.setText("✕");
-        closeBtn.setTextColor(0xFFB0B5C0);
-        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        closeBtn.setGravity(Gravity.CENTER);
-        int btnSize = dpToPx(32);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(btnSize, btnSize);
-        closeLp.leftMargin = dpToPx(12);
-        closeBtn.setLayoutParams(closeLp);
-        GradientDrawable closeBg = new GradientDrawable();
-        closeBg.setColor(0x22FFFFFF);
-        closeBg.setCornerRadius(btnSize / 2f);
-        closeBtn.setBackground(closeBg);
-        closeBtn.setClickable(true);
-        closeBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                finish();
-            }
-        });
-        headerRow.addView(closeBtn);
         mCard.addView(headerRow);
 
         // Workspace Label
