@@ -72,7 +72,7 @@ public class QuestionReceiver extends BroadcastReceiver {
         }
     }
 
-    private void ensureChannel(NotificationManager nm) {
+    public static void ensureChannel(NotificationManager nm) {
         if (Build.VERSION.SDK_INT >= 26) {
             try {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
@@ -98,7 +98,7 @@ public class QuestionReceiver extends BroadcastReceiver {
         }
     }
 
-    private void showQuestionNotification(Context context, NotificationManager nm, String requestId, String dataJson) {
+    public static void showQuestionNotification(Context context, NotificationManager nm, String requestId, String dataJson) {
         try {
             ensureChannel(nm);
 

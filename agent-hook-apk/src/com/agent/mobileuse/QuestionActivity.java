@@ -71,6 +71,14 @@ public class QuestionActivity extends Activity {
             return;
         }
 
+        // Ensure notification is posted as well
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                QuestionReceiver.showQuestionNotification(this, nm, mRequestId, mDataJson);
+            }
+        } catch (Throwable ignored) {}
+
         // Register dismiss receiver to close card if cancelled from Web
         mDismissReceiver = new BroadcastReceiver() {
             @Override
