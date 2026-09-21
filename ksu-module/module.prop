@@ -3,4 +3,4 @@ name=Agent Mobile Sandbox & Tools
 version=v4.9
 versionCode=49
 author=酸小明
-description=工业级后台独立虚拟副屏与全能 Mobile Use 最终完全体 (侧键Action物理按键无Emoji双模态沉浸交互弹窗、会话接力与防并发锁定、实时工具调用监控、Display状态驱动自愈点灯、前后台无缝切换、REST API、主屏100%隐形静默)
+description=工业级后台独立虚拟副屏与全能 Mobile Use 最终完全体 (侧键Action物理按键唤出沉浸Web控制台、Cookie免密鉴权、Display状态驱动自愈点灯、前后台无缝切换、REST API、主屏100%隐形静默)

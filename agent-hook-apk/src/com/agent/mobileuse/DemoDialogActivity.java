@@ -2,47 +2,52 @@ package com.agent.mobileuse;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
+import android.util.DisplayMetrics;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.EditText;
+import android.webkit.CookieManager;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.File;
+import java.io.FileInputStream;
+import java.security.MessageDigest;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 public class DemoDialogActivity extends Activity {
     private static final String TAG = "DemoDialogActivity";
-    private static final String BASE_URL = "http://127.0.0.1:3070";
+    private static final String DSH_WEB_URL = "http://127.0.0.1:3080/";
+    private static final String DEFAULT_SECRET = "5E8js7iGeZGFiTXVT1Mi0ZnkBqEXqChPpZ2rPT1X0u8";
 
     private Handler mMainHandler;
     private FrameLayout mRootLayout;
     private LinearLayout mCard;
-    private boolean mIsActiveTask = false;
-    private boolean mIsPolling = false;
-
-    // View references in State B (Monitoring)
-    private TextView mStatusDot;
-    private TextView mStatusTitle;
-    private TextView mToolNameTv;
-    private TextView mToolSummaryTv;
-    private TextView mWorkspaceBadge;
+    private WebView mWebView;
+    private ProgressBar mProgressBar;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,22 +64,7 @@ public class DemoDialogActivity extends Activity {
         }
 
         initBaseUI();
-        queryWorkspaceStatus();
-    }
-
-    @Override
-    public void finish() {
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null && getCurrentFocus() != null) {
-            imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
-        }
-        super.finish();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        mIsPolling = false;
+        loadWebConsole();
     }
 
     private int dpToPx(int dp) {
@@ -86,6 +76,9 @@ public class DemoDialogActivity extends Activity {
     }
 
     private void initBaseUI() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+
+        // 1. Root backdrop: transparent, click outside to close
         mRootLayout = new FrameLayout(this);
         mRootLayout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -100,496 +93,353 @@ public class DemoDialogActivity extends Activity {
             }
         });
 
+        // 2. Centered Floating Card
         mCard = new LinearLayout(this);
         mCard.setOrientation(LinearLayout.VERTICAL);
+
+        int cardWidth = Math.min(dm.widthPixels - dpToPx(24), dpToPx(560));
+        int cardHeight = (int) (dm.heightPixels * 0.84f);
+
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
+            cardWidth,
+            cardHeight,
             Gravity.CENTER
         );
-        int marginH = dpToPx(24);
-        cardLp.leftMargin = marginH;
-        cardLp.rightMargin = marginH;
         mCard.setLayoutParams(cardLp);
         mCard.setClickable(true);
         mCard.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // Consume click inside card to prevent backdrop dismiss
+                // Consume click inside card so backdrop dismiss is not triggered
             }
         });
 
+        // Dark card background with 20dp corners and subtle border
+        final int cornerRadius = dpToPx(20);
         GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(0xFF1E2026); // Dark sleek card
-        cardBg.setCornerRadius(dpToPx(20));
+        cardBg.setColor(0xFF1E2026);
+        cardBg.setCornerRadius(cornerRadius);
         cardBg.setStroke(dpToPx(1), 0xFF383D4A);
         mCard.setBackground(cardBg);
 
-        int padH = dpToPx(20);
-        int padV = dpToPx(20);
-        mCard.setPadding(padH, padV, padH, padV);
-
-        mRootLayout.addView(mCard);
-        setContentView(mRootLayout);
-    }
-
-    private void queryWorkspaceStatus() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    URL url = new URL(BASE_URL + "/api/chat/status");
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(2000);
-                    conn.setReadTimeout(2000);
-
-                    int code = conn.getResponseCode();
-                    if (code == 200) {
-                        BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                        StringBuilder sb = new StringBuilder();
-                        String line;
-                        while ((line = br.readLine()) != null) {
-                            sb.append(line);
-                        }
-                        br.close();
-
-                        final JSONObject obj = new JSONObject(sb.toString());
-                        final boolean isActive = obj.optBoolean("is_active", false);
-
-                        mMainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (isActive) {
-                                    renderStateB(obj);
-                                } else {
-                                    renderStateA();
-                                }
-                            }
-                        });
-                        return;
-                    }
-                } catch (Throwable t) {
-                    android.util.Log.w(TAG, "Query status failed: " + t.getMessage());
+        // Clip children (WebView) to rounded outline
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            mCard.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius);
                 }
+            });
+            mCard.setClipToOutline(true);
+        }
 
-                // Fallback to State A
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        renderStateA();
-                    }
-                });
-            }
-        }).start();
-    }
-
-    // State A: Idle input mode (No emoji, sleek cyberpunk dark UI)
-    private void renderStateA() {
-        mIsPolling = false;
-        mCard.removeAllViews();
-
-        // Header row
+        // 3. Header Bar
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams headerRowLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        headerRow.setLayoutParams(headerRowLp);
-
-        TextView titleTv = new TextView(this);
-        titleTv.setText("DeepSeek Mobile Agent");
-        titleTv.setTextColor(Color.WHITE);
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        titleTv.setLayoutParams(titleLp);
-        headerRow.addView(titleTv);
-        mCard.addView(headerRow);
-
-        // Workspace Badge
-        TextView wsBadge = new TextView(this);
-        wsBadge.setText("工作区: /storage/emulated/0/workspace");
-        wsBadge.setTextColor(0xFF8A90A0);
-        wsBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        LinearLayout.LayoutParams wsLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        wsLp.topMargin = dpToPx(6);
-        wsLp.bottomMargin = dpToPx(16);
-        wsBadge.setLayoutParams(wsLp);
-        mCard.addView(wsBadge);
-
-        // Input EditText
-        final EditText inputEt = new EditText(this);
-        inputEt.setHint("输入任务指令，例如：检查便签并整理待办...");
-        inputEt.setHintTextColor(0xFF686F80);
-        inputEt.setTextColor(Color.WHITE);
-        inputEt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        inputEt.setMinLines(3);
-        inputEt.setMaxLines(6);
-        inputEt.setGravity(Gravity.TOP | Gravity.LEFT);
-        inputEt.setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(12));
-
-        GradientDrawable inputBg = new GradientDrawable();
-        inputBg.setColor(0xFF282B33);
-        inputBg.setCornerRadius(dpToPx(12));
-        inputBg.setStroke(dpToPx(1), 0xFF383D4A);
-        inputEt.setBackground(inputBg);
-
-        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        inputLp.bottomMargin = dpToPx(16);
-        inputEt.setLayoutParams(inputLp);
-        mCard.addView(inputEt);
-
-        // Action Buttons Row: Send Button
-        final TextView sendBtn = new TextView(this);
-        sendBtn.setText("发送指令并开始");
-        sendBtn.setGravity(Gravity.CENTER);
-        sendBtn.setTextColor(Color.WHITE);
-        sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        sendBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            dpToPx(48)
-        );
-        sendBtn.setLayoutParams(btnLp);
-        GradientDrawable btnBg = new GradientDrawable();
-        btnBg.setColor(0xFF0066FF);
-        btnBg.setCornerRadius(dpToPx(12));
-        sendBtn.setBackground(btnBg);
-
-        sendBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                String text = inputEt.getText().toString().trim();
-                if (text.isEmpty()) return;
-
-                sendBtn.setEnabled(false);
-                sendBtn.setText("正在调度任务...");
-                submitPrompt(text);
-            }
-        });
-        mCard.addView(sendBtn);
-
-        // Request focus and show keyboard
-        inputEt.requestFocus();
-        mMainHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                if (imm != null) imm.showSoftInput(inputEt, InputMethodManager.SHOW_IMPLICIT);
-            }
-        }, 150);
-    }
-
-    private void submitPrompt(final String prompt) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    URL url = new URL(BASE_URL + "/api/chat/send");
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-                    conn.setDoOutput(true);
-                    conn.setConnectTimeout(3000);
-                    conn.setReadTimeout(3000);
-
-                    JSONObject payload = new JSONObject();
-                    payload.put("prompt", prompt);
-
-                    byte[] bytes = payload.toString().getBytes("UTF-8");
-                    conn.setFixedLengthStreamingMode(bytes.length);
-                    OutputStream os = conn.getOutputStream();
-                    os.write(bytes);
-                    os.flush();
-                    os.close();
-
-                    int code = conn.getResponseCode();
-                    if (code == 200) {
-                        BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                        StringBuilder sb = new StringBuilder();
-                        String line;
-                        while ((line = br.readLine()) != null) sb.append(line);
-                        br.close();
-
-                        final JSONObject res = new JSONObject(sb.toString());
-                        mMainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                renderStateB(res);
-                            }
-                        });
-                        return;
-                    }
-                } catch (Throwable t) {
-                    android.util.Log.e(TAG, "submitPrompt failed: " + t.getMessage(), t);
-                }
-
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        // Switch to monitoring state
-                        JSONObject mock = new JSONObject();
-                        try {
-                            mock.put("is_active", true);
-                            mock.put("active_prompt", prompt);
-                        } catch (Throwable ignored) {}
-                        renderStateB(mock);
-                    }
-                });
-            }
-        }).start();
-    }
-
-    // State B: Active Task Monitoring (Strictly No Emoji, Professional Technical Monitor)
-    private void renderStateB(JSONObject statusObj) {
-        mIsPolling = true;
-        mCard.removeAllViews();
-
-        // Hide soft keyboard if visible
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null) imm.hideSoftInputFromWindow(mCard.getWindowToken(), 0);
-
-        // Header Row
-        LinearLayout headerRow = new LinearLayout(this);
-        headerRow.setOrientation(LinearLayout.HORIZONTAL);
-        headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams headerRowLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        headerRow.setLayoutParams(headerRowLp);
-
-        // Status Breathing Dot
-        mStatusDot = new TextView(this);
-        mStatusDot.setText("● ");
-        mStatusDot.setTextColor(0xFF00E5FF); // Electric Cyan
-        mStatusDot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        headerRow.addView(mStatusDot);
-
-        mStatusTitle = new TextView(this);
-        mStatusTitle.setText("任务执行中 [会话接力]");
-        mStatusTitle.setTextColor(Color.WHITE);
-        mStatusTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        mStatusTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        mStatusTitle.setLayoutParams(titleLp);
-        headerRow.addView(mStatusTitle);
-        mCard.addView(headerRow);
-
-        // Workspace Label
-        mWorkspaceBadge = new TextView(this);
-        mWorkspaceBadge.setText("工作区: /storage/emulated/0/workspace (并发已锁定)");
-        mWorkspaceBadge.setTextColor(0xFF00E5FF);
-        mWorkspaceBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        LinearLayout.LayoutParams wsLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        wsLp.topMargin = dpToPx(4);
-        wsLp.bottomMargin = dpToPx(14);
-        mWorkspaceBadge.setLayoutParams(wsLp);
-        mCard.addView(mWorkspaceBadge);
-
-        // Live Tool Card Container
-        LinearLayout toolCard = new LinearLayout(this);
-        toolCard.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams toolCardLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        toolCardLp.bottomMargin = dpToPx(16);
-        toolCard.setLayoutParams(toolCardLp);
-        toolCard.setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14));
-
-        GradientDrawable toolCardBg = new GradientDrawable();
-        toolCardBg.setColor(0xFF282B33);
-        toolCardBg.setCornerRadius(dpToPx(12));
-        toolCardBg.setStroke(dpToPx(1), 0xFF383D4A);
-        toolCard.setBackground(toolCardBg);
-
-        // Tool Title Line
-        mToolNameTv = new TextView(this);
-        mToolNameTv.setText("[当前动作] 正在连接执行管道...");
-        mToolNameTv.setTextColor(0xFFE0E5F0);
-        mToolNameTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        mToolNameTv.setTypeface(Typeface.DEFAULT_BOLD);
-        toolCard.addView(mToolNameTv);
-
-        // Tool Summary Line
-        mToolSummaryTv = new TextView(this);
-        mToolSummaryTv.setText("等待底层工具分发...");
-        mToolSummaryTv.setTextColor(0xFF9095A0);
-        mToolSummaryTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        LinearLayout.LayoutParams summaryLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        summaryLp.topMargin = dpToPx(6);
-        mToolSummaryTv.setLayoutParams(summaryLp);
-        toolCard.addView(mToolSummaryTv);
-
-        mCard.addView(toolCard);
-
-        // Bottom Action Bar
-        LinearLayout bottomRow = new LinearLayout(this);
-        bottomRow.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams bottomRowLp = new LinearLayout.LayoutParams(
+        headerRow.setBackgroundColor(0xFF181A20);
+        int padH = dpToPx(16);
+        int padV = dpToPx(10);
+        headerRow.setPadding(padH, padV, padH, padV);
+        LinearLayout.LayoutParams headerLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             dpToPx(44)
         );
-        bottomRow.setLayoutParams(bottomRowLp);
+        headerRow.setLayoutParams(headerLp);
 
-        // Stop Task Button
-        TextView stopBtn = new TextView(this);
-        stopBtn.setText("中止任务");
-        stopBtn.setGravity(Gravity.CENTER);
-        stopBtn.setTextColor(0xFFFF4D4F);
-        stopBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        stopBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(0, dpToPx(44), 1.0f);
-        stopLp.rightMargin = dpToPx(8);
-        stopBtn.setLayoutParams(stopLp);
-        GradientDrawable stopBg = new GradientDrawable();
-        stopBg.setColor(0x22FF4D4F);
-        stopBg.setCornerRadius(dpToPx(10));
-        stopBg.setStroke(dpToPx(1), 0x66FF4D4F);
-        stopBtn.setBackground(stopBg);
-        stopBtn.setOnClickListener(new View.OnClickListener() {
+        // Status Dot
+        TextView dotTv = new TextView(this);
+        dotTv.setText("● ");
+        dotTv.setTextColor(0xFF00E5FF);
+        dotTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        headerRow.addView(dotTv);
+
+        // Title
+        TextView titleTv = new TextView(this);
+        titleTv.setText("DeepSeek Agent 控制台");
+        titleTv.setTextColor(Color.WHITE);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        titleTv.setLayoutParams(titleLp);
+        headerRow.addView(titleTv);
+
+        int btnSize = dpToPx(30);
+
+        // Reload Button
+        TextView refreshBtn = new TextView(this);
+        refreshBtn.setText("↻");
+        refreshBtn.setTextColor(0xFFB0B5C0);
+        refreshBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        refreshBtn.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams refLp = new LinearLayout.LayoutParams(btnSize, btnSize);
+        refLp.rightMargin = dpToPx(8);
+        refreshBtn.setLayoutParams(refLp);
+        GradientDrawable refBg = new GradientDrawable();
+        refBg.setColor(0x22FFFFFF);
+        refBg.setCornerRadius(btnSize / 2f);
+        refreshBtn.setBackground(refBg);
+        refreshBtn.setClickable(true);
+        refreshBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                stopActiveTask();
+                if (mWebView != null) {
+                    mWebView.reload();
+                }
             }
         });
-        bottomRow.addView(stopBtn);
+        headerRow.addView(refreshBtn);
 
-        // Dismiss View Button
-        TextView dismissBtn = new TextView(this);
-        dismissBtn.setText("收起面板");
-        dismissBtn.setGravity(Gravity.CENTER);
-        dismissBtn.setTextColor(Color.WHITE);
-        dismissBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        LinearLayout.LayoutParams disLp = new LinearLayout.LayoutParams(0, dpToPx(44), 1.0f);
-        disLp.leftMargin = dpToPx(8);
-        dismissBtn.setLayoutParams(disLp);
-        GradientDrawable disBg = new GradientDrawable();
-        disBg.setColor(0xFF383D4A);
-        disBg.setCornerRadius(dpToPx(10));
-        dismissBtn.setBackground(disBg);
-        dismissBtn.setOnClickListener(new View.OnClickListener() {
+        // New Session Button
+        TextView newBtn = new TextView(this);
+        newBtn.setText("+");
+        newBtn.setTextColor(Color.WHITE);
+        newBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        newBtn.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams newLp = new LinearLayout.LayoutParams(btnSize, btnSize);
+        newLp.rightMargin = dpToPx(8);
+        newBtn.setLayoutParams(newLp);
+        GradientDrawable newBg = new GradientDrawable();
+        newBg.setColor(0xFF0066FF);
+        newBg.setCornerRadius(btnSize / 2f);
+        newBtn.setBackground(newBg);
+        newBtn.setClickable(true);
+        newBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mWebView != null) {
+                    mWebView.loadUrl(DSH_WEB_URL);
+                }
+            }
+        });
+        headerRow.addView(newBtn);
+
+        // Close Button
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(0xFFB0B5C0);
+        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        closeBtn.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(btnSize, btnSize);
+        closeBtn.setLayoutParams(closeLp);
+        GradientDrawable closeBg = new GradientDrawable();
+        closeBg.setColor(0x22FFFFFF);
+        closeBg.setCornerRadius(btnSize / 2f);
+        closeBtn.setBackground(closeBg);
+        closeBtn.setClickable(true);
+        closeBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 finish();
             }
         });
-        bottomRow.addView(dismissBtn);
+        headerRow.addView(closeBtn);
 
-        mCard.addView(bottomRow);
+        mCard.addView(headerRow);
 
-        // Start live polling loop (1000ms interval, strictly lightweight)
-        startLiveMonitoring();
+        // 4. Loading Progress Bar
+        mProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        mProgressBar.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dpToPx(2)
+        ));
+        mProgressBar.setMax(100);
+        mProgressBar.setVisibility(View.GONE);
+        mCard.addView(mProgressBar);
+
+        // 5. WebView Container
+        mWebView = new WebView(this);
+        LinearLayout.LayoutParams webLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1.0f
+        );
+        mWebView.setLayoutParams(webLp);
+        mWebView.setBackgroundColor(0xFF1E2026);
+
+        setupWebViewSettings();
+        mCard.addView(mWebView);
+
+        mRootLayout.addView(mCard);
+        setContentView(mRootLayout);
     }
 
-    private void startLiveMonitoring() {
-        new Thread(new Runnable() {
+    private void setupWebViewSettings() {
+        WebSettings ws = mWebView.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setDatabaseEnabled(true);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
+        ws.setUseWideViewPort(true);
+        ws.setLoadWithOverviewMode(true);
+        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+
+        // Allow internal SPA page navigation and redirects without opening external browser
+        mWebView.setWebViewClient(new WebViewClient() {
             @Override
-            public void run() {
-                while (mIsPolling) {
-                    try {
-                        URL url = new URL(BASE_URL + "/api/chat/status");
-                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                        conn.setRequestMethod("GET");
-                        conn.setConnectTimeout(1500);
-                        conn.setReadTimeout(1500);
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return false;
+            }
+        });
 
-                        int code = conn.getResponseCode();
-                        if (code == 200) {
-                            BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                            StringBuilder sb = new StringBuilder();
-                            String line;
-                            while ((line = br.readLine()) != null) sb.append(line);
-                            br.close();
-
-                            final JSONObject obj = new JSONObject(sb.toString());
-                            final boolean isActive = obj.optBoolean("is_active", false);
-                            final JSONObject lastEv = obj.optJSONObject("last_event");
-
-                            mMainHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    if (!mIsPolling) return;
-                                    if (!isActive) {
-                                        // Task completed
-                                        mStatusTitle.setText("任务已完成 [空闲]");
-                                        mStatusDot.setTextColor(0xFF00E676); // Green
-                                        mToolNameTv.setText("[执行完毕] 所有指令已处理完成");
-                                        mToolSummaryTv.setText("可点击收起面板或重新提交新任务");
-                                    } else if (lastEv != null) {
-                                        String tool = lastEv.optString("tool", "system");
-                                        String summary = lastEv.optString("summary", "");
-                                        String type = lastEv.optString("type", "");
-
-                                        if ("tool_start".equals(type)) {
-                                            mToolNameTv.setText("[正在执行] " + tool);
-                                            mToolSummaryTv.setText(summary.isEmpty() ? "调用参数处理中..." : summary);
-                                            mStatusDot.setTextColor(0xFF00E5FF);
-                                        } else if ("tool_end".equals(type)) {
-                                            boolean ok = lastEv.optBoolean("success", true);
-                                            long dur = lastEv.optLong("duration_ms", 0);
-                                            mToolNameTv.setText("[完成步骤] " + tool + (ok ? " (成功)" : " (失败)"));
-                                            mToolSummaryTv.setText("耗时 " + dur + "ms, 等待下一步指令...");
-                                            mStatusDot.setTextColor(ok ? 0xFF00E5FF : 0xFFFF4D4F);
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    } catch (Throwable ignored) {}
-
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        break;
+        mWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                if (mProgressBar != null) {
+                    if (newProgress < 100) {
+                        mProgressBar.setVisibility(View.VISIBLE);
+                        mProgressBar.setProgress(newProgress);
+                    } else {
+                        mProgressBar.setVisibility(View.GONE);
                     }
                 }
             }
-        }).start();
+        });
     }
 
-    private void stopActiveTask() {
+    private void loadWebConsole() {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                try {
-                    URL url = new URL(BASE_URL + "/api/chat/stop");
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setConnectTimeout(2000);
-                    conn.setReadTimeout(2000);
-                    conn.getResponseCode();
-                } catch (Throwable ignored) {}
+                // Ensure auth cookie is injected before navigation
+                setupAuthCookie();
 
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        renderStateA();
+                        if (mWebView != null) {
+                            Log.i(TAG, "Navigating WebView to: " + DSH_WEB_URL);
+                            mWebView.loadUrl(DSH_WEB_URL);
+                        }
                     }
                 });
             }
         }).start();
+    }
+
+    private void setupAuthCookie() {
+        try {
+            String cookie = getDshAuthCookie();
+            if (cookie != null && !cookie.isEmpty()) {
+                CookieManager cm = CookieManager.getInstance();
+                cm.setAcceptCookie(true);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cm.setAcceptThirdPartyCookies(mWebView, true);
+                }
+                cm.setCookie("http://127.0.0.1:3080/", cookie + "; Path=/; Max-Age=2505600");
+                cm.flush();
+                Log.i(TAG, "DSH auth cookie injected successfully into WebView");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to setup auth cookie: " + t.getMessage(), t);
+        }
+    }
+
+    public static String getDshAuthCookie() {
+        try {
+            String secret = DEFAULT_SECRET;
+            // Check if overridden in workspace file
+            try {
+                File credFile = new File("/storage/emulated/0/workspace/.dsh_secret");
+                if (credFile.exists() && credFile.length() > 0) {
+                    FileInputStream fis = new FileInputStream(credFile);
+                    byte[] buf = new byte[(int) credFile.length()];
+                    int read = fis.read(buf);
+                    fis.close();
+                    if (read > 0) {
+                        String s = new String(buf, 0, read, "UTF-8").trim();
+                        if (!s.isEmpty()) secret = s;
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            String authority = "127.0.0.1:3080";
+            byte[] secBytes = Base64.decode(secret, Base64.URL_SAFE);
+
+            // 1. cookie name: "dsh-auth-" + sha256(authority)
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] authHash = md.digest(authority.getBytes("UTF-8"));
+            String name = "dsh-auth-" + Base64.encodeToString(authHash, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+
+            // 2. payload
+            long now = System.currentTimeMillis();
+            long exp = now + 29L * 24 * 3600 * 1000;
+            JSONObject payload = new JSONObject();
+            payload.put("version", 1);
+            payload.put("authority", authority);
+            payload.put("issuedAt", now);
+            payload.put("expiresAt", exp);
+
+            byte[] payloadBytes = payload.toString().getBytes("UTF-8");
+            String body = Base64.encodeToString(payloadBytes, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+
+            // 3. HMAC-SHA256 signature
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secBytes, "HmacSHA256"));
+            byte[] sig = mac.doFinal(body.getBytes("UTF-8"));
+            String sigStr = Base64.encodeToString(sig, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+
+            return name + "=v1." + body + "." + sigStr;
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to generate cookie: " + t.getMessage(), t);
+            return null;
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (mWebView != null && mWebView.canGoBack()) {
+            mWebView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
+    @Override
+    public void finish() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null && getCurrentFocus() != null) {
+            imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
+        }
+        super.finish();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (mWebView != null) {
+            mWebView.onResume();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mWebView != null) {
+            mWebView.onPause();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mWebView != null) {
+            try {
+                mWebView.stopLoading();
+                mWebView.clearHistory();
+                ViewGroup parent = (ViewGroup) mWebView.getParent();
+                if (parent != null) {
+                    parent.removeView(mWebView);
+                }
+                mWebView.destroy();
+            } catch (Throwable t) {
+                Log.e(TAG, "Error cleaning up WebView: " + t.getMessage(), t);
+            }
+            mWebView = null;
+        }
     }
 }
