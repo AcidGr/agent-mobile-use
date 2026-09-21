@@ -57,14 +57,15 @@ public class NotifyReceiver extends BroadcastReceiver {
             String content = intent.getStringExtra("content");
             int total = intent.getIntExtra("total", 0);
             int completed = intent.getIntExtra("completed", 0);
+            boolean isCompleted = intent.getBooleanExtra("is_completed", false) || (total > 0 && completed >= total);
 
-            Log.i(TAG, "Received TODO signal: title=" + title + " (" + completed + "/" + total + ")");
+            Log.i(TAG, "Received notification signal: title=" + title + " (" + completed + "/" + total + ") isCompleted=" + isCompleted);
 
             // Cancel any previous notification to keep notification drawer clean
             nm.cancel(tag, id);
 
-            // Only trigger high-priority heads-up notification when all tasks are completed
-            if (total > 0 && completed >= total) {
+            // Trigger high-priority heads-up notification when task completion signal is given
+            if (isCompleted) {
                 postCompletedNotification(context, nm, tag, id, title, content, total, completed);
             } else {
                 Log.i(TAG, "In-progress step (" + completed + "/" + total + ") suppressed to avoid disturbance.");
@@ -160,7 +161,11 @@ public class NotifyReceiver extends BroadcastReceiver {
             // Crisp title without emoji
             String cleanTitle = cleanEmoji(title);
             if (cleanTitle.isEmpty() || !cleanTitle.contains("完成")) {
-                cleanTitle = "[Mobile Agent] 任务已全部完成 (" + completed + "/" + total + ")";
+                if (total > 0) {
+                    cleanTitle = "[Mobile Agent] 任务已全部完成 (" + completed + "/" + total + ")";
+                } else {
+                    cleanTitle = "[Mobile Agent] 任务已全部完成";
+                }
             }
             builder.setContentTitle(cleanTitle);
 
@@ -174,7 +179,7 @@ public class NotifyReceiver extends BroadcastReceiver {
                     break;
                 }
             }
-            if (summary.isEmpty()) summary = "所有待办任务均已执行完毕";
+            if (summary.isEmpty()) summary = "所有执行事项均已处理完毕";
             builder.setContentText(summary);
 
             builder.setSubText("执行完毕 · 点击进入控制台");
