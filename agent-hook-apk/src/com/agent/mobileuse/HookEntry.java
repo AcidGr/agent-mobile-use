@@ -139,9 +139,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                     android.util.Log.i("AgentMobileUseHook", "Action Button key down intercepted!");
                     Context ctx = null;
                     try {
-                        java.lang.reflect.Field f = param.thisObject.getClass().getDeclaredField("mContext");
-                        f.setAccessible(true);
-                        ctx = (Context) f.get(param.thisObject);
+                        Class<?> cur = param.thisObject.getClass();
+                        while (cur != null && ctx == null) {
+                            try {
+                                java.lang.reflect.Field f = cur.getDeclaredField("mContext");
+                                f.setAccessible(true);
+                                ctx = (Context) f.get(param.thisObject);
+                            } catch (NoSuchFieldException ignored) {
+                                cur = cur.getSuperclass();
+                            }
+                        }
                     } catch (Throwable t) {
                         android.util.Log.w("AgentMobileUseHook", "Could not get mContext via reflection: " + t.getMessage());
                     }
