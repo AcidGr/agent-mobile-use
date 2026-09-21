@@ -43,9 +43,9 @@ public class DemoDialogActivity extends Activity {
     private static final String DEFAULT_SECRET = "5E8js7iGeZGFiTXVT1Mi0ZnkBqEXqChPpZ2rPT1X0u8";
 
     public static class OverlayBridge {
-        private final Activity mActivity;
+        private final DemoDialogActivity mActivity;
 
-        public OverlayBridge(Activity activity) {
+        public OverlayBridge(DemoDialogActivity activity) {
             this.mActivity = activity;
         }
 
@@ -55,7 +55,20 @@ public class DemoDialogActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void close() {
+        public void minimize() {
+            if (mActivity != null) {
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mActivity.hideSoftInput();
+                        mActivity.moveTaskToBack(true);
+                    }
+                });
+            }
+        }
+
+        @JavascriptInterface
+        public void exit() {
             if (mActivity != null) {
                 mActivity.runOnUiThread(new Runnable() {
                     @Override
@@ -64,6 +77,11 @@ public class DemoDialogActivity extends Activity {
                     }
                 });
             }
+        }
+
+        @JavascriptInterface
+        public void close() {
+            minimize();
         }
     }
 
@@ -399,21 +417,35 @@ public class DemoDialogActivity extends Activity {
         }
     }
 
+    public void hideSoftInput() {
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                View currentFocus = getCurrentFocus();
+                if (currentFocus != null) {
+                    imm.hideSoftInputFromWindow(currentFocus.getWindowToken(), 0);
+                } else if (mWebView != null) {
+                    imm.hideSoftInputFromWindow(mWebView.getWindowToken(), 0);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Error hiding soft input: " + t.getMessage());
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (mWebView != null && mWebView.canGoBack()) {
             mWebView.goBack();
         } else {
-            super.onBackPressed();
+            hideSoftInput();
+            moveTaskToBack(true);
         }
     }
 
     @Override
     public void finish() {
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null && getCurrentFocus() != null) {
-            imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
-        }
+        hideSoftInput();
         super.finish();
     }
 
