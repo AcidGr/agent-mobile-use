@@ -2,7 +2,6 @@ package com.agent.mobileuse;
 
 import android.app.Activity;
 import android.graphics.Color;
-import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
@@ -16,11 +15,11 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -40,8 +39,33 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class DemoDialogActivity extends Activity {
     private static final String TAG = "DemoDialogActivity";
-    private static final String DSH_WEB_URL = "http://127.0.0.1:3080/";
+    private static final String DSH_WEB_URL = "http://127.0.0.1:3080/?ov=1";
     private static final String DEFAULT_SECRET = "5E8js7iGeZGFiTXVT1Mi0ZnkBqEXqChPpZ2rPT1X0u8";
+
+    public static class OverlayBridge {
+        private final Activity mActivity;
+
+        public OverlayBridge(Activity activity) {
+            this.mActivity = activity;
+        }
+
+        @JavascriptInterface
+        public boolean isOverlay() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public void close() {
+            if (mActivity != null) {
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mActivity.finish();
+                    }
+                });
+            }
+        }
+    }
 
     private Handler mMainHandler;
     private FrameLayout mRootLayout;
@@ -93,48 +117,28 @@ public class DemoDialogActivity extends Activity {
             }
         });
 
-        // 2. Centered Floating Card
+        // 2. Bottom-aligned Floating Card
         mCard = new LinearLayout(this);
         mCard.setOrientation(LinearLayout.VERTICAL);
 
-        int cardWidth = Math.min(dm.widthPixels - dpToPx(24), dpToPx(560));
-        int cardHeight = (int) (dm.heightPixels * 0.84f);
+        int cardWidth = Math.min(dm.widthPixels - dpToPx(16), dpToPx(560));
+        int cardHeight = (int) (dm.heightPixels * 0.90f);
 
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
             cardWidth,
             cardHeight,
-            Gravity.CENTER
+            Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL
         );
+        cardLp.bottomMargin = dpToPx(8);
         mCard.setLayoutParams(cardLp);
-        mCard.setClickable(true);
-        mCard.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                // Consume click inside card so backdrop dismiss is not triggered
-            }
-        });
+        mCard.setClickable(false);
 
-        // Dark card background with 20dp corners and subtle border
-        final int cornerRadius = dpToPx(20);
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(0xFF1E2026);
-        cardBg.setCornerRadius(cornerRadius);
-        cardBg.setStroke(dpToPx(1), 0xFF383D4A);
-        mCard.setBackground(cardBg);
+        // Fully transparent card background
+        mCard.setBackgroundColor(Color.TRANSPARENT);
 
-        // Clip children (WebView) to rounded outline
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            mCard.setOutlineProvider(new ViewOutlineProvider() {
-                @Override
-                public void getOutline(View view, Outline outline) {
-                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius);
-                }
-            });
-            mCard.setClipToOutline(true);
-        }
-
-        // 3. Header Bar
+        // 3. Header Bar - hidden for clean floating chat experience
         LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setVisibility(View.GONE);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
         headerRow.setBackgroundColor(0xFF181A20);
@@ -255,7 +259,7 @@ public class DemoDialogActivity extends Activity {
             1.0f
         );
         mWebView.setLayoutParams(webLp);
-        mWebView.setBackgroundColor(0xFF1E2026);
+        mWebView.setBackgroundColor(Color.TRANSPARENT);
 
         setupWebViewSettings();
         mCard.addView(mWebView);
@@ -265,6 +269,11 @@ public class DemoDialogActivity extends Activity {
     }
 
     private void setupWebViewSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
+        mWebView.addJavascriptInterface(new OverlayBridge(this), "DSHOverlayBridge");
+
         WebSettings ws = mWebView.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
