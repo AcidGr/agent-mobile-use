@@ -54,19 +54,20 @@ public class NotifyReceiver extends BroadcastReceiver {
 
         if (ACTION_NOTIFY.equals(action)) {
             String title = intent.getStringExtra("title");
+            String subtext = intent.getStringExtra("subtext");
             String content = intent.getStringExtra("content");
             int total = intent.getIntExtra("total", 0);
             int completed = intent.getIntExtra("completed", 0);
             boolean isCompleted = intent.getBooleanExtra("is_completed", false) || (total > 0 && completed >= total);
 
-            Log.i(TAG, "Received notification signal: title=" + title + " (" + completed + "/" + total + ") isCompleted=" + isCompleted);
+            Log.i(TAG, "Received notification signal: title=" + title + " subtext=" + subtext + " (" + completed + "/" + total + ") isCompleted=" + isCompleted);
 
             // Cancel any previous notification to keep notification drawer clean
             nm.cancel(tag, id);
 
             // Trigger high-priority heads-up notification when task completion signal is given
             if (isCompleted) {
-                postCompletedNotification(context, nm, tag, id, title, content, total, completed);
+                postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed);
             } else {
                 Log.i(TAG, "In-progress step (" + completed + "/" + total + ") suppressed to avoid disturbance.");
             }
@@ -145,6 +146,12 @@ public class NotifyReceiver extends BroadcastReceiver {
     public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
                                                  String title, String content,
                                                  int total, int completed) {
+        postCompletedNotification(context, nm, tag, id, title, null, content, total, completed);
+    }
+
+    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
+                                                 String title, String subtext, String content,
+                                                 int total, int completed) {
         try {
             ensureChannel(nm);
 
@@ -160,12 +167,8 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // Crisp title without emoji
             String cleanTitle = cleanEmoji(title);
-            if (cleanTitle.isEmpty() || !cleanTitle.contains("完成")) {
-                if (total > 0) {
-                    cleanTitle = "[Mobile Agent] 任务已全部完成 (" + completed + "/" + total + ")";
-                } else {
-                    cleanTitle = "[Mobile Agent] 任务已全部完成";
-                }
+            if (cleanTitle.isEmpty()) {
+                cleanTitle = "任务已经完成！";
             }
             builder.setContentTitle(cleanTitle);
 
@@ -182,7 +185,12 @@ public class NotifyReceiver extends BroadcastReceiver {
             if (summary.isEmpty()) summary = "所有执行事项均已处理完毕";
             builder.setContentText(summary);
 
-            builder.setSubText("执行完毕 · 点击进入控制台");
+            // SubText: Session Title if provided, otherwise default prompt
+            String cleanSubtext = cleanEmoji(subtext);
+            if (cleanSubtext.isEmpty()) {
+                cleanSubtext = "执行完毕 · 点击进入控制台";
+            }
+            builder.setSubText(cleanSubtext);
 
             // BigTextStyle for rich clean view without emoji
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();

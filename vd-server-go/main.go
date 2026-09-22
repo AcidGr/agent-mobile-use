@@ -995,8 +995,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		var p struct {
-			Title     string `json:"title"`
-			Content   string `json:"content"`
+			Title       string `json:"title"`
+			Subtext     string `json:"subtext"`
+			Content     string `json:"content"`
 			Tag         string `json:"tag"`
 			URL         string `json:"url"`
 			Total       int    `json:"total"`
@@ -1012,7 +1013,7 @@ func main() {
 			p.Tag = "dsh_agent"
 		}
 		if p.Title == "" {
-			p.Title = "Mobile Agent 任务状态"
+			p.Title = "任务已经完成！"
 		}
 		if p.URL == "" {
 			p.URL = "http://127.0.0.1:3080"
@@ -1030,9 +1031,10 @@ func main() {
 		// which immediately wakes the process in background, posts high-priority notification and stops itself.
 		// Absolutely DOES NOT touch or disrupt ActivityStack, keeping DemoDialogActivity alive in background!
 		if isCompletedStr == "true" {
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_COMPLETED --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_COMPLETED --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"NOTIFY_TITLE="+p.Title,
+				"NOTIFY_SUBTEXT="+p.Subtext,
 				"NOTIFY_TAG="+p.Tag,
 				"NOTIFY_CONTENT="+p.Content,
 				"NOTIFY_URL="+p.URL,

@@ -51,6 +51,7 @@ public class NotifyService extends Service {
             } else {
                 // Default: Task completion notification
                 String title = intent.getStringExtra("title");
+                String subtext = intent.getStringExtra("subtext");
                 String content = intent.getStringExtra("content");
                 String tag = intent.getStringExtra("tag");
                 if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
@@ -58,8 +59,8 @@ public class NotifyService extends Service {
                 int total = intent.getIntExtra("total", 0);
                 int completed = intent.getIntExtra("completed", 0);
 
-                NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, content, total, completed);
-                Log.i(TAG, "Posted completed notification: title=" + title);
+                NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed);
+                Log.i(TAG, "Posted completed notification: title=" + title + " subtext=" + subtext);
             }
         } catch (Throwable t) {
             Log.e(TAG, "Error handling notification in NotifyService: " + t.getMessage(), t);
