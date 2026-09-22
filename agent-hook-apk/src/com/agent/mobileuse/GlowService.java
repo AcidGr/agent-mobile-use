@@ -115,7 +115,7 @@ public class GlowService extends Service {
             }
 
             int cornerRadius = 135;
-            int strokeWidth = 10; // Sleek 10px cyber glow edge
+            int strokeWidth = 24; // Bold cyber glow edge (elevated presence)
 
             mGlowView = new GlowView(this, width, height, cornerRadius, strokeWidth);
             mGlowView.setSystemUiVisibility(
@@ -368,9 +368,6 @@ public class GlowService extends Service {
             mBgPaint.setStyle(Paint.Style.FILL);
 
             mStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            mStrokePaint.setColor(0xFF00E5FF); // 荧光青边框，极其醒目
-            mStrokePaint.setStyle(Paint.Style.STROKE);
-            mStrokePaint.setStrokeWidth(3f);
 
             mDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mDotPaint.setColor(0xFF00E5FF); // 呼吸青色圆点
@@ -415,10 +412,9 @@ public class GlowService extends Service {
             int w = getWidth();
             int h = getHeight();
             float r = h / 2.0f;
-            mBounds.set(3, 3, w - 3, h - 3);
+            mBounds.set(0, 0, w, h);
 
             canvas.drawRoundRect(mBounds, r, r, mBgPaint);
-            canvas.drawRoundRect(mBounds, r, r, mStrokePaint);
 
             // Front camera cutout is centered at X=200 (occupies [162, 238])
             // Left side: Glowing cyan breathing dot
@@ -470,46 +466,46 @@ public class GlowService extends Service {
             float halfStroke = stroke / 2.0f;
             mRect = new RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
 
-            // Edge Layer 1: Electric cyan aura
+            // Edge Layer 1: Electric cyan aura (broader and richer)
             mPaintOuter = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintOuter.setStyle(Paint.Style.STROKE);
-            mPaintOuter.setStrokeWidth(stroke * 2.2f);
-            mPaintOuter.setColor(Color.argb(75, 0, 210, 255));
+            mPaintOuter.setStrokeWidth(stroke * 2.5f);
+            mPaintOuter.setColor(Color.argb(120, 0, 210, 255));
 
             // Edge Layer 2: Deep indigo/purple transition
             mPaintInner = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintInner.setStyle(Paint.Style.STROKE);
-            mPaintInner.setStrokeWidth(stroke * 1.3f);
-            mPaintInner.setColor(Color.argb(150, 110, 70, 255));
+            mPaintInner.setStrokeWidth(stroke * 1.4f);
+            mPaintInner.setColor(Color.argb(180, 110, 70, 255));
 
             // Edge Layer 3: Sharp core bright line
             mPaintCore = new Paint(Paint.ANTI_ALIAS_FLAG);
             mPaintCore.setStyle(Paint.Style.STROKE);
-            mPaintCore.setStrokeWidth(stroke * 0.6f);
+            mPaintCore.setStrokeWidth(stroke * 0.55f);
             mPaintCore.setColor(Color.argb(255, 230, 245, 255));
 
-            // Ripple Paints
+            // Ripple Paints (bold impact rings)
             mRippleOuterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mRippleOuterPaint.setStyle(Paint.Style.STROKE);
-            mRippleOuterPaint.setStrokeWidth(6.0f);
+            mRippleOuterPaint.setStrokeWidth(12.0f);
 
             mRippleInnerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mRippleInnerPaint.setStyle(Paint.Style.STROKE);
-            mRippleInnerPaint.setStrokeWidth(3.0f);
+            mRippleInnerPaint.setStrokeWidth(7.0f);
 
             mRippleCorePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mRippleCorePaint.setStyle(Paint.Style.FILL);
 
-            // Swipe Paints
+            // Swipe Paints (laser-bold trail)
             mSwipeTrailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mSwipeTrailPaint.setStyle(Paint.Style.STROKE);
             mSwipeTrailPaint.setStrokeCap(Paint.Cap.ROUND);
-            mSwipeTrailPaint.setStrokeWidth(14.0f);
+            mSwipeTrailPaint.setStrokeWidth(32.0f);
 
             mSwipeCorePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mSwipeCorePaint.setStyle(Paint.Style.STROKE);
             mSwipeCorePaint.setStrokeCap(Paint.Cap.ROUND);
-            mSwipeCorePaint.setStrokeWidth(6.0f);
+            mSwipeCorePaint.setStrokeWidth(14.0f);
 
             mSwipePointPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             mSwipePointPaint.setStyle(Paint.Style.FILL);
@@ -519,7 +515,7 @@ public class GlowService extends Service {
             final RippleItem item = new RippleItem(x, y);
             mRipples.add(item);
             ValueAnimator va = ValueAnimator.ofFloat(0.0f, 1.0f);
-            va.setDuration(380);
+            va.setDuration(450);
             va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
                 @Override
                 public void onAnimationUpdate(ValueAnimator animation) {
@@ -561,7 +557,7 @@ public class GlowService extends Service {
         }
 
         public void startPulseAnimation() {
-            mAnimator = ValueAnimator.ofFloat(0.35f, 1.0f);
+            mAnimator = ValueAnimator.ofFloat(0.55f, 1.0f);
             mAnimator.setDuration(1200);
             mAnimator.setRepeatMode(ValueAnimator.REVERSE);
             mAnimator.setRepeatCount(ValueAnimator.INFINITE);
@@ -597,8 +593,8 @@ public class GlowService extends Service {
             super.onDraw(canvas);
 
             // 1. Draw edge glow frame
-            mPaintOuter.setAlpha((int) (75 * mAlphaScale));
-            mPaintInner.setAlpha((int) (150 * mAlphaScale));
+            mPaintOuter.setAlpha((int) (120 * mAlphaScale));
+            mPaintInner.setAlpha((int) (180 * mAlphaScale));
             mPaintCore.setAlpha((int) (255 * mAlphaScale));
 
             canvas.drawRoundRect(mRect, mCornerRadius, mCornerRadius, mPaintOuter);
@@ -609,7 +605,7 @@ public class GlowService extends Service {
             for (int i = 0; i < mRipples.size(); i++) {
                 RippleItem r = mRipples.get(i);
                 float p = r.progress;
-                float radius = 15.0f + 65.0f * p;
+                float radius = 20.0f + 130.0f * p;
                 int alpha = (int) (230 * (1.0f - p));
 
                 // Outer cyan ring
@@ -624,7 +620,7 @@ public class GlowService extends Service {
                 if (p < 0.7f) {
                     int coreAlpha = (int) (255 * (1.0f - p / 0.7f));
                     mRippleCorePaint.setColor(Color.argb(coreAlpha, 255, 255, 255));
-                    canvas.drawCircle(r.x, r.y, 8.0f * (1.0f - p), mRippleCorePaint);
+                    canvas.drawCircle(r.x, r.y, 16.0f * (1.0f - p), mRippleCorePaint);
                 }
             }
 
@@ -651,13 +647,13 @@ public class GlowService extends Service {
 
                 // Leading head dot
                 mSwipePointPaint.setColor(Color.argb(alpha, 0, 230, 255));
-                canvas.drawCircle(curX, curY, 12.0f, mSwipePointPaint);
+                canvas.drawCircle(curX, curY, 24.0f, mSwipePointPaint);
                 mSwipePointPaint.setColor(Color.argb(alpha, 255, 255, 255));
-                canvas.drawCircle(curX, curY, 6.0f, mSwipePointPaint);
+                canvas.drawCircle(curX, curY, 12.0f, mSwipePointPaint);
 
                 // Start point small anchor dot
                 mSwipePointPaint.setColor(Color.argb((int) (alpha * 0.5f), 110, 70, 255));
-                canvas.drawCircle(s.x1, s.y1, 8.0f, mSwipePointPaint);
+                canvas.drawCircle(s.x1, s.y1, 14.0f, mSwipePointPaint);
             }
         }
     }
