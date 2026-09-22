@@ -83,6 +83,30 @@ public class DemoDialogActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void hideSoftInput() {
+            if (mActivity != null) {
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mActivity.hideSoftInput();
+                    }
+                });
+            }
+        }
+
+        @JavascriptInterface
+        public void pressBack() {
+            if (mActivity != null) {
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mActivity.onBackPressed();
+                    }
+                });
+            }
+        }
+
+        @JavascriptInterface
         public void close() {
             minimize();
         }
