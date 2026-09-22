@@ -218,7 +218,7 @@ The whole drawing process took place entirely in the background virtual display 
 ### Ecosystem & Companion DSH Preset
 
 - **Native DSH Agent Preset**:
-  Check out **[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**, our official DeepSeek Harness agent preset that interacts with this module to provide sliding-window image context offloading and visual autonomous control.
+  Check out **[dsh-preset-mobile-use](https://github.com/AcidGr/dsh-preset-mobile-use)**, our official DeepSeek Harness agent preset that interacts with this module to provide dual perception and visual autonomous control.
 - **MCP (Model Context Protocol) Support**:
   All foundational tools are exposed via `vd` and REST endpoints. Developers can easily build an MCP server wrapper on top of this foundation for Claude Desktop or Cursor.
 
