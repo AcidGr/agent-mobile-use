@@ -149,6 +149,46 @@ public class NotifyReceiver extends BroadcastReceiver {
         postCompletedNotification(context, nm, tag, id, title, null, content, total, completed);
     }
 
+    /**
+     * Create a crisp vector-drawn LargeIcon: Pure white circle background with a vibrant emerald green checkmark.
+     */
+    private static Bitmap createWhiteGreenCheckBitmap(int size) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+        float center = size / 2.0f;
+        float radius = center - 4.0f;
+
+        // 1. Draw smooth white circular background
+        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setColor(0xFFFFFFFF);
+        bgPaint.setStyle(android.graphics.Paint.Style.FILL);
+        canvas.drawCircle(center, center, radius, bgPaint);
+
+        // 2. Draw vibrant emerald green checkmark
+        android.graphics.Paint checkPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        checkPaint.setColor(0xFF10B981); // Emerald / Material Green
+        checkPaint.setStyle(android.graphics.Paint.Style.STROKE);
+        checkPaint.setStrokeWidth(size * 0.11f);
+        checkPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+        checkPaint.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+
+        android.graphics.Path path = new android.graphics.Path();
+        float p1X = size * 0.28f;
+        float p1Y = size * 0.52f;
+        float p2X = size * 0.44f;
+        float p2Y = size * 0.68f;
+        float p3X = size * 0.74f;
+        float p3Y = size * 0.36f;
+
+        path.moveTo(p1X, p1Y);
+        path.lineTo(p2X, p2Y);
+        path.lineTo(p3X, p3Y);
+
+        canvas.drawPath(path, checkPaint);
+        return bitmap;
+    }
+
     public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
                                                  String title, String subtext, String content,
                                                  int total, int completed) {
@@ -195,14 +235,14 @@ public class NotifyReceiver extends BroadcastReceiver {
             // Set SmallIcon
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
 
-            // Set LargeIcon: Green Whale Avatar symbolizing successful completion
+            // Set LargeIcon: Crisp White Circle with vibrant Green Checkmark
             try {
-                Bitmap greenWhale = BitmapFactory.decodeResource(context.getResources(), R.drawable.dsh_whale_avatar_green);
-                if (greenWhale != null) {
-                    builder.setLargeIcon(greenWhale);
+                Bitmap checkIcon = createWhiteGreenCheckBitmap(192);
+                if (checkIcon != null) {
+                    builder.setLargeIcon(checkIcon);
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "decodeResource green whale avatar warning: " + t.getMessage());
+                Log.w(TAG, "createWhiteGreenCheckBitmap warning: " + t.getMessage());
             }
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
