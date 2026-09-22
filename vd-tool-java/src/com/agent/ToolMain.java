@@ -249,7 +249,7 @@ public class ToolMain {
             clickNode(displayId, args[2], contains);
         } else if ("settext".equals(cmd)) {
             if (args.length < 4) {
-                System.err.println("Usage: settext <displayId> <target: first|focused|id:<res>|text:<txt>|idx:<N>> <text>");
+                System.err.println("Usage: settext <displayId> <target: focused|<resId>|id:<res>|idx:N> <text>");
                 return;
             }
             int displayId = Integer.parseInt(args[1]);
@@ -1536,19 +1536,34 @@ public class ToolMain {
     }
 
     /**
-     * Smart hybrid injection pipeline:
-     * 1. If targetSpec is provided (and not pure "focused"), find target node.
-     * 2. Attempt instant zero-focus ACTION_SET_TEXT. Verify equality.
-     * 3. If ACTION_SET_TEXT fails or target is not immediately editable, fall back to:
-     *    tap target coordinates -> wait 100ms -> clipboard paste -> verify.
-     * 4. If submit is true, dispatch KEYCODE_ENTER.
-     * 5. Return structured JSON with verification status.
+     * Deterministic single-path type pipeline (Plan A: minimal method):
+     * 1. Resolve the target EXACTLY: the focused editable node (click first when
+     *    nothing is focused), an exact resource-id match (full "pkg:id/name" or the
+     *    short name after "/"), an "id:<res>" prefix, or "idx:N" (Nth editable node).
+     *    No numeric dump ids, no label/contains guessing — a wrong guess here used to
+     *    become a wrong tap somewhere else on screen (page closed / page navigated).
+     * 2. ACTION_SET_TEXT exactly once, then read the node back and classify:
+     *      ok, no error              -> verified (read-back equals input)
+     *      ok, verify_unavailable    -> written but not comparable (masked / unreadable /
+     *                                    stale node) — NOT a failure
+     *      !ok, no_focused_input     -> nothing editable is focused; includes focus_hint
+     *      !ok, target_not_found / ambiguous_target / target_not_editable
+     *      !ok, inject_rejected      -> ACTION_SET_TEXT returned false
+     *      !ok, verify_mismatch      -> read-back differs; before/after evidence attached
+     * 3. NO FALLBACKS: no tap, no clipboard, no side-effect retry. A failure is
+     *    reported with evidence instead of being papered over by the next strategy.
+     * 4. If submit is true AND the write succeeded, dispatch KEYCODE_ENTER.
+     * 5. Return structured JSON with the classification and before/after evidence.
      */
     private static void smartType(int targetDisplayId, String targetSpec, String text, boolean submit) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         String err = null;
-        String mode = "unknown";
+        String mode = "none";
+        String error = null;
+        String reason = null;
+        String focusHint = null;
+        String boundsStr = null;
         String beforeTxt = null;
         String afterTxt = null;
         String vid = null;
@@ -1604,76 +1619,93 @@ public class ToolMain {
             }
 
             AccessibilityNodeInfo targetNode = null;
-            if (targetSpec != null && !targetSpec.isEmpty() && !"focused".equals(targetSpec)) {
-                if (targetSpec.startsWith("idx:")) {
-                    int idx = Integer.parseInt(targetSpec.substring(4));
-                    List<AccessibilityNodeInfo> editables = new ArrayList<AccessibilityNodeInfo>();
-                    for (AccessibilityNodeInfo an : all) {
-                        CharSequence cName = an.getClassName();
-                        if (an.isEditable() || (cName != null && cName.toString().contains("Edit"))) {
-                            editables.add(an);
-                        }
-                    }
-                    if (idx >= 0 && idx < editables.size()) targetNode = editables.get(idx);
-                } else if (targetSpec.startsWith("id:") || !targetSpec.matches("^\\d+$")) {
-                    String idPattern = targetSpec.startsWith("id:") ? targetSpec.substring(3) : targetSpec;
-                    for (AccessibilityNodeInfo an : all) {
-                        if (an.getViewIdResourceName() != null && an.getViewIdResourceName().contains(idPattern)) {
-                            // If this node is a container (like FrameLayout), try to find editable child inside it
-                            if (!an.isEditable()) {
-                                AccessibilityNodeInfo editChild = findFirstEditable(an);
-                                if (editChild != null) {
-                                    targetNode = editChild;
-                                    break;
-                                }
-                            }
-                            targetNode = an;
-                            break;
-                        }
-                    }
-                } else {
-                    // Try numeric ID from dump_ui
-                    try {
-                        int numericId = Integer.parseInt(targetSpec);
-                        // In dumpTree idCounter is 1-based traversal
-                        int count = 1;
-                        for (AccessibilityNodeInfo an : all) {
-                            if (an.getText() != null || an.getContentDescription() != null || an.isClickable() || an.isEditable()) {
-                                if (count == numericId) {
-                                    targetNode = an;
-                                    break;
-                                }
-                                count++;
-                            }
-                        }
-                    } catch (NumberFormatException ignored) {}
-
-                    if (targetNode == null) {
-                        // Match text/desc
-                        for (AccessibilityNodeInfo an : all) {
-                            if (labelMatches(an.getText(), targetSpec, true) || labelMatches(an.getContentDescription(), targetSpec, true)) {
-                                targetNode = an;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If no specific target, look for currently focused node
-            if (targetNode == null) {
+            boolean focusMode = targetSpec == null || targetSpec.isEmpty() || "focused".equals(targetSpec);
+            if (focusMode) {
+                // The caller clicked a field; we only READ that decision back. If focus
+                // is on a container (WebView, form wrapper), look for its editable child —
+                // that is still "the focused field", not a new search across the screen.
+                AccessibilityNodeInfo focusedAny = null;
                 for (AccessibilityNodeInfo an : all) {
-                    if (an.isFocused() && an.isEditable()) {
-                        targetNode = an;
-                        break;
+                    if (an.isFocused() && an.isEditable()) { targetNode = an; break; }
+                    if (focusedAny == null && an.isFocused()) focusedAny = an;
+                }
+                if (targetNode == null && focusedAny != null) {
+                    targetNode = findFirstEditable(focusedAny);
+                }
+                if (targetNode == null) {
+                    error = "no_focused_input";
+                    if (focusedAny == null) {
+                        focusHint = "nothing";
+                    } else {
+                        String fc = focusedAny.getClassName() != null
+                                ? simplifyType(focusedAny.getClassName().toString()) : "View";
+                        focusHint = fc + "@" + rectStr(focusedAny);
+                    }
+                }
+            } else if (targetSpec.startsWith("idx:")) {
+                int idx = -1;
+                try { idx = Integer.parseInt(targetSpec.substring(4)); } catch (NumberFormatException ignored) {}
+                List<AccessibilityNodeInfo> editables = new ArrayList<AccessibilityNodeInfo>();
+                for (AccessibilityNodeInfo an : all) {
+                    CharSequence cName = an.getClassName();
+                    if (an.isEditable() || (cName != null && cName.toString().contains("Edit"))) {
+                        editables.add(an);
+                    }
+                }
+                if (idx >= 0 && idx < editables.size()) {
+                    targetNode = editables.get(idx);
+                } else {
+                    error = "target_not_found";
+                    reason = "idx " + idx + " of " + editables.size() + " editable fields";
+                }
+            } else {
+                // Exact resource-id match only. Full ids must equal; short ids (as printed
+                // by dump: the part after "/") must match either the whole viewId (WebView
+                // DOM ids are bare, e.g. "account") or the id segment — never contains(),
+                // never a text/desc fallback.
+                String spec = targetSpec.startsWith("id:") ? targetSpec.substring(3) : targetSpec;
+                boolean fullId = spec.indexOf('/') >= 0;
+                List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
+                for (AccessibilityNodeInfo an : all) {
+                    String viewId = an.getViewIdResourceName();
+                    if (viewId == null) continue;
+                    if (fullId ? viewId.equals(spec)
+                               : (viewId.equals(spec) || viewId.endsWith("/" + spec))) matches.add(an);
+                }
+                if (matches.isEmpty()) {
+                    error = "target_not_found";
+                    reason = fullId ? "no node with exact id" : "no node with id segment /" + spec;
+                } else if (matches.size() > 1) {
+                    error = "ambiguous_target";
+                    StringBuilder rb = new StringBuilder();
+                    for (int mi = 0; mi < matches.size() && mi < 3; mi++) {
+                        if (mi > 0) rb.append(' ');
+                        rb.append(rectStr(matches.get(mi)));
+                    }
+                    reason = matches.size() + " nodes match: " + rb;
+                } else {
+                    AccessibilityNodeInfo m = matches.get(0);
+                    vid = m.getViewIdResourceName();
+                    cls = m.getClassName() != null ? m.getClassName().toString() : null;
+                    boundsStr = rectStr(m);
+                    targetNode = m.isEditable() ? m : findFirstEditable(m);
+                    if (targetNode == null) {
+                        error = "target_not_editable";
+                        reason = "matched node is not editable and has no editable child";
+                        if (m.getText() != null) beforeTxt = m.getText().toString();
                     }
                 }
             }
 
-            // Path 1: Direct ACTION_SET_TEXT (Fast-path: 0 click, 0 side-effects)
-            if (targetNode != null) {
+            // The single injection path: one ACTION_SET_TEXT, one read-back, one verdict.
+            // There is deliberately no second strategy below this — a failure stops here
+            // and is reported with evidence, because every fallback this had before
+            // (tap target center, then clipboard paste) turned a wrong resolution into
+            // a stray click or a clobbered clipboard.
+            if (targetNode != null && error == null) {
                 vid = targetNode.getViewIdResourceName();
                 cls = targetNode.getClassName() != null ? targetNode.getClassName().toString() : null;
+                if (boundsStr == null) boundsStr = rectStr(targetNode);
                 beforeTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
 
                 android.os.Bundle args = new android.os.Bundle();
@@ -1683,68 +1715,26 @@ public class ToolMain {
                     setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
                 } catch (Throwable ignored) {}
 
-                if (setOk) {
+                if (!setOk) {
+                    error = "inject_rejected";
+                } else {
+                    mode = "action_set_text";
                     Thread.sleep(60);
-                    targetNode.refresh();
+                    boolean fresh = true;
+                    try { fresh = targetNode.refresh(); } catch (Throwable t) { fresh = false; }
                     afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
-                    if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
+                    if (!fresh) {
+                        ok = true; error = "verify_unavailable"; reason = "stale_node";
+                    } else if (afterTxt == null) {
+                        ok = true; error = "verify_unavailable"; reason = "unreadable";
+                    } else if (afterTxt.equals(text)) {
                         ok = true;
-                        mode = "action_set_text";
-                    }
-                }
-            }
-
-            // Path 2 (Pattern C): Smart Auto-Focus & Retry for defensive custom inputs (e.g. WeChat, custom chat edittext)
-            if (!ok && targetNode != null) {
-                Rect bounds = new Rect();
-                targetNode.getBoundsInScreen(bounds);
-                int cx = bounds.centerX();
-                int cy = bounds.centerY();
-                if (cx > 0 && cy > 0) {
-                    // Step 2.1: Micro-touch activation (wake up InputConnection)
-                    Runtime.getRuntime().exec(new String[] {
-                            "/system/bin/input", "-d", String.valueOf(targetDisplayId), "tap",
-                            String.valueOf(cx), String.valueOf(cy)
-                    }).waitFor();
-
-                    // Step 2.2: Wait briefly for focus establishment
-                    for (int fi = 0; fi < 10; fi++) {
-                        Thread.sleep(25);
-                        targetNode.refresh();
-                        if (targetNode.isFocused()) break;
-                    }
-
-                    // Step 2.3: Re-attempt direct ACTION_SET_TEXT now that node is focused
-                    android.os.Bundle retryArgs = new android.os.Bundle();
-                    retryArgs.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-                    boolean retryOk = false;
-                    try {
-                        retryOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, retryArgs);
-                    } catch (Throwable ignored) {}
-
-                    if (retryOk) {
-                        Thread.sleep(60);
-                        targetNode.refresh();
-                        afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
-                        if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
-                            ok = true;
-                            mode = "autofocus_and_set_text";
-                        }
-                    }
-
-                    // Step 2.4: Fallback to clipboard paste if ACTION_SET_TEXT still rejected
-                    if (!ok) {
-                        injectClipboardOnly(text);
-                        Runtime.getRuntime().exec(new String[] {
-                                "/system/bin/input", "-d", String.valueOf(targetDisplayId), "keyevent", "279"
-                        }).waitFor();
-                        Thread.sleep(100);
-                        targetNode.refresh();
-                        afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
-                        if (text.equals(afterTxt) || (afterTxt != null && afterTxt.contains(text))) {
-                            ok = true;
-                            mode = "fallback_tap_and_paste";
-                        }
+                    } else if (isMasked(afterTxt, text)) {
+                        ok = true; error = "verify_unavailable"; reason = "masked";
+                    } else {
+                        // Readable but different from what was sent: report it with
+                        // before/after evidence instead of guessing "close enough".
+                        error = "verify_mismatch";
                     }
                 }
             }
@@ -1759,6 +1749,7 @@ public class ToolMain {
 
         } catch (Throwable t) {
             err = String.valueOf(t);
+            error = "internal_error";
         } finally {
             if (uiAutomation != null) {
                 try {
@@ -1777,9 +1768,13 @@ public class ToolMain {
         if (targetSpec != null) sb.append(",\"target\":\"").append(escapeJson(targetSpec)).append("\"");
         if (vid != null) sb.append(",\"vid\":\"").append(escapeJson(vid)).append("\"");
         if (cls != null) sb.append(",\"type\":\"").append(escapeJson(cls)).append("\"");
+        if (boundsStr != null) sb.append(",\"bounds\":\"").append(escapeJson(boundsStr)).append("\"");
+        if (error != null) sb.append(",\"error\":\"").append(error).append("\"");
+        if (reason != null) sb.append(",\"reason\":\"").append(escapeJson(reason)).append("\"");
+        if (focusHint != null) sb.append(",\"focus_hint\":\"").append(escapeJson(focusHint)).append("\"");
         if (beforeTxt != null) sb.append(",\"before_text\":\"").append(escapeJson(beforeTxt)).append("\"");
         if (afterTxt != null) sb.append(",\"verified_text\":\"").append(escapeJson(afterTxt)).append("\"");
-        if (err != null) sb.append(",\"error\":\"").append(escapeJson(err)).append("\"");
+        if (err != null) sb.append(",\"exception\":\"").append(escapeJson(err)).append("\"");
         sb.append("}");
         System.out.print(sb.toString());
     }
@@ -1799,49 +1794,34 @@ public class ToolMain {
         return null;
     }
 
-    private static void injectClipboardOnly(String text) {
-        try {
-            Class<?> smClass = Class.forName("android.os.ServiceManager");
-            Method getService = smClass.getMethod("getService", String.class);
-            Object clipboardBinder = getService.invoke(null, "clipboard");
+    /** "x1,y1,x2,y2" for the node — echoed in the result so WHERE the text went is auditable. */
+    private static String rectStr(AccessibilityNodeInfo n) {
+        Rect r = new Rect();
+        try { n.getBoundsInScreen(r); } catch (Throwable ignored) {}
+        return r.left + "," + r.top + "," + r.right + "," + r.bottom;
+    }
 
-            Class<?> stubClass = Class.forName("android.content.IClipboard$Stub");
-            Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
-            Object clipboardService = asInterface.invoke(null, clipboardBinder);
-
-            Class<?> clipDataClass = Class.forName("android.content.ClipData");
-            Method newPlainText = clipDataClass.getMethod("newPlainText", CharSequence.class, CharSequence.class);
-            Object clip = newPlainText.invoke(null, "agent_input", text);
-
-            Method setPrimaryClip = null;
-            for (Method m : clipboardService.getClass().getMethods()) {
-                if ("setPrimaryClip".equals(m.getName())) {
-                    setPrimaryClip = m;
-                    break;
-                }
-            }
-            if (setPrimaryClip != null) {
-                Class<?>[] pTypes = setPrimaryClip.getParameterTypes();
-                Object[] pArgs = new Object[pTypes.length];
-                int stringCount = 0;
-                for (int i = 0; i < pTypes.length; i++) {
-                    Class<?> pt = pTypes[i];
-                    if (pt.isAssignableFrom(clip.getClass()) || pt.getName().contains("ClipData")) {
-                        pArgs[i] = clip;
-                    } else if (pt == String.class) {
-                        pArgs[i] = (stringCount == 0) ? "com.android.shell" : null;
-                        stringCount++;
-                    } else if (pt == int.class || pt == Integer.class) {
-                        pArgs[i] = 0;
-                    } else if (pt == boolean.class || pt == Boolean.class) {
-                        pArgs[i] = false;
-                    } else {
-                        pArgs[i] = null;
-                    }
-                }
-                setPrimaryClip.invoke(clipboardService, pArgs);
-            }
-        } catch (Throwable ignored) {}
+    /**
+     * Read-back consisting only of mask glyphs cannot be compared with the sent text:
+     * password fields (native or in-WebView) report bullets instead of content. Such a
+     * write succeeded — it must be classified "verification unavailable", never failure.
+     */
+    private static boolean isMasked(String after, String sent) {
+        final String mask = "•●○∗*";
+        boolean sentVisible = false;
+        for (int i = 0; i < sent.length(); i++) {
+            char c = sent.charAt(i);
+            if (!Character.isWhitespace(c) && mask.indexOf(c) < 0) { sentVisible = true; break; }
+        }
+        if (!sentVisible) return false;
+        boolean sawMask = false;
+        for (int i = 0; i < after.length(); i++) {
+            char c = after.charAt(i);
+            if (Character.isWhitespace(c)) continue;
+            if (mask.indexOf(c) < 0) return false;
+            sawMask = true;
+        }
+        return sawMask;
     }
 
     /**
@@ -1877,68 +1857,6 @@ public class ToolMain {
         String s = value.toString().trim();
         if (s.length() == 0) return false;
         return contains ? s.contains(label) : s.equals(label);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Text injection (unchanged behaviour: clipboard + PASTE keycode)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private static void injectType(int displayId, String text) {
-        try {
-            Class<?> smClass = Class.forName("android.os.ServiceManager");
-            Method getService = smClass.getMethod("getService", String.class);
-            Object clipboardBinder = getService.invoke(null, "clipboard");
-
-            Class<?> stubClass = Class.forName("android.content.IClipboard$Stub");
-            Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
-            Object clipboardService = asInterface.invoke(null, clipboardBinder);
-
-            Class<?> clipDataClass = Class.forName("android.content.ClipData");
-            Method newPlainText = clipDataClass.getMethod("newPlainText", CharSequence.class, CharSequence.class);
-            Object clip = newPlainText.invoke(null, "agent_input", text);
-
-            Method setPrimaryClip = null;
-            for (Method m : clipboardService.getClass().getMethods()) {
-                if ("setPrimaryClip".equals(m.getName())) {
-                    setPrimaryClip = m;
-                    break;
-                }
-            }
-            if (setPrimaryClip != null) {
-                Class<?>[] pTypes = setPrimaryClip.getParameterTypes();
-                Object[] pArgs = new Object[pTypes.length];
-                int stringCount = 0;
-                for (int i = 0; i < pTypes.length; i++) {
-                    Class<?> pt = pTypes[i];
-                    if (pt.isAssignableFrom(clip.getClass()) || pt.getName().contains("ClipData")) {
-                        pArgs[i] = clip;
-                    } else if (pt == String.class) {
-                        if (stringCount == 0) {
-                            pArgs[i] = "com.android.shell";
-                        } else {
-                            pArgs[i] = null;
-                        }
-                        stringCount++;
-                    } else if (pt == int.class || pt == Integer.class) {
-                        pArgs[i] = 0;
-                    } else if (pt == boolean.class || pt == Boolean.class) {
-                        pArgs[i] = false;
-                    } else {
-                        pArgs[i] = null;
-                    }
-                }
-                setPrimaryClip.invoke(clipboardService, pArgs);
-            }
-
-            try { Thread.sleep(50); } catch (Exception ignored) {}
-
-            Runtime.getRuntime().exec(new String[] {
-                    "/system/bin/input", "-d", String.valueOf(displayId), "keyevent", "279"
-            }).waitFor();
-        } catch (Throwable t) {
-            t.printStackTrace();
-            System.exit(1);
-        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
