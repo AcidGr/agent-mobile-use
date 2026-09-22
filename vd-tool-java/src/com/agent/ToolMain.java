@@ -154,8 +154,26 @@ public class ToolMain {
             + " | optional: d= extra-desc id= resource how= why-unnamed target= ancestorId@x,y"
             + " hint= input-hint tip= tooltip";
 
-    /** Longest free-text field emitted per node; a label is a label, not a paragraph. */
-    private static final int MAX_FIELD_CHARS = 140;
+    /**
+     * Longest free-text field emitted per node. A label is a label, not a paragraph —
+     * but the cut must not destroy the TAIL, because URL query params, order ids and
+     * pickup codes all live there (a chat message whose link ended in
+     * `...?orderId=xyz` was once cut at 140 and the id was lost while `truncated=0`
+     * still reported a healthy dump).
+     *
+     * Measured across 8 rich-text screens (Zhihu, WeChat, Taobao, Meituan, QQ, a
+     * long Baike article, m.zhihu, news feeds) with the cap disabled: the longest
+     * real field was 311 chars and the heaviest whole screen 5131 code points out
+     * of the 23000 pruner threshold. 4000 is therefore a DISASTER WALL (~13x the
+     * measured maximum), not a label budget: one pathological node (novel chapter,
+     * log page) can no longer swallow the 20000-char node budget whole, while all
+     * ordinary content passes untouched.
+     */
+    private static final int MAX_FIELD_CHARS = 4000;
+    /** Tail kept when a field is cut; sized to hold a URL query string. */
+    private static final int FIELD_TAIL_CHARS = 160;
+    /** Head kept; leaves room for the fixed-width marker plus its digit run. */
+    private static final int FIELD_HEAD_CHARS = MAX_FIELD_CHARS - FIELD_TAIL_CHARS - 22;
 
     /** Inherit an ancestor's click target only when the ancestor is not far bigger. */
     private static final int MAX_ANCESTOR_RATIO = 4;
@@ -1208,21 +1226,31 @@ public class ToolMain {
         return local.length() > 0 ? local : viewId;
     }
 
-    /** Cap and flatten a free-text field so it can never break the one-row-per-node grid. */
+    /**
+     * Flatten and cap a free-text field so it can never break the one-row-per-node
+     * grid. Under the cap the field is emitted verbatim (after flattening); over it,
+     * the field keeps its head AND its tail with an explicit `...[cut:N]...` marker
+     * naming the dropped length — head-only cuts silently destroyed the only part
+     * that mattered whenever the payload was a URL.
+     */
     private static String oneLine(String s) {
         if (s == null) return "";
-        StringBuilder out = new StringBuilder(Math.min(s.length(), MAX_FIELD_CHARS + 8));
+        StringBuilder flat = new StringBuilder(Math.min(s.length(), MAX_FIELD_CHARS + 8));
         boolean lastSpace = false;
-        for (int i = 0; i < s.length() && out.length() < MAX_FIELD_CHARS; i++) {
+        for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c == '\n' || c == '\r' || c == '\t' || c == '"') c = ' ';
             boolean space = Character.isWhitespace(c);
             if (space && lastSpace) continue;
-            out.append(c);
+            flat.append(c);
             lastSpace = space;
         }
-        if (s.length() > MAX_FIELD_CHARS) out.append("~");
-        return out.toString();
+        // The cut decision is on the FLATTENED length: that is what the row costs.
+        if (flat.length() <= MAX_FIELD_CHARS) return flat.toString();
+        int dropped = flat.length() - FIELD_HEAD_CHARS - FIELD_TAIL_CHARS;
+        return flat.substring(0, FIELD_HEAD_CHARS)
+                + "...[cut:" + dropped + "]..."
+                + flat.substring(flat.length() - FIELD_TAIL_CHARS);
     }
 
     /**
