@@ -499,7 +499,9 @@ public class DemoDialogActivity extends Activity {
     protected void onResume() {
         super.onResume();
         overridePendingTransition(0, 0);
+        hideSoftInput();
         if (mWebView != null) {
+            mWebView.clearFocus();
             mWebView.onResume();
         }
     }
