@@ -94,13 +94,14 @@ public class QuestionActivity extends Activity {
                     NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                     if (nm != null) {
                         String title = intent.getStringExtra("title");
+                        String subtext = intent.getStringExtra("subtext");
                         String content = intent.getStringExtra("content");
                         String tag = intent.getStringExtra("tag");
                         if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
                         int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
                         int total = intent.getIntExtra("total", 0);
                         int completed = intent.getIntExtra("completed", 0);
-                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, content, total, completed);
+                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed);
                     }
                 } catch (Throwable t) {
                     Log.e(TAG, "is_completed postCompletedNotification failed: " + t.getMessage(), t);

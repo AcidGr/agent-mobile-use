@@ -1027,11 +1027,11 @@ func main() {
 		// Ensure process is thawed if frozen by ColorOS Hans/Freezer
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
 
-		// If this is a completion notification, use NotifyService (am start-service)
-		// which immediately wakes the process in background, posts high-priority notification and stops itself.
-		// Absolutely DOES NOT touch or disrupt ActivityStack, keeping DemoDialogActivity alive in background!
+		// If this is a completion notification, use Activity wake-up (am start -f 0x18000000)
+		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
+		// TaskAffinity is strictly isolated (.question vs .overlay), keeping DemoDialogActivity 100% untouched!
 		if isCompletedStr == "true" {
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_COMPLETED --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"NOTIFY_TITLE="+p.Title,
 				"NOTIFY_SUBTEXT="+p.Subtext,
@@ -1122,20 +1122,21 @@ func main() {
 			questionMu.Unlock()
 		}()
 
-		// Wake up process and trigger notification banner via NotifyService (am start-service)
-		// If current mode is foreground, pass is_foreground=true to directly pop up QuestionActivity card
+		// Wake up process and trigger notification banner via Activity launch in 0ms
+		// If in foreground mode, launch directly with interactive card (only_notify=false);
+		// If in background mode, launch with only_notify=true (posts heads-up banner with sound, then finishes immediately)
 		st := getStatus()
-		isFgStr := "false"
+		onlyNotifyStr := "true"
 		if st.Mode == "foreground" {
-			isFgStr = "true"
+			onlyNotifyStr = "false"
 		}
 
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" --ez is_foreground "$IS_FG" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify "$ONLY_NOTIFY" --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
+			"ONLY_NOTIFY="+onlyNotifyStr,
 			"REQ_ID="+p.RequestID,
 			"REQ_DATA="+string(bodyBytes),
-			"IS_FG="+isFgStr,
 		)
 		cmd.Run()
 
