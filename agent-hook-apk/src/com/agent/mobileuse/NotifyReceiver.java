@@ -165,25 +165,19 @@ public class NotifyReceiver extends BroadcastReceiver {
                 }
             }
 
-            // Crisp title without emoji
+            // Crisp pure title without emoji or count numbers
             String cleanTitle = cleanEmoji(title);
-            if (cleanTitle.isEmpty()) {
+            if (cleanTitle.isEmpty() || cleanTitle.contains("完成")) {
                 cleanTitle = "任务已经完成！";
             }
             builder.setContentTitle(cleanTitle);
 
-            // Summary text for collapsed notification view
-            String summary = "";
-            String[] lines = content.split("<br\\s*/?>|\n");
-            for (String l : lines) {
-                String plain = cleanEmoji(l.replaceAll("<[^>]*>", "").trim());
-                if (!plain.isEmpty() && !plain.startsWith("───")) {
-                    summary = plain;
-                    break;
-                }
+            // Clean full content text for both collapsed summary and expanded big text
+            String cleanContent = cleanEmoji(content);
+            if (cleanContent.isEmpty()) {
+                cleanContent = "所有执行事项均已处理完毕";
             }
-            if (summary.isEmpty()) summary = "所有执行事项均已处理完毕";
-            builder.setContentText(summary);
+            builder.setContentText(cleanContent);
 
             // SubText: Session Title if provided, otherwise default prompt
             String cleanSubtext = cleanEmoji(subtext);
@@ -195,7 +189,7 @@ public class NotifyReceiver extends BroadcastReceiver {
             // BigTextStyle for rich clean view without emoji
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
             bigStyle.setBigContentTitle(cleanTitle);
-            bigStyle.bigText(parseCleanHtml(content));
+            bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 
             // Set SmallIcon
