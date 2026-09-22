@@ -147,9 +147,12 @@ public class QuestionReceiver extends BroadcastReceiver {
             builder.setSubText("点击处理交互提问");
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
 
+            // LargeIcon: Pure white circle background with a crisp black question mark
             try {
-                Bitmap avatar = BitmapFactory.decodeResource(context.getResources(), R.drawable.dsh_whale_avatar);
-                if (avatar != null) builder.setLargeIcon(avatar);
+                Bitmap questionIcon = createWhiteBlackQuestionBitmap(192);
+                if (questionIcon != null) {
+                    builder.setLargeIcon(questionIcon);
+                }
             } catch (Throwable ignored) {}
 
             // BigText style
@@ -172,9 +175,6 @@ public class QuestionReceiver extends BroadcastReceiver {
             PendingIntent contentPi = PendingIntent.getActivity(context, 101, cardIntent, piFlags);
             builder.setContentIntent(contentPi);
 
-            // Action button to open card
-            builder.addAction(R.drawable.dsh_whale_icon, "打开作答卡片", contentPi);
-
             builder.setDefaults(Notification.DEFAULT_ALL);
             builder.setPriority(2); // PRIORITY_MAX = 2
             builder.setAutoCancel(true);
@@ -186,6 +186,37 @@ public class QuestionReceiver extends BroadcastReceiver {
         } catch (Throwable t) {
             Log.e(TAG, "showQuestionNotification failed: " + t.getMessage(), t);
         }
+    }
+
+    /**
+     * Create a crisp vector-drawn LargeIcon: Pure white circle background with a bold black question mark (?).
+     */
+    private static Bitmap createWhiteBlackQuestionBitmap(int size) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+        float center = size / 2.0f;
+        float radius = center - 4.0f;
+
+        // 1. Draw smooth white circular background
+        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setColor(0xFFFFFFFF);
+        bgPaint.setStyle(android.graphics.Paint.Style.FILL);
+        canvas.drawCircle(center, center, radius, bgPaint);
+
+        // 2. Draw bold black question mark (?)
+        android.graphics.Paint textPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        textPaint.setColor(0xFF1E2024); // Deep Black / Charcoal
+        textPaint.setTextSize(size * 0.65f);
+        textPaint.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
+        textPaint.setTextAlign(android.graphics.Paint.Align.CENTER);
+
+        // Vertically center alignment
+        android.graphics.Paint.FontMetrics fm = textPaint.getFontMetrics();
+        float textY = center - (fm.descent + fm.ascent) / 2.0f;
+        canvas.drawText("?", center, textY, textPaint);
+
+        return bitmap;
     }
 
     public static void postDirectAnswer(final String requestId, final String questionId, final String selected) {
