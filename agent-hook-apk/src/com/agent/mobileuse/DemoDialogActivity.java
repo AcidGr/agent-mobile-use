@@ -83,6 +83,11 @@ public class DemoDialogActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean isKeyboardShowing() {
+            return mActivity != null && mActivity.mIsKeyboardShowing;
+        }
+
+        @JavascriptInterface
         public void hideSoftInput() {
             if (mActivity != null) {
                 mActivity.runOnUiThread(new Runnable() {
@@ -117,6 +122,7 @@ public class DemoDialogActivity extends Activity {
     private LinearLayout mCard;
     private WebView mWebView;
     private ProgressBar mProgressBar;
+    private volatile boolean mIsKeyboardShowing = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -202,6 +208,7 @@ public class DemoDialogActivity extends Activity {
                     } catch (Throwable ignored) {
                         bottom = insets.getSystemWindowInsetBottom();
                     }
+                    mIsKeyboardShowing = (bottom > 200);
                     v.setPadding(0, 0, 0, bottom);
                 }
                 return insets;
