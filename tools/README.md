@@ -5,7 +5,9 @@ Tooling that answers one question honestly: **did the dump capture everything on
 `check-completeness.py` is the one that matters — it reports `act_sent`/`act_total`, the
 number of controls actually delivered versus present. `measure-payload.py` reports the
 response size in code points against the pruner limit. `dump-matrix.sh` is the older
-device-side version, kept for a quick look without a host.
+device-side version, kept for a quick look without a host. `uncapped_field_test.py` is
+the stress test behind the per-field cap: it lifts the cap, dumps rich-text screens,
+and reports the longest field and the heaviest payload (see the field-cap section below).
 
 Run from the host (talks to `vd_server` on `127.0.0.1:3070`):
 
@@ -14,9 +16,10 @@ python3 tools/check-completeness.py
 python3 tools/measure-payload.py
 ```
 
-Both drive the system browser (`com.heytap.browser`) for the WebView rows, and force-stop
-it before the native apps — otherwise a leftover browser tab sits on top and the "app
-launches" land inside a WebView instead of the app under test.
+Both drive the system browser (`com.heytap.browser`) for the WebView rows, and both
+force-stop it before opening a web target. `check-completeness.py` also closes it before
+the native-app run: otherwise a leftover browser tab sits on top and the "app launches"
+land inside a WebView instead of the app under test.
 
 Never use `mark.via` for this: it is the user's own browser.
 
@@ -90,13 +93,15 @@ m.zhihu     cp=4645   trunc=False  nodes=45  ret=45   act=31/31  OK
 ```
 
 Every screen delivers every control in a single call, none reports `truncated`, and the
-worst payload is 11690 code points against the 14000 threshold. No paging is needed for
-any of them.
+worst payload is 11660 code points — against the 14000 threshold in force on the day
+this baseline was recorded (today 23000, see the table above).
 
-The harness refuses to report a screen it did not actually reach. Launching with
-`am start --display 3 -W` is required: without `-W` a leftover browser tab can win the
-foreground race, and the script prints SKIPPED rather than measuring the wrong app. That
-check is what caught a phantom 微博 row (`com.sina.weibo` is not installed here).
+The harness refuses to report a screen it did not actually reach. The display id is
+queried dynamically from the gateway (`/api/status`), never hardcoded — a script that assumed
+a fixed id launched apps where the dump never looked and reported the whole run as SKIPPED.
+Each launch is verified by reading `topResumedActivity` back from the target display:
+if not installed or the foreground belongs to another package, it is reported as SKIPPED.
+That check is what caught a phantom 微博 row (`com.sina.weibo` is not installed here).
 
 ## Why the threshold was raised from 8192
 
@@ -115,12 +120,48 @@ com.tencent.mobileqq   8285
 dense screens back under budget. `tap` is kept: that is an *ancestor's* centre and cannot
 be derived from the node's own bounds.
 
-## Paging still exists, as a fallback
+## Per-field cuts: 140 head-only -> 4000 head+tail
 
-`mobile_dump_ui y_min=...` remains, driven by `next_y` when `omitted_top` is set. With the
-budget raised it is no longer needed for the screens above, but a screen with more
-controls than ~12000 code points can hold will still report `truncated`, and then paging
-recovers the rest instead of losing it.
+The whole-tree budget (`MAX_NODES_CHARS = 20000`) is not the only truncation mechanism.
+Each free-text field was historically cut at 140 code points by `oneLine()` in `ToolMain.java`,
+head-only, with a bare `~` appended. That cut does **NOT** set `truncated=1` — the status line's
+truncation flag belongs to the whole-tree budget alone. The status line could therefore report
+`truncated=0` (healthy dump) while a critical field was silently cut in half.
+
+This broke a real workflow: a 177-character customer-service chat message carrying
+`https://h5.kfzz20.oreo20.cn/#/pages/order/detail?orderId=jiwY0lNldwOw` was emitted as
+`https://h5.kfzz20.oreo20.cn/#/pa~` — the `orderId` lived past code point 140 — and recovering
+the link required zooming a screenshot.
+
+With the cap lifted to 99,999, `tools/uncapped_field_test.py` dumped 8 rich-text screens on the
+background virtual display:
+
+```
+知乎 (feed+scroll)      cp=3681  rows=47  trunc=0  maxfield=311  n>140=2
+微信                   cp=2204  rows=26  trunc=0  maxfield=35   n>140=0
+淘宝 (feed+scroll)      cp=4376  rows=76  trunc=0  maxfield=43   n>140=0
+美团                   cp=2694  rows=45  trunc=0  maxfield=23   n>140=0
+QQ                     cp=4792  rows=68  trunc=0  maxfield=148  n>140=1
+百科·长文页             cp=3852  rows=71  trunc=0  maxfield=32   n>140=0
+m.zhihu feed           cp=2711  rows=39  trunc=0  maxfield=101  n>140=0
+腾讯新闻 feed          cp=5131  rows=83  trunc=0  maxfield=69   n>140=0
+```
+
+Worst screen: 5131 of the 23,000 pruner threshold; longest real field: 311 chars. WebViews break
+long articles into per-element a11y nodes (the Baike page peaked at only 32 chars), so the feared
+single-node multi-kilobyte explosion did not occur.
+
+Policy shipped in v5.1 (`fix(dump)`):
+
+| | Legacy (140) | Current v5.1 (4000) |
+| --- | --- | --- |
+| Cap | 140 (label budget) | **4000** (disaster wall, ~13x measured max) |
+| Cut shape | Head-only (URL params always died) | **Head + 160-char Tail** (query params preserved) |
+| Marker | Bare `~` | Explicit `...[cut:N]...` with dropped length |
+| Cut decision | Raw length (mislabelled fields that fit after space collapse) | Flattened length (the row's actual cost) |
+
+`hoisting` shares the same constant, bounding merged container labels. 9/9 unit tests pass; the
+service-chat link now dumps completely in one call.
 
 ## Failure vs. an empty tree
 

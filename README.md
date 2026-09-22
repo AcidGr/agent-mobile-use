@@ -71,9 +71,9 @@
 - **`vd stop`**：完全销毁副屏，向系统注销 Display，回收所有 GPU 显存与 CPU 资源。
 - **`vd status`**：查看当前副屏状态（运行中/休眠）、当前 Display ID 以及分辨率参数。
 - **`vd launch <包名>`**：定向调度指定应用直接在副屏启动（例如 `vd launch com.sankuai.meituan`）。
-- **`vd tree`**：结构化 Dump 当前副屏的无障碍控件树（以极简 JSON 输出节点文本、ID、中心绝对点击坐标）。
+- **`vd tree`**：结构化 Dump 当前副屏的无障碍控件树（平铺格式：状态行 + 列头 + 一行一元素，含节点文本、flags、边界与可点击中心坐标；`truncated`/`omitted` 如实报告任何截断损失）。
 - **`vd tap <x> <y>`**：向副屏指定坐标发送物理触控点击事件（利用 `input -d <did> tap`）。
-- **`vd type "<文本>"`**：静默将文本填入副屏当前获得焦点的输入框（支持中文、特殊符号，0 键盘弹窗）。
+- **`vd type "<文本>"`**：静默文字注入（支持中文、特殊符号，0 键盘弹窗）。v5.1 起为**确定性单路径**：精确目标解析（聚焦框 / resource-id / `id:<res>` / `idx:N`）→ 单次 `ACTION_SET_TEXT` → 回读校验分类，零回退、失败附证据（详见下文「近期实测记录」）。
 - **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向副屏发送滑动、曲线笔触或长按手势。
 - **`vd key <keycode>`**：向副屏发送系统物理按键（如 4 为返回，3 为主页，66 为回车）。
 - **`vd screenshot [path]`**：定向截取副屏当前帧并保存为 PNG 图片（默认路径 `/data/local/tmp/vd_screenshot.png`）。
@@ -88,6 +88,39 @@
   - ⚠️ **JPEG 必须保持副屏全分辨率**：截图工具（`mobile_screenshot`）是用返回图片的像素尺寸去推算投递给视觉模型时的缩放比例的，一旦这里预降采样，工具就会告诉模型一个错误的比例，导致点击坐标整体偏移。
 - `GET|POST http://127.0.0.1:3070/api/start`：远程拉起副屏（副屏未启动时 Web 界面按钮自动指向此接口）。
 - `POST http://127.0.0.1:3070/api/stop`：远程关闭副屏。
+- 自动化主链路端点（DSH 预设与 `tools/` 压测脚本直接调用）：
+  - `GET /api/dump_ui`：平铺式无障碍树观测（状态行 + 列头 + 一行一元素），截断语义详见 [`tools/README.md`](tools/README.md)。
+  - `POST /api/type`：确定性文字注入（见下文「近期实测记录」）。
+  - `POST /api/click` · `/api/swipe` · `/api/key` · `/api/launch`：坐标点击、手势滑动、按键、定向启动应用。
+  - `POST /api/shell`：设备 root shell 直通（压测脚本经它启动应用、探测前台）。
+
+---
+
+### 近期实测记录与能力演进 (v5.1)
+
+**1. 确定性 `mobile_type` 文字注入管线**
+
+早期的“智能混合注入”（SET_TEXT 失败后回退为：点按坐标抢焦点 → 等待 → 剪贴板粘贴）有一个致命失败模式：目标解析一旦猜错（标签/contains 模糊匹配），回退链就会在屏幕上产生一次**错误点击**，页面被关闭或跳转。v5.1 重构为确定性单路径：
+
+- **精确目标解析**：仅接受「聚焦输入框 / 完整或短 resource-id / `id:<res>` / `idx:N`」，不再接受数字节点 id 与标签模糊猜测；
+- **单次 `ACTION_SET_TEXT` + 回读校验**：写入即回读，分类为 `ok`、`verify_unavailable`（已写入但不可比对——密码框等，**不算失败**）、`no_focused_input`、`target_not_found`、`ambiguous_target`、`target_not_editable`、`inject_rejected`、`verify_mismatch`；
+- **零回退**：失败携带 before/after 证据上报，而不是被下一条策略掩盖；`submit:true` 且写入成功后补发 `KEYCODE_ENTER`。
+
+**2. Dump 字段截断实测升级（140 → 4000，head+tail）**
+
+事故驱动：客服会话中一条 177 字符、带 `?orderId=xyz` 的自助点餐链接，被旧的单字段 140 上限切成 `.../#/pa~`——orderId 正好落在第 140 字符之后——而状态行全程 `truncated=0`（该标志只覆盖整树预算，字段级切割静默无信号），最终靠截图放大肉眼读回 URL。
+
+把上限临时放开到 99999 后，`tools/uncapped_field_test.py` 在后台副屏压测 8 个富文本屏（知乎/微信/淘宝/美团/QQ/百科长文/m.zhihu/腾讯新闻）：
+
+| 指标 | 实测 |
+| --- | --- |
+| 最重整树载荷 | **5131 cp**（pruner 线 23000 的 22%） |
+| 最长真实单字段 | **311 字符**（知乎；QQ 群消息 148） |
+| `truncated=1` / 超 pruner 线的屏 | 0 / 0 |
+| 旧 140 上限会切断的字段 | 3 处（全部静默切断） |
+| “单节点携带整篇长文” | 未出现：WebView 按元素拆分（百科长文页单字段峰值仅 32） |
+
+据此落地 v5.1 策略：**4000 防灾上限（≈实测最大值 13 倍）+ 160 字符保尾（URL 参数/取餐码都活在尾部）+ 显式 `...[cut:N]...` 标记 + 按压平后长度判定**（顺带修复旧实现按原始长度判定、压平后本可容纳却误标 `~` 的缺陷）。hoisting 共用同一常量。单测 9/9 通过；端到端回归：同一条客服链接现已完整 dump。构建为确定性：仓库 `vd-tool-java/bin`、发行 `ksu-module/bin`、刷机包内 dex、设备已部署 dex 全部 md5 一致（v5.1 = `910db1fdcc51ba13832f9a9421920533`）。
 
 ---
 
@@ -96,7 +129,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载预编译好的刷机包：
-   **`agent-mobile-use-ksu-v5.0.zip`**
+   **`agent-mobile-use-ksu-v5.1.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -198,9 +231,9 @@ The whole drawing process took place entirely in the background virtual display 
 1. **CLI Bus (`/system/bin/vd`)**:
    - `vd start` / `vd stop` / `vd status`: Virtual display lifecycle management.
    - `vd launch <pkg>`: Launch application directly onto the background display.
-   - `vd tree`: Output structured accessibility UI hierarchy and clickable node coordinates in JSON.
+   - `vd tree`: Flat structured dump of the accessibility hierarchy — status line, column header, one row per element with text, flags, bounds and tap centre; `truncated`/`omitted` report any loss honestly.
    - `vd tap <x> <y>`: Inject touch events directly to the target display.
-   - `vd type "<text>"`: Inject text into the focused field without soft keyboard popups.
+   - `vd type "<text>"`: Silent text injection without soft-keyboard popups. Since v5.1 a deterministic single path: exact target resolution (focused field / resource-id / `id:` / `idx:N`), one `ACTION_SET_TEXT` with read-back verification, no fallbacks (see Recent Field Notes below).
    - `vd swipe <x1> <y1> <x2> <y2> [duration]`: Simulate drag/swipe gestures or brush strokes.
    - `vd key <keycode>`: Send key events (e.g. 4 for BACK, 3 for HOME, 66 for ENTER).
    - `vd screenshot [path]`: Take a direct frame capture of the virtual display.
@@ -212,6 +245,39 @@ The whole drawing process took place entirely in the background virtual display 
      The cached frame MUST stay at the display's full resolution: the screenshot tool derives the scale factor it reports to the vision model from these pixel dimensions, so serving a downscaled frame would silently shift every tap coordinate.
    - `GET|POST /api/start`: Bring the virtual display up on demand.
    - `POST /api/stop`: Safely release virtual display resources.
+   - Automation endpoints used by the DSH preset and the `tools/` harness:
+     - `GET /api/dump_ui`: Flat accessibility observation (status line + column header + one row per element). See [`tools/README.md`](tools/README.md).
+     - `POST /api/type`: Deterministic text injection (see Recent Field Notes below).
+     - `POST /api/click` · `/api/swipe` · `/api/key` · `/api/launch`: Direct coordinate touch, gestures, physical keys, and targeted package launch.
+     - `POST /api/shell`: Root shell passthrough on the device.
+
+---
+
+### Recent Field Notes: deterministic typing & measured dump caps (v5.1)
+
+**1. Deterministic `mobile_type` text injection pipeline**
+
+The early "smart hybrid injection" (fall back to coordinate tap to steal focus -> wait -> clipboard paste when `ACTION_SET_TEXT` failed) had a critical failure mode: if target resolution made an incorrect guess via fuzzy label/contains matching, the fallback chain produced an erroneous tap on screen, closing modals or triggering navigation. v5.1 refactors this into a deterministic single-path pipeline:
+
+- **Exact Target Resolution**: Accepts only the currently focused input field, full or short `resource-id`, `id:<res>`, or `idx:N`. Eliminates numeric node IDs and fuzzy label matching.
+- **Single `ACTION_SET_TEXT` + Read-back Verification**: Immediately reads back node text after injection and classifies the outcome: `ok`, `verify_unavailable` (written but unreadable/masked like password fields — not considered a failure), `no_focused_input`, `target_not_found`, `ambiguous_target`, `target_not_editable`, `inject_rejected`, `verify_mismatch`.
+- **Zero Fallbacks**: Reports failure with attached before/after evidence rather than concealing errors behind blind retries. Dispatches `KEYCODE_ENTER` only when `submit: true` and the write succeeded.
+
+**2. Measured dump field-cap upgrade (140 -> 4000, head+tail)**
+
+Incident-driven: A 177-character customer service chat message containing a self-service ordering link (`?orderId=xyz`) was sliced into `.../#/pa~` at character 140 by the legacy single-field cap. The status line still reported `truncated=0` because that metric only tracked the 20,000-char whole-tree budget.
+
+Stress testing with `tools/uncapped_field_test.py` across 8 rich-text screens on the background virtual display with the cap uncapped to 99,999 revealed:
+
+| Metric | Measured Value |
+| --- | --- |
+| Peak whole-tree payload | **5131 cp** (22% of the 23,000 pruner threshold) |
+| Longest real single field | **311 chars** (Zhihu Q&A preview; QQ group message: 148 chars) |
+| Screens hitting `truncated=1` or pruner | 0 / 0 |
+| Fields silently truncated by old 140 cap | 3 occurrences |
+| "Single-node full-article explosion" | Did not occur: WebViews break text per-element (Baike article peaked at 32 chars) |
+
+Policy in v5.1: **4000 disaster wall (~13x measured max) + 160-char tail preservation (URL query params & pickup codes live at the end) + explicit `...[cut:N]...` marker + cut decision on flattened length** (fixing a bug where raw-length checks appended `~` to fields that fit after space collapse). 9/9 unit tests pass. End-to-end: the chat link now dumps completely without truncation. Builds are deterministic (identical MD5 `910db1fd…` across build artifacts, release module, and deployed device).
 
 ---
 
