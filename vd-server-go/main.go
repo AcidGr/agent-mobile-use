@@ -1123,12 +1123,19 @@ func main() {
 		}()
 
 		// Wake up process and trigger notification banner via NotifyService (am start-service)
-		// Absolutely DOES NOT touch or disrupt ActivityStack, keeping DemoDialogActivity alive in background!
+		// If current mode is foreground, pass is_foreground=true to directly pop up QuestionActivity card
+		st := getStatus()
+		isFgStr := "false"
+		if st.Mode == "foreground" {
+			isFgStr = "true"
+		}
+
 		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start-service -n com.agent.mobileuse/.NotifyService -a com.agent.mobileuse.ACTION_NOTIFY_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" --ez is_foreground "$IS_FG" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"REQ_ID="+p.RequestID,
 			"REQ_DATA="+string(bodyBytes),
+			"IS_FG="+isFgStr,
 		)
 		cmd.Run()
 

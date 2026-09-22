@@ -44,9 +44,26 @@ public class NotifyService extends Service {
             if (ACTION_NOTIFY_QUESTION.equals(action) || intent.hasExtra("data")) {
                 String requestId = intent.getStringExtra("request_id");
                 String dataJson = intent.getStringExtra("data");
+                boolean isForeground = intent.getBooleanExtra("is_foreground", false);
+
                 if (requestId != null && dataJson != null) {
                     QuestionReceiver.showQuestionNotification(this, nm, requestId, dataJson);
                     Log.i(TAG, "Posted question notification for requestId=" + requestId);
+
+                    // If in foreground mode, seamlessly and directly pop up QuestionActivity card!
+                    if (isForeground) {
+                        try {
+                            Intent cardIntent = new Intent(this, QuestionActivity.class);
+                            cardIntent.putExtra("request_id", requestId);
+                            cardIntent.putExtra("data", dataJson);
+                            cardIntent.putExtra("only_notify", false);
+                            cardIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                            startActivity(cardIntent);
+                            Log.i(TAG, "Foreground mode detected: QuestionActivity directly launched!");
+                        } catch (Throwable actErr) {
+                            Log.e(TAG, "Failed to directly launch QuestionActivity: " + actErr.getMessage(), actErr);
+                        }
+                    }
                 }
             } else {
                 // Default: Task completion notification
