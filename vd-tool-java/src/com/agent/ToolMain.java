@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.graphics.Rect;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.lang.reflect.Method;
@@ -195,6 +196,9 @@ public class ToolMain {
      */
     private static final int CONNECT_STABILIZE_SLEEP_MS = 100;
 
+    /** Readiness poll interval; the window list is cheap, so a tight probe is affordable. */
+    private static final int WINDOW_POLL_INTERVAL_MS = 15;
+
     /**
      * Wait between the two passes. A WebView re-enables its renderer accessibility when it
      * is queried, but not synchronously, so reading twice in a row without a gap sees the
@@ -203,6 +207,30 @@ public class ToolMain {
     private static final int WEBVIEW_WAKE_SLEEP_MS = 600;
 
     public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (Throwable t) {
+            // A crash before the command could print anything. Emit the same shape the
+            // commands use so a caller sees a reason rather than an empty answer.
+            System.out.print("fail error=\"" + oneLine(String.valueOf(t)) + "\"");
+            exitNow(1);
+        }
+        exitNow(0);
+    }
+
+    /**
+     * Print-and-stop. Printing without flushing then halting would LOSE the dump:
+     * System.out.print() does not auto-flush, so today the bytes only reach the caller
+     * because the VM flushes on the way out — and the whole point here is to not take
+     * that way out. Everything below this line is a straight teardown saving.
+     */
+    private static void exitNow(int code) {
+        System.out.flush();
+        System.err.flush();
+        Runtime.getRuntime().halt(code);
+    }
+
+    private static void run(String[] args) {
         try {
             if (Looper.getMainLooper() == null) {
                 Looper.prepareMainLooper();
@@ -232,11 +260,11 @@ public class ToolMain {
             // budget is sized instead so a dense screen arrives whole in one call.
             int budgetOverride = args.length > 2 && args[2].length() > 0
                     ? Integer.parseInt(args[2]) : 0;
-            dumpTree(displayId, budgetOverride);
+            if (!dumpTree(displayId, budgetOverride)) exitNow(1);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
                 System.err.println("Usage: type <displayId> [targetSpec] <text> [submit:true|false]");
-                return;
+                exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
             if (args.length == 3) {
@@ -268,7 +296,7 @@ public class ToolMain {
         } else if ("settext".equals(cmd)) {
             if (args.length < 4) {
                 System.err.println("Usage: settext <displayId> <target: focused|<resId>|id:<res>|idx:N> <text>");
-                return;
+                exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
             smartType(displayId, args[2], args[3], false);
@@ -285,7 +313,7 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static void dumpTree(int targetDisplayId, int budgetOverride) {
+    private static boolean dumpTree(int targetDisplayId, int budgetOverride) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -323,7 +351,7 @@ public class ToolMain {
             info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
 
-            Thread.sleep(CONNECT_STABILIZE_SLEEP_MS);
+            waitForWindow(uiClass, uiAutomation, targetDisplayId, CONNECT_STABILIZE_SLEEP_MS);
 
             // Display geometry: an observation without it leaves the model unable to judge
             // whether a coordinate is even inside the screen.
@@ -487,6 +515,7 @@ public class ToolMain {
             StringBuilder sb = new StringBuilder();
             sb.append("fail error=\"").append(oneLine(String.valueOf(t))).append("\"");
             System.out.print(sb.toString());
+            return false;
         } finally {
             if (uiAutomation != null) {
                 try {
@@ -497,6 +526,43 @@ public class ToolMain {
                 ht.quit();
             }
         }
+        return true;
+    }
+
+    /**
+     * Poll {@code getWindowsOnAllDisplays} until the target display has a window, or the
+     * budget runs out. This replaces a blind fixed sleep: the window list is the cheapest
+     * readiness probe the engine offers, and it goes non-empty in ~10-20ms warm, so paying
+     * the full budget every time was pure latency. The budget is unchanged, so a cold
+     * engine still gets exactly the protection the fixed sleep used to give it.
+     */
+    private static void waitForWindow(Class<?> uiClass, Object uiAutomation,
+                                      int targetDisplayId, long budgetMs) {
+        long deadline = SystemClock.uptimeMillis() + budgetMs;
+        while (true) {
+            int wins = countTargetWindows(uiClass, uiAutomation, targetDisplayId);
+            if (wins > 0) return;
+            if (SystemClock.uptimeMillis() >= deadline) return;
+            try { Thread.sleep(WINDOW_POLL_INTERVAL_MS); } catch (InterruptedException ignored) {}
+        }
+    }
+
+    /** Windows on the target display only — the same slice the scan itself will walk. */
+    private static int countTargetWindows(Class<?> uiClass, Object uiAutomation, int targetDisplayId) {
+        try {
+            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+            if (displays == null) return 0;
+            Class<?> saClass = displays.getClass();
+            int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+            Method keyAt = saClass.getMethod("keyAt", int.class);
+            Method valueAt = saClass.getMethod("valueAt", int.class);
+            for (int i = 0; i < sizeN; i++) {
+                if (!Integer.valueOf(targetDisplayId).equals(keyAt.invoke(displays, i))) continue;
+                List<?> wins = (List<?>) valueAt.invoke(displays, i);
+                return wins == null ? 0 : wins.size();
+            }
+        } catch (Throwable ignored) {}
+        return 0;
     }
 
     /**
