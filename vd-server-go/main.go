@@ -161,6 +161,95 @@ func getTargetDisplayID(st StatusResp) int {
 	return st.DisplayID
 }
 
+type StackInfo struct {
+	StackID   int
+	DisplayID int
+	Packages  []string
+	TopAct    string
+	Visible   bool
+}
+
+func getStackList() []StackInfo {
+	out, err := exec.Command("/system/bin/cmd", "activity", "stack", "list").Output()
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(out), "\n")
+	var list []StackInfo
+	var cur *StackInfo
+
+	reRoot := regexp.MustCompile(`RootTask id=(\d+).*displayId=(\d+)`)
+	reTask := regexp.MustCompile(`taskId=(\d+):\s+([^/]+)/([^\s]+).*visible=(true|false)`)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if m := reRoot.FindStringSubmatch(line); len(m) > 2 {
+			if cur != nil {
+				list = append(list, *cur)
+			}
+			sId, _ := strconv.Atoi(m[1])
+			dId, _ := strconv.Atoi(m[2])
+			cur = &StackInfo{
+				StackID:   sId,
+				DisplayID: dId,
+			}
+		} else if cur != nil {
+			if m := reTask.FindStringSubmatch(line); len(m) > 4 {
+				cur.Packages = append(cur.Packages, m[2])
+				if cur.TopAct == "" {
+					cur.TopAct = m[2] + "/" + m[3]
+				}
+				if m[4] == "true" {
+					cur.Visible = true
+				}
+			}
+		}
+	}
+	if cur != nil {
+		list = append(list, *cur)
+	}
+	return list
+}
+
+func findStackForPackageAndActivity(pkg, act string) (StackInfo, bool) {
+	stacks := getStackList()
+	if act != "" {
+		for _, s := range stacks {
+			if strings.Contains(s.TopAct, pkg) && strings.Contains(s.TopAct, act) {
+				return s, true
+			}
+		}
+	}
+	for _, s := range stacks {
+		for _, p := range s.Packages {
+			if p == pkg {
+				return s, true
+			}
+		}
+	}
+	return StackInfo{}, false
+}
+
+func getTopAppStackOnDisplay(displayId int) (StackInfo, bool) {
+	stacks := getStackList()
+	for _, s := range stacks {
+		if s.DisplayID == displayId {
+			// The first stack encountered on this display is its top stack
+			for _, p := range s.Packages {
+				if strings.Contains(p, "launcher") || strings.Contains(p, "systemui") {
+					// Top of display is launcher or systemui
+					return StackInfo{}, false
+				}
+			}
+			if len(s.Packages) > 0 {
+				return s, true
+			}
+			return StackInfo{}, false
+		}
+	}
+	return StackInfo{}, false
+}
+
 func handoffToBackground() map[string]interface{} {
 	st := getStatus()
 	vdDid := st.DisplayID
@@ -169,25 +258,41 @@ func handoffToBackground() map[string]interface{} {
 		vdDid = st.DisplayID
 	}
 
-	// 1. 获取 Display 0 当前顶层的组件名并无缝平移至副屏
-	out, _ := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep -A 5 "Display #0" | grep "topResumedActivity"`).Output()
-	re := regexp.MustCompile(`u0\s+([a-zA-Z0-9._]+/[a-zA-Z0-9._]+)`)
-	matches := re.FindStringSubmatch(string(out))
 	migratedComponent := ""
-	if len(matches) > 1 {
-		comp := matches[1]
-		if !strings.Contains(comp, "launcher") && !strings.Contains(comp, "systemui") {
-			migratedComponent = comp
-			if vdDid > 0 {
-				_ = exec.Command("/system/bin/am", "start", "--display", strconv.Itoa(vdDid), "-n", comp).Run()
+	migratedTaskId := 0
+
+	// 1. Try finding top app stack via getTopAppStackOnDisplay
+	if topStack, ok := getTopAppStackOnDisplay(0); ok {
+		migratedComponent = topStack.TopAct
+		migratedTaskId = topStack.StackID
+	} else {
+		// Fallback: check topResumedActivity in dumpsys activity activities
+		out, _ := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep -A 8 "Display #0" | grep "topResumedActivity"`).Output()
+		re := regexp.MustCompile(`topResumedActivity=ActivityRecord\{[0-9a-fA-F]+\s+u0\s+([a-zA-Z0-9._]+/[a-zA-Z0-9._]+)\s+t(\d+)`)
+		if m := re.FindStringSubmatch(string(out)); len(m) > 2 {
+			comp := m[1]
+			if !strings.Contains(comp, "launcher") && !strings.Contains(comp, "systemui") {
+				migratedComponent = comp
+				migratedTaskId, _ = strconv.Atoi(m[2])
 			}
 		}
 	}
 
-	// 2. 模式设置为 background，并熄灭光效
+	// 2. Perform clean stack migration if we found a valid user app on Display 0
+	if migratedTaskId > 0 && vdDid > 0 {
+		cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(migratedTaskId), strconv.Itoa(vdDid))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Printf("[handoff] move-stack %d to %d error: %v, out: %s\n", migratedTaskId, vdDid, err, string(out))
+		} else {
+			fmt.Printf("[handoff] Successfully moved stack %d (%s) to display %d\n", migratedTaskId, migratedComponent, vdDid)
+		}
+	}
+
+	// 3. 模式设置为 background，并熄灭光效与胶囊
 	setCurrentMode("background")
 
-	// 3. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
+	// 4. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
 	setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display by user. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
 
 	return map[string]interface{}{
@@ -195,6 +300,7 @@ func handoffToBackground() map[string]interface{} {
 		"mode":               "background",
 		"target_display_id":  vdDid,
 		"migrated_component": migratedComponent,
+		"migrated_task_id":   migratedTaskId,
 		"message":            "Successfully handed off to background",
 	}
 }
@@ -965,6 +1071,37 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
+
+		// 1. Check if the requested app is already running in an activity stack
+		if existingStack, found := findStackForPackageAndActivity(p.Package, p.Activity); found {
+			if existingStack.DisplayID != targetDid {
+				// App is running on another display (e.g. Display 0) -> Smoothly reparent to targetDid!
+				cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(existingStack.StackID), strconv.Itoa(targetDid))
+				out, err := cmd.CombinedOutput()
+				if err == nil {
+					json.NewEncoder(w).Encode(ActionResponse{
+						Success: true,
+						Message: fmt.Sprintf("Smoothly moved existing stack %d of %s to display %d", existingStack.StackID, p.Package, targetDid),
+						Data:    string(out),
+						Notice:  popPendingHandoffNotice(),
+					})
+					return
+				}
+				// If move-stack somehow failed, fall through to am start
+			} else {
+				// App is already on target display
+				if existingStack.Visible && p.Activity == "" {
+					json.NewEncoder(w).Encode(ActionResponse{
+						Success: true,
+						Message: fmt.Sprintf("App %s is already active on display %d", p.Package, targetDid),
+						Notice:  popPendingHandoffNotice(),
+					})
+					return
+				}
+			}
+		}
+
+		// 2. Cold start fallback: launch via am start --display
 		did := strconv.Itoa(targetDid)
 		args := []string{"start", "--display", did}
 		if p.Activity != "" {
