@@ -144,7 +144,35 @@ public class DaemonMain {
 
             // 0x609 = FLAG_PUBLIC (1) | FLAG_OWN_CONTENT_ONLY (8) | FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS (512) | FLAG_TRUSTED (1024)
             int flags = 1545;
-            VirtualDisplay vd = dm.createVirtualDisplay("AgentVirtualDisplay", sWidth, sHeight, sDpi, reader.getSurface(), flags);
+            VirtualDisplay vd = null;
+
+            // Attempt to dynamically copy Display 0 Cutout (notch / hole-punch) to match physical metrics 1:1
+            try {
+                Display defaultDisplay = dm.getDisplay(0);
+                Object cutout = null;
+                if (defaultDisplay != null) {
+                    Method mGetCutout = defaultDisplay.getClass().getMethod("getCutout");
+                    cutout = mGetCutout.invoke(defaultDisplay);
+                }
+
+                Class<?> cBuilder = Class.forName("android.hardware.display.VirtualDisplayConfig$Builder");
+                java.lang.reflect.Constructor<?> ctor = cBuilder.getConstructor(String.class, int.class, int.class, int.class);
+                Object builder = ctor.newInstance("AgentVirtualDisplay", sWidth, sHeight, sDpi);
+                cBuilder.getMethod("setSurface", Class.forName("android.view.Surface")).invoke(builder, reader.getSurface());
+                cBuilder.getMethod("setFlags", int.class).invoke(builder, flags);
+
+                if (cutout != null) {
+                    cBuilder.getMethod("setDisplayCutout", Class.forName("android.view.DisplayCutout")).invoke(builder, cutout);
+                    System.out.println("[AgentDaemon] Mirroring physical Display 0 Cutout to Virtual Display: " + cutout);
+                }
+
+                Object config = cBuilder.getMethod("build").invoke(builder);
+                Method mCreateVD = dm.getClass().getMethod("createVirtualDisplay", Class.forName("android.hardware.display.VirtualDisplayConfig"));
+                vd = (VirtualDisplay) mCreateVD.invoke(dm, config);
+            } catch (Throwable t) {
+                System.err.println("[AgentDaemon] VirtualDisplayConfig creation failed, falling back to legacy API: " + t.getMessage());
+                vd = dm.createVirtualDisplay("AgentVirtualDisplay", sWidth, sHeight, sDpi, reader.getSurface(), flags);
+            }
 
             if (vd == null || vd.getDisplay() == null) {
                 System.err.println("[AgentDaemon] Failed to create virtual display!");
