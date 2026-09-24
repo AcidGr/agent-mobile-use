@@ -7,14 +7,20 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityNodeInfo;
 
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Host-side UI tool for agent-mobile-use.
@@ -300,13 +306,129 @@ public class ToolMain {
             }
             int displayId = Integer.parseInt(args[1]);
             smartType(displayId, args[2], args[3], false);
+        } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
+            String query = args.length > 1 ? args[1] : "";
+            listApps(query);
         } else {
             printUsage();
         }
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|clicknode|settext> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|clicknode|settext|apps> [args...]");
+    }
+
+    private static void listApps(String query) {
+        String filter = (query != null) ? query.trim().toLowerCase() : "";
+        Context context = null;
+        try {
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            Method systemMainMethod = activityThreadClass.getMethod("systemMain");
+            Object activityThread = systemMainMethod.invoke(null);
+            Method getSystemContextMethod = activityThreadClass.getMethod("getSystemContext");
+            context = (Context) getSystemContextMethod.invoke(activityThread);
+        } catch (Throwable t) {
+            System.err.println("fail error=\"failed to get SystemContext: " + oneLine(String.valueOf(t)) + "\"");
+            exitNow(1);
+            return;
+        }
+
+        if (context == null) {
+            System.err.println("fail error=\"SystemContext is null\"");
+            exitNow(1);
+            return;
+        }
+
+        PackageManager pm = context.getPackageManager();
+        if (pm == null) {
+            System.err.println("fail error=\"PackageManager is null\"");
+            exitNow(1);
+            return;
+        }
+
+        List<Integer> userIds = new ArrayList<Integer>();
+        try {
+            Object userManager = context.getSystemService("user");
+            Method getUsersMethod = userManager.getClass().getMethod("getUsers");
+            List<?> userList = (List<?>) getUsersMethod.invoke(userManager);
+            for (Object userInfo : userList) {
+                int id = userInfo.getClass().getField("id").getInt(userInfo);
+                userIds.add(id);
+            }
+        } catch (Throwable ignored) {
+            userIds.clear();
+            userIds.add(0);
+        }
+        if (userIds.isEmpty()) {
+            userIds.add(0);
+        }
+
+        Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+        mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+        Method queryAsUser = null;
+        try {
+            queryAsUser = pm.getClass().getMethod("queryIntentActivitiesAsUser", Intent.class, int.class, int.class);
+        } catch (Throwable ignored) {}
+
+        List<String> outputLines = new ArrayList<String>();
+
+        for (int uid : userIds) {
+            List<ResolveInfo> list = null;
+            if (queryAsUser != null) {
+                try {
+                    list = (List<ResolveInfo>) queryAsUser.invoke(pm, mainIntent, 0, uid);
+                } catch (Throwable ignored) {}
+            } else if (uid == 0) {
+                list = pm.queryIntentActivities(mainIntent, 0);
+            }
+
+            if (list == null) continue;
+
+            Set<String> seenPackages = new HashSet<String>();
+
+            for (ResolveInfo r : list) {
+                if (r == null || r.activityInfo == null || r.activityInfo.packageName == null) continue;
+                String pkg = r.activityInfo.packageName;
+                if (seenPackages.contains(pkg)) continue;
+                seenPackages.add(pkg);
+
+                CharSequence labelSeq = r.loadLabel(pm);
+                String label = (labelSeq != null) ? labelSeq.toString().trim() : pkg;
+                if (label.isEmpty()) label = pkg;
+
+                String displayLabel = label;
+                if (uid != 0) {
+                    displayLabel = label + " (分身)";
+                }
+
+                if (!filter.isEmpty()) {
+                    if (!displayLabel.toLowerCase().contains(filter) && !pkg.toLowerCase().contains(filter)) {
+                        continue;
+                    }
+                }
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(displayLabel).append(" | ").append(pkg);
+                if (uid != 0) {
+                    sb.append(" | user=").append(uid);
+                }
+                outputLines.add(sb.toString());
+            }
+        }
+
+        StringBuilder header = new StringBuilder();
+        header.append("total=").append(outputLines.size())
+              .append(" users=").append(userIds.toString());
+        if (!filter.isEmpty()) {
+            header.append(" query=\"").append(query).append("\"");
+        }
+        System.out.println(header.toString());
+
+        for (String line : outputLines) {
+            System.out.println(line);
+        }
+        exitNow(0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

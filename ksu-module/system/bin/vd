@@ -198,6 +198,9 @@ case "$1" in
             exit 1
         fi
         ;;
+    apps|list_apps)
+        run_tool apps "$2"
+        ;;
     *)
         echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v3.0)"
         echo ""
@@ -210,6 +213,7 @@ case "$1" in
         echo "  swipe <x1> <y1> <x2> <y2>    在副屏上模拟滑动手势与长按"
         echo "  key <keycode>                向副屏发送按键 (4:返回, 3:主页, 66:回车, 67:退格)"
         echo "  screenshot [path]            截取副屏当前帧 PNG 图片"
+        echo "  apps [query]                 获取本机已安装的桌面应用名称与包名"
         echo ""
         echo "生命周期管理:"
         echo "  start                        按需拉起底层虚拟屏与 3070 快照监控"

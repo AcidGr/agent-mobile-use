@@ -902,6 +902,46 @@ func main() {
 		})
 	})
 
+	mux.HandleFunc("/api/apps", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		query := r.URL.Query().Get("query")
+		if query == "" {
+			query = r.URL.Query().Get("q")
+		}
+		if r.Method == http.MethodPost && r.Body != nil {
+			var p struct {
+				Query string `json:"query"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil && p.Query != "" {
+				query = p.Query
+			}
+		}
+
+		args := []string{"apps"}
+		if query != "" {
+			args = append(args, query)
+		}
+
+		out, err := runTool(args...)
+		trimmed := strings.TrimSpace(out)
+		if err != nil && trimmed == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: false,
+				Message: fmt.Sprintf("Failed to list apps: %v", err),
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(ActionResponse{
+			Success: true,
+			Message: "OK",
+			Data:    trimmed,
+		})
+	})
+
 	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		_, targetDid, err := ensureTargetReady()
