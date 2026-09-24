@@ -1,6 +1,8 @@
 package com.agent.mobileuse;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -21,6 +23,7 @@ import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -123,6 +126,8 @@ public class DemoDialogActivity extends Activity {
     private WebView mWebView;
     private ProgressBar mProgressBar;
     private volatile boolean mIsKeyboardShowing = false;
+    private static final int REQUEST_CODE_PERMISSIONS = 1001;
+    private PermissionRequest mPendingPermissionRequest;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -400,6 +405,48 @@ public class DemoDialogActivity extends Activity {
                     }
                 }
             }
+
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                Log.i(TAG, "onPermissionRequest for: " + java.util.Arrays.toString(request.getResources()));
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        boolean needsAudio = false;
+                        for (String res : request.getResources()) {
+                            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
+                                needsAudio = true;
+                                break;
+                            }
+                        }
+
+                        if (needsAudio) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                    mPendingPermissionRequest = request;
+                                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_PERMISSIONS);
+                                    return;
+                                }
+                            }
+                        }
+
+                        try {
+                            request.grant(request.getResources());
+                            Log.i(TAG, "PermissionRequest granted successfully");
+                        } catch (Throwable t) {
+                            Log.e(TAG, "Error granting PermissionRequest: " + t.getMessage(), t);
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                Log.w(TAG, "onPermissionRequestCanceled");
+                if (mPendingPermissionRequest == request) {
+                    mPendingPermissionRequest = null;
+                }
+            }
         });
     }
 
@@ -509,6 +556,38 @@ public class DemoDialogActivity extends Activity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            if (mPendingPermissionRequest != null) {
+                boolean granted = grantResults.length > 0;
+                for (int res : grantResults) {
+                    if (res != PackageManager.PERMISSION_GRANTED) {
+                        granted = false;
+                        break;
+                    }
+                }
+                if (granted) {
+                    try {
+                        mPendingPermissionRequest.grant(mPendingPermissionRequest.getResources());
+                        Log.i(TAG, "Granted pending permission request after user approval");
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Error granting permission after result: " + t.getMessage(), t);
+                    }
+                } else {
+                    try {
+                        mPendingPermissionRequest.deny();
+                        Log.w(TAG, "Denied pending permission request after user rejection");
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Error denying permission: " + t.getMessage(), t);
+                    }
+                }
+                mPendingPermissionRequest = null;
+            }
+        }
+    }
+
+    @Override
     public void onBackPressed() {
         if (mWebView != null && mWebView.canGoBack()) {
             mWebView.goBack();
@@ -549,6 +628,12 @@ public class DemoDialogActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (mPendingPermissionRequest != null) {
+            try {
+                mPendingPermissionRequest.deny();
+            } catch (Throwable ignored) {}
+            mPendingPermissionRequest = null;
+        }
         if (mWebView != null) {
             try {
                 mWebView.stopLoading();

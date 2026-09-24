@@ -9,6 +9,7 @@ ui_print "- 正在安装纯隐形 LSPosed 跨屏路由与输入法隔离补丁 (
 pm install -r "$MODPATH/apk/agent_hook.apk" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
     ui_print "- Hook 补丁安装成功"
+    pm grant com.agent.mobileuse android.permission.RECORD_AUDIO >/dev/null 2>&1
 else
     ui_print "! 警告: APK 安装失败，请检查系统环境"
 fi

@@ -26,6 +26,7 @@ cp -f "$MODDIR/res/dsh_whale_icon.png" /data/local/tmp/dsh_whale_icon.png 2>/dev
 chmod 666 /data/local/tmp/dsh_whale_avatar.png 2>/dev/null
 chmod 666 /data/local/tmp/dsh_whale_icon.png 2>/dev/null
 chmod 755 /data/local/tmp/run_daemon.sh 2>/dev/null
+pm grant com.agent.mobileuse android.permission.RECORD_AUDIO 2>/dev/null
 
 if ! pgrep -f "vd_server" >/dev/null 2>&1; then
     nohup "$MODDIR/bin/vd_server" > /data/local/tmp/vd_server.log 2>&1 &
