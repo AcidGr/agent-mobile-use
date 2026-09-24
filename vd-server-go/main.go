@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -90,9 +89,40 @@ func setCurrentMode(m string) string {
 	return currentMode
 }
 
+var (
+	cachedAppUID string
+	appUIDMu     sync.Mutex
+)
+
+func getAppUID() string {
+	appUIDMu.Lock()
+	defer appUIDMu.Unlock()
+	if cachedAppUID != "" {
+		return cachedAppUID
+	}
+	out, err := exec.Command("/system/bin/cmd", "package", "list", "packages", "-U", "com.agent.mobileuse").Output()
+	if err == nil {
+		str := string(out)
+		if idx := strings.Index(str, "uid:"); idx >= 0 {
+			uidStr := strings.TrimSpace(str[idx+4:])
+			if fields := strings.Fields(uidStr); len(fields) > 0 {
+				cachedAppUID = fields[0]
+				return cachedAppUID
+			}
+		}
+	}
+	return "10044"
+}
+
+func thawAppProcess() {
+	uid := getAppUID()
+	_ = exec.Command("/system/bin/sh", "-c", fmt.Sprintf("echo 0 > /sys/fs/cgroup/apps/uid_%s/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_%s/cgroup.freeze 2>/dev/null", uid, uid)).Run()
+}
+
 func setEdgeGlow(enable bool) {
 	if enable {
-		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse; echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse").Run()
+		thawAppProcess()
 		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -503,7 +533,7 @@ func toolReadsTree(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "tree", "dump", "tapnode", "tapgesture", "tapfocus", "clicknode", "type", "settext":
+	case "tree", "dump", "type":
 		return true
 	}
 	return false
@@ -1211,7 +1241,7 @@ func main() {
 		}
 
 		// Ensure process is thawed if frozen by ColorOS Hans/Freezer
-		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		thawAppProcess()
 
 		// If this is a completion notification, use Activity wake-up (am start -f 0x18000000)
 		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
@@ -1319,7 +1349,7 @@ func main() {
 			onlyNotifyStr = "false"
 		}
 
-		exec.Command("/system/bin/sh", "-c", "echo 0 > /sys/fs/cgroup/apps/uid_10044/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_10044/cgroup.freeze 2>/dev/null").Run()
+		thawAppProcess()
 		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify "$ONLY_NOTIFY" --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"ONLY_NOTIFY="+onlyNotifyStr,
@@ -1397,250 +1427,13 @@ func main() {
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 
-	type TaskEvent struct {
-		Type       string `json:"type"`
-		Tool       string `json:"tool,omitempty"`
-		Summary    string `json:"summary,omitempty"`
-		Success    bool   `json:"success,omitempty"`
-		Error      string `json:"error,omitempty"`
-		DurationMs int64  `json:"duration_ms,omitempty"`
-		Timestamp  int64  `json:"timestamp"`
-	}
-
-	var (
-		taskMu       sync.RWMutex
-		isTaskActive bool
-		lastEvent    *TaskEvent
-		activePrompt string
-	)
-
 	mux.HandleFunc("/api/task_event", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
 			return
 		}
-		var ev TaskEvent
-		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		taskMu.Lock()
-		lastEvent = &ev
-		if ev.Type == "tool_start" {
-			isTaskActive = true
-		} else if ev.Type == "agent_error" || ev.Type == "session_disposed" {
-			isTaskActive = false
-		}
-		taskMu.Unlock()
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
-	})
-
-	mux.HandleFunc("/api/chat/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			return
-		}
-		taskMu.RLock()
-		resp := map[string]any{
-			"is_active":     isTaskActive,
-			"active_prompt": activePrompt,
-			"workspace":     "/storage/emulated/0/workspace",
-			"last_event":    lastEvent,
-		}
-		taskMu.RUnlock()
-		json.NewEncoder(w).Encode(resp)
-	})
-
-	mux.HandleFunc("/api/chat/send", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			return
-		}
-		var p struct {
-			Prompt string `json:"prompt"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil || strings.TrimSpace(p.Prompt) == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Prompt cannot be empty"})
-			return
-		}
-
-		taskMu.Lock()
-		if isTaskActive {
-			taskMu.Unlock()
-			json.NewEncoder(w).Encode(ActionResponse{
-				Success: false,
-				Message: "Task is currently running in this workspace. Concurrency is forbidden.",
-			})
-			return
-		}
-		isTaskActive = true
-		activePrompt = strings.TrimSpace(p.Prompt)
-		lastEvent = &TaskEvent{
-			Type:      "task_initiated",
-			Summary:   "New task session dispatched",
-			Timestamp: time.Now().UnixMilli(),
-		}
-
-		// Spawn real DSH headless session in /storage/emulated/0/workspace
-		go func(userPrompt string) {
-			defer func() {
-				taskMu.Lock()
-				isTaskActive = false
-				taskMu.Unlock()
-			}()
-
-			// DSH runs in its own rootfs container. Find the container PID from ps.
-			pidBytes, _ := exec.Command("/system/bin/sh", "-c", `ps -ef | grep "dsh web" | grep -v grep | awk '{print $2}' | head -n 1`).Output()
-			dshPid := strings.TrimSpace(string(pidBytes))
-			if dshPid == "" {
-				dshPid = "14347" // Fallback
-			}
-
-			// Escape single quotes for shell string
-			escapedPrompt := strings.ReplaceAll(userPrompt, "'", "'\\''")
-			chrootCmd := fmt.Sprintf(`chroot /proc/%s/root /bin/sh -c "cd /storage/emulated/0/workspace && /usr/local/bin/dsh --profile headless --json '%s'"`, dshPid, escapedPrompt)
-
-			cmd := exec.Command("/system/bin/sh", "-c", chrootCmd)
-
-			stdout, err := cmd.StdoutPipe()
-			if err != nil {
-				taskMu.Lock()
-				lastEvent = &TaskEvent{
-					Type:      "tool_end",
-					Tool:      "system",
-					Success:   false,
-					Error:     "Failed to start DSH: " + err.Error(),
-					Timestamp: time.Now().UnixMilli(),
-				}
-				taskMu.Unlock()
-				return
-			}
-
-			if err := cmd.Start(); err != nil {
-				taskMu.Lock()
-				lastEvent = &TaskEvent{
-					Type:      "tool_end",
-					Tool:      "system",
-					Success:   false,
-					Error:     "DSH execution failed: " + err.Error(),
-					Timestamp: time.Now().UnixMilli(),
-				}
-				taskMu.Unlock()
-				return
-			}
-
-			scanner := bufio.NewScanner(stdout)
-			for scanner.Scan() {
-				line := strings.TrimSpace(scanner.Text())
-				if line == "" {
-					continue
-				}
-
-				var ev map[string]any
-				if err := json.Unmarshal([]byte(line), &ev); err != nil {
-					continue
-				}
-
-				evType, _ := ev["type"].(string)
-				taskMu.Lock()
-				if evType == "session" {
-					sessID, _ := ev["sessionId"].(string)
-					lastEvent = &TaskEvent{
-						Type:      "session_created",
-						Summary:   "Session: " + sessID,
-						Timestamp: time.Now().UnixMilli(),
-					}
-				} else if evType == "tool_call" {
-					toolName, _ := ev["tool"].(string)
-					inputMap, _ := ev["input"].(map[string]any)
-					summary := ""
-					if inputMap != nil {
-						if desc, ok := inputMap["description"].(string); ok && desc != "" {
-							summary = desc
-						} else if cmdStr, ok := inputMap["command"].(string); ok {
-							summary = cmdStr
-						} else {
-							b, _ := json.Marshal(inputMap)
-							summary = string(b)
-						}
-					}
-					lastEvent = &TaskEvent{
-						Type:      "tool_start",
-						Tool:      toolName,
-						Summary:   summary,
-						Timestamp: time.Now().UnixMilli(),
-					}
-				} else if evType == "tool_result" {
-					statusStr, _ := ev["status"].(string)
-					lastEvent = &TaskEvent{
-						Type:      "tool_end",
-						Tool:      "tool",
-						Success:   statusStr == "completed",
-						Summary:   "Result: " + statusStr,
-						Timestamp: time.Now().UnixMilli(),
-					}
-				} else if evType == "final" {
-					ansText, _ := ev["text"].(string)
-					if len(ansText) > 120 {
-						ansText = ansText[:120] + "..."
-					}
-					lastEvent = &TaskEvent{
-						Type:      "task_completed",
-						Summary:   ansText,
-						Timestamp: time.Now().UnixMilli(),
-					}
-				}
-				taskMu.Unlock()
-			}
-
-			_ = cmd.Wait()
-		}(activePrompt)
-
-		taskMu.Unlock()
-
-		json.NewEncoder(w).Encode(map[string]any{
-			"success": true,
-			"message": "Task queued successfully",
-			"prompt":  activePrompt,
-		})
-	})
-
-	mux.HandleFunc("/api/chat/claim", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			return
-		}
-		taskMu.Lock()
-		activePrompt = "" // Cleared after being claimed by DSH agent
-		lastEvent = &TaskEvent{
-			Type:      "task_dispatched",
-			Summary:   "Prompt claimed by DSH, starting agent turn",
-			Timestamp: time.Now().UnixMilli(),
-		}
-		taskMu.Unlock()
-		json.NewEncoder(w).Encode(map[string]any{"ok": true})
-	})
-
-	mux.HandleFunc("/api/chat/stop", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			return
-		}
-		taskMu.Lock()
-		isTaskActive = false
-		lastEvent = &TaskEvent{
-			Type:      "task_stopped",
-			Summary:   "Task stopped by user",
-			Timestamp: time.Now().UnixMilli(),
-		}
-		taskMu.Unlock()
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Task marked as stopped"})
 	})
 
 	mux.HandleFunc("/api/shell", func(w http.ResponseWriter, r *http.Request) {

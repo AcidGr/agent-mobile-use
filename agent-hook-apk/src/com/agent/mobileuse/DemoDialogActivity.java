@@ -5,8 +5,6 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -32,7 +30,6 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.TextView;
 
 import org.json.JSONObject;
 
@@ -267,112 +264,7 @@ public class DemoDialogActivity extends Activity {
         // Fully transparent card background
         mCard.setBackgroundColor(Color.TRANSPARENT);
 
-        // 3. Header Bar - hidden for clean floating chat experience
-        LinearLayout headerRow = new LinearLayout(this);
-        headerRow.setVisibility(View.GONE);
-        headerRow.setOrientation(LinearLayout.HORIZONTAL);
-        headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        headerRow.setBackgroundColor(0xFF181A20);
-        int padH = dpToPx(16);
-        int padV = dpToPx(10);
-        headerRow.setPadding(padH, padV, padH, padV);
-        LinearLayout.LayoutParams headerLp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            dpToPx(44)
-        );
-        headerRow.setLayoutParams(headerLp);
-
-        // Status Dot
-        TextView dotTv = new TextView(this);
-        dotTv.setText("● ");
-        dotTv.setTextColor(0xFF00E5FF);
-        dotTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        headerRow.addView(dotTv);
-
-        // Title
-        TextView titleTv = new TextView(this);
-        titleTv.setText("DeepSeek Agent 控制台");
-        titleTv.setTextColor(Color.WHITE);
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        titleTv.setLayoutParams(titleLp);
-        headerRow.addView(titleTv);
-
-        int btnSize = dpToPx(30);
-
-        // Reload Button
-        TextView refreshBtn = new TextView(this);
-        refreshBtn.setText("↻");
-        refreshBtn.setTextColor(0xFFB0B5C0);
-        refreshBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        refreshBtn.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams refLp = new LinearLayout.LayoutParams(btnSize, btnSize);
-        refLp.rightMargin = dpToPx(8);
-        refreshBtn.setLayoutParams(refLp);
-        GradientDrawable refBg = new GradientDrawable();
-        refBg.setColor(0x22FFFFFF);
-        refBg.setCornerRadius(btnSize / 2f);
-        refreshBtn.setBackground(refBg);
-        refreshBtn.setClickable(true);
-        refreshBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mWebView != null) {
-                    mWebView.reload();
-                }
-            }
-        });
-        headerRow.addView(refreshBtn);
-
-        // New Session Button
-        TextView newBtn = new TextView(this);
-        newBtn.setText("+");
-        newBtn.setTextColor(Color.WHITE);
-        newBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        newBtn.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams newLp = new LinearLayout.LayoutParams(btnSize, btnSize);
-        newLp.rightMargin = dpToPx(8);
-        newBtn.setLayoutParams(newLp);
-        GradientDrawable newBg = new GradientDrawable();
-        newBg.setColor(0xFF0066FF);
-        newBg.setCornerRadius(btnSize / 2f);
-        newBtn.setBackground(newBg);
-        newBtn.setClickable(true);
-        newBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mWebView != null) {
-                    mWebView.loadUrl(DSH_WEB_URL);
-                }
-            }
-        });
-        headerRow.addView(newBtn);
-
-        // Close Button
-        TextView closeBtn = new TextView(this);
-        closeBtn.setText("✕");
-        closeBtn.setTextColor(0xFFB0B5C0);
-        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        closeBtn.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(btnSize, btnSize);
-        closeBtn.setLayoutParams(closeLp);
-        GradientDrawable closeBg = new GradientDrawable();
-        closeBg.setColor(0x22FFFFFF);
-        closeBg.setCornerRadius(btnSize / 2f);
-        closeBtn.setBackground(closeBg);
-        closeBtn.setClickable(true);
-        closeBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                finish();
-            }
-        });
-        headerRow.addView(closeBtn);
-
-        mCard.addView(headerRow);
-
-        // 4. Loading Progress Bar
+        // 3. Loading Progress Bar
         mProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         mProgressBar.setLayoutParams(new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,

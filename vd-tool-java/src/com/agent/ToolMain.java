@@ -425,24 +425,6 @@ public class ToolMain {
                 // type <displayId> <targetSpec> <text>
                 smartType(displayId, args[2], args[3]);
             }
-        } else if ("clicknode".equals(cmd)) {
-            // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
-            // or description matches, then performAction(ACTION_CLICK) on it. See
-            // clickNode() for what this buys over a coordinate tap and where it fails.
-            if (args.length < 3) {
-                System.err.println("Usage: clicknode <displayId> <text|desc> [contains]");
-                return;
-            }
-            int displayId = Integer.parseInt(args[1]);
-            boolean contains = args.length > 3 && "contains".equals(args[3]);
-            clickNode(displayId, args[2], contains);
-        } else if ("settext".equals(cmd)) {
-            if (args.length < 4) {
-                System.err.println("Usage: settext <displayId> <target: focused|<nodeId>> <text>");
-                exitNow(2);
-            }
-            int displayId = Integer.parseInt(args[1]);
-            smartType(displayId, args[2], args[3]);
         } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
             String query = args.length > 1 ? args[1] : "";
             listApps(query);
@@ -452,7 +434,7 @@ public class ToolMain {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|clicknode|settext|apps> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|apps> [args...]");
     }
 
     private static void listApps(String query) {
@@ -1834,146 +1816,7 @@ public class ToolMain {
     /** Depth cap for node search. WeChat's real tree runs 14+ deep. */
     private static final int MAX_NODE_DEPTH = 30;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Node-identity click
-    // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Click a node by identity instead of by coordinate.
-     *
-     * Why this is worth having: performAction(ACTION_CLICK) asks the system to run the
-     * target View's click directly, so it does not depend on (a) the coordinate still
-     * being correct after the layout settled, or (b) nothing overlapping that point.
-     * A coordinate tap goes through InputDispatcher and lands on whatever is topmost.
-     *
-     * Where it fails, which is why the coordinate path must stay:
-     *   - no node, no click (canvas-drawn UI exposes nothing to click)
-     *   - plenty of controls return false from performAction even though they are
-     *     clickable, most often RecyclerView items and anything with a custom
-     *     touch handler
-     *   - an invisible or disabled node cannot be actioned
-     * Callers get an explicit `ok` plus `why`, so a false result is never mistaken for
-     * a successful tap.
-     */
-    private static void clickNode(int targetDisplayId, String label, boolean contains) {
-        HandlerThread ht = null;
-        Object uiAutomation = null;
-        String err = null;
-        String cls = null;
-        String txt = null;
-        String dsc = null;
-        String vid = null;
-        int[] bounds = null;
-        boolean ok = false;
-        int tried = 0;
-        try {
-            ht = new HandlerThread("NodeClickThread");
-            ht.start();
-            Object uac = Class.forName("android.app.UiAutomationConnection")
-                    .getConstructor().newInstance();
-            Class<?> uiClass = Class.forName("android.app.UiAutomation");
-            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
-            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
-                    .newInstance(ht.getLooper(), uac);
-            try {
-                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
-            } catch (NoSuchMethodException e) {
-                uiClass.getMethod("connect").invoke(uiAutomation);
-            }
-            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-            info.eventTypes = -1;
-            info.feedbackType = 16;
-            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
-            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
-            Thread.sleep(400);
-
-            List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
-            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
-            if (displays != null) {
-                Class<?> saClass = displays.getClass();
-                int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
-                Method keyAt = saClass.getMethod("keyAt", int.class);
-                Method valueAt = saClass.getMethod("valueAt", int.class);
-                for (int i = 0; i < sizeN; i++) {
-                    int dId = (Integer) keyAt.invoke(displays, i);
-                    if (dId != targetDisplayId) continue;
-                    List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                    if (wins == null) continue;
-                    for (Object win : wins) {
-                        Object rootObj = win.getClass().getMethod("getRoot").invoke(win);
-                        if (rootObj instanceof AccessibilityNodeInfo) {
-                            collectAll((AccessibilityNodeInfo) rootObj, 0, all);
-                        }
-                    }
-                }
-            }
-
-            // Prefer a node this action can actually land on: clickable, enabled, visible.
-            // A label often sits inside the real control, and actioning the label is what
-            // makes a node click look like it silently failed.
-            AccessibilityNodeInfo best = null;
-            AccessibilityNodeInfo fallback = null;
-            for (AccessibilityNodeInfo an : all) {
-                if (!labelMatches(an.getText(), label, contains)
-                        && !labelMatches(an.getContentDescription(), label, contains)) {
-                    continue;
-                }
-                tried++;
-                if (an.isClickable() && an.isEnabled() && an.isVisibleToUser()) {
-                    best = an;
-                    break;
-                }
-                if (fallback == null) fallback = an;
-            }
-            if (best == null) best = fallback;
-            if (best != null && !best.isClickable()) {
-                // A label usually sits inside the real control and is not itself
-                // clickable; actioning the label is what makes a node click look like it
-                // silently did nothing. Walk up to the nearest actionable ancestor.
-                AccessibilityNodeInfo anc = clickableAncestor(best);
-                if (anc != null) best = anc;
-            }
-            if (best != null) {
-                Rect r = new Rect();
-                best.getBoundsInScreen(r);
-                bounds = new int[] { r.left, r.top, r.right, r.bottom };
-                cls = best.getClassName() != null ? best.getClassName().toString() : null;
-                txt = best.getText() != null ? best.getText().toString() : null;
-                dsc = best.getContentDescription() != null
-                        ? best.getContentDescription().toString() : null;
-                vid = best.getViewIdResourceName();
-                ok = best.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                if (!ok) err = "performAction(ACTION_CLICK) returned false";
-            } else {
-                err = "no node matched";
-            }
-        } catch (Throwable t) {
-            err = String.valueOf(t);
-        } finally {
-            if (uiAutomation != null) {
-                try {
-                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
-                } catch (Throwable ignored) {}
-            }
-            if (ht != null) ht.quit();
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"ok\":").append(ok);
-        if (err != null) sb.append(",\"error\":\"").append(escapeJson(err)).append("\"");
-        sb.append(",\"label\":\"").append(escapeJson(label)).append("\"");
-        sb.append(",\"matched\":").append(tried);
-        if (cls != null) sb.append(",\"type\":\"").append(escapeJson(cls)).append("\"");
-        if (txt != null) sb.append(",\"text\":\"").append(escapeJson(txt)).append("\"");
-        if (dsc != null) sb.append(",\"desc\":\"").append(escapeJson(dsc)).append("\"");
-        if (vid != null) sb.append(",\"vid\":\"").append(escapeJson(vid)).append("\"");
-        if (bounds != null) {
-            sb.append(",\"b\":[").append(bounds[0]).append(",").append(bounds[1]).append(",")
-              .append(bounds[2]).append(",").append(bounds[3]).append("]");
-        }
-        sb.append("}");
-        System.out.print(sb.toString());
-    }
 
     /**
      * Deterministic single-path type pipeline (Plan A: minimal method):
@@ -2259,22 +2102,6 @@ public class ToolMain {
         return sawMask;
     }
 
-    /**
-     * Nearest ancestor (or the node itself) that accepts a click. This is the node whose
-     * click the user meant when they named a label.
-     */
-    private static AccessibilityNodeInfo clickableAncestor(AccessibilityNodeInfo node) {
-        AccessibilityNodeInfo cur = node;
-        for (int up = 0; up < MAX_NODE_DEPTH && cur != null; up++) {
-            if (cur.isClickable() && cur.isEnabled()) return cur;
-            AccessibilityNodeInfo p = null;
-            try { p = cur.getParent(); } catch (Throwable ignored) {}
-            if (p == null) return null;
-            cur = p;
-        }
-        return null;
-    }
-
     private static void collectAll(AccessibilityNodeInfo node, int depth,
                                    List<AccessibilityNodeInfo> out) {
         if (node == null || depth > MAX_NODE_DEPTH) return;
@@ -2285,13 +2112,6 @@ public class ToolMain {
             try { ch = node.getChild(i); } catch (Throwable ignored) {}
             if (ch != null) collectAll(ch, depth + 1, out);
         }
-    }
-
-    private static boolean labelMatches(CharSequence value, String label, boolean contains) {
-        if (value == null) return false;
-        String s = value.toString().trim();
-        if (s.length() == 0) return false;
-        return contains ? s.contains(label) : s.equals(label);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
