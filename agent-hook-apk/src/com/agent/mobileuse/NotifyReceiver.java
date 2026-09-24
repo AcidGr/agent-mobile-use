@@ -56,18 +56,22 @@ public class NotifyReceiver extends BroadcastReceiver {
             String title = intent.getStringExtra("title");
             String subtext = intent.getStringExtra("subtext");
             String content = intent.getStringExtra("content");
+            String sessionId = intent.getStringExtra("session_id");
+            if (sessionId == null || sessionId.isEmpty()) {
+                sessionId = intent.getStringExtra("session");
+            }
             int total = intent.getIntExtra("total", 0);
             int completed = intent.getIntExtra("completed", 0);
             boolean isCompleted = intent.getBooleanExtra("is_completed", false) || (total > 0 && completed >= total);
 
-            Log.i(TAG, "Received notification signal: title=" + title + " subtext=" + subtext + " (" + completed + "/" + total + ") isCompleted=" + isCompleted);
+            Log.i(TAG, "Received notification signal: title=" + title + " subtext=" + subtext + " (" + completed + "/" + total + ") isCompleted=" + isCompleted + " sessionId=" + sessionId);
 
             // Cancel any previous notification to keep notification drawer clean
             nm.cancel(tag, id);
 
             // Trigger high-priority heads-up notification when task completion signal is given
             if (isCompleted) {
-                postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed);
+                postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed, sessionId);
             } else {
                 Log.i(TAG, "In-progress step (" + completed + "/" + total + ") suppressed to avoid disturbance.");
             }
@@ -192,6 +196,12 @@ public class NotifyReceiver extends BroadcastReceiver {
     public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
                                                  String title, String subtext, String content,
                                                  int total, int completed) {
+        postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed, null);
+    }
+
+    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
+                                                 String title, String subtext, String content,
+                                                 int total, int completed, String sessionId) {
         try {
             ensureChannel(nm);
 
@@ -248,11 +258,15 @@ public class NotifyReceiver extends BroadcastReceiver {
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
             Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
             overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if (sessionId != null && !sessionId.isEmpty()) {
+                overlayIntent.putExtra("session_id", sessionId);
+            }
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 23) {
                 flags |= 0x04000000; // FLAG_IMMUTABLE
             }
-            PendingIntent pi = PendingIntent.getActivity(context, 0, overlayIntent, flags);
+            int requestCode = (sessionId != null && !sessionId.isEmpty()) ? sessionId.hashCode() : id;
+            PendingIntent pi = PendingIntent.getActivity(context, requestCode, overlayIntent, flags);
             builder.setContentIntent(pi);
             builder.setAutoCancel(true); // Dismiss notification when clicked
 

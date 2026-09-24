@@ -101,7 +101,11 @@ public class QuestionActivity extends Activity {
                         int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
                         int total = intent.getIntExtra("total", 0);
                         int completed = intent.getIntExtra("completed", 0);
-                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed);
+                        String sessionId = intent.getStringExtra("session_id");
+                        if (sessionId == null || sessionId.isEmpty()) {
+                            sessionId = intent.getStringExtra("session");
+                        }
+                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
                     }
                 } catch (Throwable t) {
                     Log.e(TAG, "is_completed postCompletedNotification failed: " + t.getMessage(), t);

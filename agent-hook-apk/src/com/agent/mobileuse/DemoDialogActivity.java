@@ -2,6 +2,7 @@ package com.agent.mobileuse;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -128,11 +129,18 @@ public class DemoDialogActivity extends Activity {
     private volatile boolean mIsKeyboardShowing = false;
     private static final int REQUEST_CODE_PERMISSIONS = 1001;
     private PermissionRequest mPendingPermissionRequest;
+    private String mTargetSessionId = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         overridePendingTransition(0, 0);
+
+        Intent intent = getIntent();
+        if (intent != null) {
+            mTargetSessionId = intent.getStringExtra("session_id");
+            if (mTargetSessionId == null) mTargetSessionId = intent.getStringExtra("session");
+        }
 
         mMainHandler = new Handler(Looper.getMainLooper());
 
@@ -174,6 +182,31 @@ public class DemoDialogActivity extends Activity {
 
         initBaseUI();
         loadWebConsole();
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null) {
+            String sid = intent.getStringExtra("session_id");
+            if (sid == null || sid.isEmpty()) {
+                sid = intent.getStringExtra("session");
+            }
+            if (sid != null && !sid.isEmpty()) {
+                final String targetSid = sid;
+                mTargetSessionId = targetSid;
+                if (mWebView != null) {
+                    mWebView.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            Log.i(TAG, "onNewIntent switching session to: " + targetSid);
+                            mWebView.evaluateJavascript("window.DSH_SWITCH_SESSION && window.DSH_SWITCH_SESSION('" + targetSid + "');", null);
+                        }
+                    });
+                }
+            }
+        }
     }
 
     private int dpToPx(int dp) {
@@ -395,6 +428,12 @@ public class DemoDialogActivity extends Activity {
 
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage consoleMessage) {
+                Log.d("DSHWebConsole", consoleMessage.message() + " -- Line " + consoleMessage.lineNumber() + " of " + consoleMessage.sourceId());
+                return true;
+            }
+
+            @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 if (mProgressBar != null) {
                     if (newProgress < 100) {
@@ -461,8 +500,12 @@ public class DemoDialogActivity extends Activity {
                     @Override
                     public void run() {
                         if (mWebView != null) {
-                            Log.i(TAG, "Navigating WebView to: " + DSH_WEB_URL);
-                            mWebView.loadUrl(DSH_WEB_URL);
+                            String url = DSH_WEB_URL;
+                            if (mTargetSessionId != null && !mTargetSessionId.isEmpty()) {
+                                url = DSH_WEB_URL + "&session=" + mTargetSessionId;
+                            }
+                            Log.i(TAG, "Navigating WebView to: " + url);
+                            mWebView.loadUrl(url);
                         }
                     }
                 });

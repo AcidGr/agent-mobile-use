@@ -1180,6 +1180,8 @@ func main() {
 			Content     string `json:"content"`
 			Tag         string `json:"tag"`
 			URL         string `json:"url"`
+			SessionID   string `json:"session_id"`
+			Session     string `json:"session"`
 			Total       int    `json:"total"`
 			Completed   int    `json:"completed"`
 			IsCompleted bool   `json:"is_completed"`
@@ -1198,6 +1200,10 @@ func main() {
 		if p.URL == "" {
 			p.URL = "http://127.0.0.1:3080"
 		}
+		sid := p.SessionID
+		if sid == "" {
+			sid = p.Session
+		}
 
 		isCompletedStr := "false"
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
@@ -1211,13 +1217,14 @@ func main() {
 		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
 		// TaskAffinity is strictly isolated (.question vs .overlay), keeping DemoDialogActivity 100% untouched!
 		if isCompletedStr == "true" {
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"NOTIFY_TITLE="+p.Title,
 				"NOTIFY_SUBTEXT="+p.Subtext,
 				"NOTIFY_TAG="+p.Tag,
 				"NOTIFY_CONTENT="+p.Content,
 				"NOTIFY_URL="+p.URL,
+				"NOTIFY_SESSION_ID="+sid,
 				fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
 				fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
 			)
@@ -1229,12 +1236,13 @@ func main() {
 		}
 
 		// For normal in-progress steps or broadcast fallback:
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
 			"NOTIFY_URL="+p.URL,
+			"NOTIFY_SESSION_ID="+sid,
 			fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
 			fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
 			"NOTIFY_IS_COMPLETED="+isCompletedStr,
