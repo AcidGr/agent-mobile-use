@@ -41,6 +41,7 @@ public class ToolMain {
     /** Fields kept per node. The wire format is written by hand in renderNode(). */
     public static class NodeItem {
         public int id;
+        public AccessibilityNodeInfo rawNode;
         public int depth;
         public String type;
         public String text;
@@ -445,7 +446,7 @@ public class ToolMain {
             clickNode(displayId, args[2], contains);
         } else if ("settext".equals(cmd)) {
             if (args.length < 4) {
-                System.err.println("Usage: settext <displayId> <target: focused|<resId>|id:<res>|idx:N> <text>");
+                System.err.println("Usage: settext <displayId> <target: focused|<nodeId>> <text>");
                 exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
@@ -1775,6 +1776,7 @@ public class ToolMain {
         if (sane) {
             item = new NodeItem();
             item.id = idCounter[0]++;
+            item.rawNode = node;
             item.depth = depth;
             item.type = cls != null ? simplifyType(cls.toString()) : "View";
             item.text = text != null ? text.toString() : null;
@@ -2039,8 +2041,14 @@ public class ToolMain {
             Thread.sleep(200);
 
             List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
+            List<NodeItem> nodeList = new ArrayList<NodeItem>();
+            boolean dropSystemUi = (targetDisplayId == 0);
+            java.util.Set<String> chromeTitles = dropSystemUi
+                    ? systemChromeTitles() : java.util.Collections.<String>emptySet();
+
             for (int scanPass = 0; scanPass < 3; scanPass++) {
                 all.clear();
+                nodeList.clear();
                 Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
                 if (displays != null) {
                     Class<?> saClass = displays.getClass();
@@ -2052,11 +2060,25 @@ public class ToolMain {
                         if (dId != targetDisplayId) continue;
                         List<?> wins = (List<?>) valueAt.invoke(displays, i);
                         if (wins == null) continue;
+                        int winIndex = 0;
                         for (Object win : wins) {
-                            Object rootObj = win.getClass().getMethod("getRoot").invoke(win);
-                            if (rootObj instanceof AccessibilityNodeInfo) {
-                                collectAll((AccessibilityNodeInfo) rootObj, 0, all);
+                            Object rootObj;
+                            try {
+                                rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                            } catch (Throwable t) {
+                                rootObj = null;
                             }
+                            AccessibilityNodeInfo rootNode = (rootObj instanceof AccessibilityNodeInfo)
+                                    ? (AccessibilityNodeInfo) rootObj : null;
+                            if (dropSystemUi && isSystemUiWindow(win, chromeTitles, rootNode)) {
+                                continue;
+                            }
+                            if (rootNode != null) {
+                                collectAll(rootNode, 0, all);
+                                int[] idCounter = new int[] { 1 };
+                                collectInteractiveNodes(rootNode, 0, null, nodeList, idCounter, winIndex);
+                            }
+                            winIndex++;
                         }
                     }
                 }
@@ -2065,11 +2087,9 @@ public class ToolMain {
             }
 
             AccessibilityNodeInfo targetNode = null;
-            boolean focusMode = targetSpec == null || targetSpec.isEmpty() || "focused".equals(targetSpec);
+            boolean focusMode = targetSpec == null || targetSpec.isEmpty() || "focused".equalsIgnoreCase(targetSpec);
             if (focusMode) {
-                // The caller clicked a field; we only READ that decision back. If focus
-                // is on a container (WebView, form wrapper), look for its editable child —
-                // that is still "the focused field", not a new search across the screen.
+                // Focus Mode: type into currently focused input field
                 AccessibilityNodeInfo focusedAny = null;
                 for (AccessibilityNodeInfo an : all) {
                     if (an.isFocused() && an.isEditable()) { targetNode = an; break; }
@@ -2087,58 +2107,44 @@ public class ToolMain {
                                 ? simplifyType(focusedAny.getClassName().toString()) : "View";
                         focusHint = fc + "@" + rectStr(focusedAny);
                     }
-                }
-            } else if (targetSpec.startsWith("idx:")) {
-                int idx = -1;
-                try { idx = Integer.parseInt(targetSpec.substring(4)); } catch (NumberFormatException ignored) {}
-                List<AccessibilityNodeInfo> editables = new ArrayList<AccessibilityNodeInfo>();
-                for (AccessibilityNodeInfo an : all) {
-                    CharSequence cName = an.getClassName();
-                    if (an.isEditable() || (cName != null && cName.toString().contains("Edit"))) {
-                        editables.add(an);
-                    }
-                }
-                if (idx >= 0 && idx < editables.size()) {
-                    targetNode = editables.get(idx);
-                } else {
-                    error = "target_not_found";
-                    reason = "idx " + idx + " of " + editables.size() + " editable fields";
+                    reason = "No input field is currently focused. Please click the field first to focus, then type without target.";
                 }
             } else {
-                // Exact resource-id match only. Full ids must equal; short ids (as printed
-                // by dump: the part after "/") must match either the whole viewId (WebView
-                // DOM ids are bare, e.g. "account") or the id segment — never contains(),
-                // never a text/desc fallback.
-                String spec = targetSpec.startsWith("id:") ? targetSpec.substring(3) : targetSpec;
-                boolean fullId = spec.indexOf('/') >= 0;
-                List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
-                for (AccessibilityNodeInfo an : all) {
-                    String viewId = an.getViewIdResourceName();
-                    if (viewId == null) continue;
-                    if (fullId ? viewId.equals(spec)
-                               : (viewId.equals(spec) || viewId.endsWith("/" + spec))) matches.add(an);
+                // Numeric Node ID Mode: targetSpec must be a numeric node ID from dump tree (e.g. '146' or 'node:146')
+                String cleanSpec = targetSpec.startsWith("node:") ? targetSpec.substring(5).trim() : targetSpec.trim();
+                int targetId = -1;
+                try {
+                    targetId = Integer.parseInt(cleanSpec);
+                } catch (NumberFormatException nfe) {
+                    error = "invalid_target";
+                    reason = "Invalid target '" + targetSpec + "'. Target must be a numeric node ID from dump tree (e.g. '146') or omitted for focus mode.";
                 }
-                if (matches.isEmpty()) {
-                    error = "target_not_found";
-                    reason = fullId ? "no node with exact id" : "no node with id segment /" + spec;
-                } else if (matches.size() > 1) {
-                    error = "ambiguous_target";
-                    StringBuilder rb = new StringBuilder();
-                    for (int mi = 0; mi < matches.size() && mi < 3; mi++) {
-                        if (mi > 0) rb.append(' ');
-                        rb.append(rectStr(matches.get(mi)));
+
+                if (targetId >= 0) {
+                    NodeItem matchedItem = null;
+                    for (NodeItem item : nodeList) {
+                        if (item.id == targetId) {
+                            matchedItem = item;
+                            break;
+                        }
                     }
-                    reason = matches.size() + " nodes match: " + rb;
-                } else {
-                    AccessibilityNodeInfo m = matches.get(0);
-                    vid = m.getViewIdResourceName();
-                    cls = m.getClassName() != null ? m.getClassName().toString() : null;
-                    boundsStr = rectStr(m);
-                    targetNode = m.isEditable() ? m : findFirstEditable(m);
-                    if (targetNode == null) {
-                        error = "target_not_editable";
-                        reason = "matched node is not editable and has no editable child";
-                        if (m.getText() != null) beforeTxt = m.getText().toString();
+                    if (matchedItem == null) {
+                        error = "target_not_found";
+                        reason = "Node " + targetId + " not found on screen (screen may have refreshed). Fallback: click the field to focus, then type without target.";
+                    } else {
+                        AccessibilityNodeInfo raw = matchedItem.rawNode;
+                        if (raw != null) {
+                            targetNode = raw.isEditable() ? raw : findFirstEditable(raw);
+                        }
+                        if (targetNode == null) {
+                            error = "target_not_editable";
+                            reason = "Node " + targetId + " (" + matchedItem.type + ") is not an editable field and contains no editable child. Fallback: click it to focus, then type without target.";
+                            if (matchedItem.text != null) beforeTxt = matchedItem.text;
+                        } else {
+                            vid = targetNode.getViewIdResourceName();
+                            cls = targetNode.getClassName() != null ? targetNode.getClassName().toString() : null;
+                            boundsStr = rectStr(targetNode);
+                        }
                     }
                 }
             }
@@ -2187,7 +2193,10 @@ public class ToolMain {
 
             // Handle optional submit/enter
             if (ok && submit) {
-                Thread.sleep(50);
+                try {
+                    targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                } catch (Throwable ignored) {}
+                Thread.sleep(100);
                 Runtime.getRuntime().exec(new String[] {
                         "/system/bin/input", "-d", String.valueOf(targetDisplayId), "keyevent", "66"
                 }).waitFor();
