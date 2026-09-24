@@ -681,6 +681,7 @@ public class ToolMain {
                             if (dId != targetDisplayId) continue;
                             List<?> wins = (List<?>) valueAt.invoke(displays, i);
                             if (wins == null) continue;
+                            int[] idCounter = new int[] { 1 };
                             for (Object win : wins) {
                                 // Root first: the system-chrome test needs it (see
                                 // isSystemUiWindow), and the same lookup below reuses it.
@@ -706,7 +707,6 @@ public class ToolMain {
                                 if (rootNode != null) {
                                     boolean isSys = isSystemWindow(win, rootNode);
                                     int beforeSize = list.size();
-                                    int[] idCounter = new int[] { 1 };
                                     collectInteractiveNodes(rootNode, 0,
                                             null, list, idCounter, winIndex);
                                     // appNodeCount keeps its ORIGINAL meaning — "nodes from
@@ -1896,6 +1896,7 @@ public class ToolMain {
                         List<?> wins = (List<?>) valueAt.invoke(displays, i);
                         if (wins == null) continue;
                         int winIndex = 0;
+                        int[] idCounter = new int[] { 1 };
                         for (Object win : wins) {
                             Object rootObj;
                             try {
@@ -1910,7 +1911,6 @@ public class ToolMain {
                             }
                             if (rootNode != null) {
                                 collectAll(rootNode, 0, all);
-                                int[] idCounter = new int[] { 1 };
                                 collectInteractiveNodes(rootNode, 0, null, nodeList, idCounter, winIndex);
                             }
                             winIndex++;
