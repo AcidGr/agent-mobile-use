@@ -612,13 +612,13 @@ var headerInts = map[string]bool{
 	"total": true, "returned": true, "act_sent": true, "act_total": true,
 	"truncated": true, "omitted": true, "omitted_top": true, "omitted_min": true,
 	"dup": true, "retries": true, "recovered": true, "no_windows": true,
-	"tree_blocked": true,
+	"tree_blocked": true, "sys_dropped": true,
 }
 
 // headerOrder keeps the decorated header in the order ToolMain emits it, so a
 // human diffing two dumps is not confused by Go's map iteration order.
 var headerOrder = []string{
-	"display", "width", "height", "windows", "mode", "target_display_id",
+	"display", "width", "height", "windows", "sys_dropped", "mode", "target_display_id",
 	"total", "retries", "recovered", "no_windows", "tree_blocked", "dup",
 	"returned", "act_sent", "act_total", "truncated", "omitted", "omitted_top",
 	"omitted_min", "x_extent", "y_extent",
@@ -850,7 +850,16 @@ func main() {
 		// instead of sitting below the last emitted one, and next_y pointed at the bottom
 		// of the screen. Measured on Amap with a 3000-char budget: 39/88 controls on page
 		// one, next_y=2800, second page empty. A silent dead end is worse than no paging.
-		out, err := runTool("tree", did)
+		// Opt-in: ?no_system_ui=1 drops system-chrome windows (status bar, nav bar,
+		// notification shade, the ColorOS smart sidebar) so the physical display and the
+		// virtual display hand the model the SAME tree for the same app screen. Off by
+		// default; the un-filtered header is unchanged, and when the filter runs it
+		// reports sys_dropped=N so a reader can tell "no chrome here" from "chrome removed".
+		treeArgs := []string{"tree", did}
+		if v := r.URL.Query().Get("no_system_ui"); v == "1" || v == "true" {
+			treeArgs = append(treeArgs, "0", "--no-system-ui")
+		}
+		out, err := runTool(treeArgs...)
 		trimmed := strings.TrimSpace(out)
 		notice := popPendingHandoffNotice()
 		if err != nil || trimmed == "" {

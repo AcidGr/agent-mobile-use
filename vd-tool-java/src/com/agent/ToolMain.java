@@ -138,6 +138,141 @@ public class ToolMain {
     private static final int MAX_NODES_CHARS = 20000;
 
     /**
+     * Window owners that ARE the system chrome: status bar, navigation bar, notification
+     * shade, gesture strips, and the OEM equivalents that do not live in
+     * com.android.systemui.
+     *
+     * This is matched against the WINDOW's owner package, never against a node's
+     * package. Those two are not interchangeable and the difference is a trap:
+     * AccessibilityNodeInfo.getPackageName() returns "android" for large parts of the
+     * framework's own views, so a node-level test would classify Settings, Camera and
+     * every other ordinary app as system chrome and delete their screens.
+     *
+     * com.coloros.smartsidebar is listed explicitly because ColorOS ships the smart
+     * sidebar (智能侧边栏) and the edge floating bar from there, NOT from systemui, and
+     * their window types are OEM-private numbers (measured ty=2314 / ty=2315) that
+     * Android's TYPE_SYSTEM / TYPE_ACCESSIBILITY_OVERLAY test does not catch. Matching
+     * on the owner package is what makes the check survive an OEM build.
+     */
+    private static final String[] SYSTEM_UI_PACKAGES = {
+            "com.android.systemui",
+            "com.coloros.smartsidebar",
+            "com.oplus.systemui",
+            "com.oplusos.systemui",
+    };
+
+    private static boolean isSystemUiPackage(String p) {
+        if (p == null) return false;
+        String lp = p.toLowerCase();
+        for (String s : SYSTEM_UI_PACKAGES) {
+            if (lp.equals(s) || lp.startsWith(s + ".")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Window titles that WindowManager reports as owned by a system-chrome package,
+     * keyed by title and by package.
+     *
+     * Why this exists as well as getPackageName(): on this ColorOS build the window
+     * enumeration that UiAutomation hands out does not reliably carry the owner package,
+     * so a package-only test silently matched nothing and the filter was a no-op —
+     * measured as an identical D0 dump with and without the switch. The WindowManager's
+     * own `dumpsys window windows` always states `package=` next to each window, so it is
+     * used to say WHICH window names belong to system chrome; the UiAutomation window is
+     * then matched against that by title.
+     *
+     * Parsed once per dump. The shapes read are:
+     *   Window #12 Window{3f8a2 u0 StatusBar}:
+     *       mOwnerUid=10242 ... package=com.android.systemui ...
+     *   Window #3 Window{607def5 u0 com.tencent.mm/com.tencent.mm.ui.LauncherUI}:
+     *       ... package=com.tencent.mm ...
+     */
+    private static java.util.Set<String> systemChromeTitles() {
+        java.util.Set<String> titles = new java.util.HashSet<String>();
+        try {
+            Process p = Runtime.getRuntime().exec(
+                    new String[] { "/system/bin/dumpsys", "window", "windows" });
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()));
+            String line;
+            String pendingTitle = null;
+            while ((line = r.readLine()) != null) {
+                String t = line.trim();
+                int wi = t.indexOf("Window{");
+                if (wi >= 0 && t.startsWith("Window #")) {
+                    // Extract the title: the token after "u<uid> " up to the closing '}'.
+                    int sp = t.indexOf(' ', wi + 7);
+                    int close = t.lastIndexOf('}');
+                    if (sp > 0 && close > sp) {
+                        pendingTitle = t.substring(sp + 1, close).trim();
+                    } else {
+                        pendingTitle = null;
+                    }
+                    continue;
+                }
+                if (pendingTitle != null) {
+                    int pi = t.indexOf("package=");
+                    if (pi >= 0) {
+                        String pkg = t.substring(pi + 8).trim();
+                        int sp2 = pkg.indexOf(' ');
+                        if (sp2 > 0) pkg = pkg.substring(0, sp2);
+                        if (isSystemUiPackage(pkg)) titles.add(pendingTitle);
+                        pendingTitle = null; // one package line per window
+                    }
+                }
+            }
+            try { r.close(); } catch (Throwable ignored) {}
+            try { p.destroy(); } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+            // No dumpsys: fall back to the packageName path alone.
+        }
+        return titles;
+    }
+
+    /**
+     * True when this window is system chrome.
+     *
+     * Two independent signals, because neither is sufficient alone on every build:
+     *   1. the window's own getPackageName(), where the platform provides it;
+     *   2. the window's TITLE, matched against the names WindowManager attributes to a
+     *      system-chrome package (see systemChromeTitles).
+     *
+     * A window that matches neither is KEPT. Failing open is deliberate: a build quirk
+     * must not silently delete a real screen, and sys_dropped reports what was removed.
+     */
+    private static boolean isSystemUiWindow(Object win, java.util.Set<String> chromeTitles,
+                                            AccessibilityNodeInfo root) {
+        // 1. The window's own owner package, where the platform exposes one.
+        try {
+            CharSequence pkg = (CharSequence) win.getClass()
+                    .getMethod("getPackageName").invoke(win);
+            if (pkg != null && isSystemUiPackage(pkg.toString())) return true;
+        } catch (Throwable ignored) {
+        }
+        // 2. The ROOT NODE's package. On a window whose root exists this is the reliable
+        //    one: the node is a live AccessibilityNodeInfo the framework filled in, not a
+        //    window-level convenience field, and it is the same value isSystemWindow()
+        //    already reads for its own verdict.
+        if (root != null) {
+            try {
+                CharSequence pkg = root.getPackageName();
+                if (pkg != null && isSystemUiPackage(pkg.toString())) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        // 3. Title, resolved against WindowManager's own attribution.
+        if (chromeTitles != null && !chromeTitles.isEmpty()) {
+            try {
+                CharSequence t = (CharSequence) win.getClass().getMethod("getTitle").invoke(win);
+                if (t != null && chromeTitles.contains(t.toString().trim())) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    /**
      * The one column order every element row uses. Stated once here, emitted once per
      * dump as the second header line, and never repeated per element — which is the
      * whole point of the flat format. Before this, every node carried the strings
@@ -266,7 +401,16 @@ public class ToolMain {
             // budget is sized instead so a dense screen arrives whole in one call.
             int budgetOverride = args.length > 2 && args[2].length() > 0
                     ? Integer.parseInt(args[2]) : 0;
-            if (!dumpTree(displayId, budgetOverride)) exitNow(1);
+            // Diagnostic / opt-in switch: drop system-chrome windows so the physical
+            // display (which carries status bar, nav bar and the OEM smart sidebar) and
+            // the virtual display (which carries none of them) hand the model the SAME
+            // tree for the same app screen. Default OFF: existing behaviour is unchanged
+            // unless a caller asks for it.
+            boolean dropSystemUi = false;
+            for (int ai = 3; ai < args.length; ai++) {
+                if ("--no-system-ui".equals(args[ai])) dropSystemUi = true;
+            }
+            if (!dumpTree(displayId, budgetOverride, dropSystemUi)) exitNow(1);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
                 System.err.println("Usage: type <displayId> [targetSpec] <text> [submit:true|false]");
@@ -435,7 +579,8 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static boolean dumpTree(int targetDisplayId, int budgetOverride) {
+    private static boolean dumpTree(int targetDisplayId, int budgetOverride,
+                                     boolean dropSystemUi) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         try {
@@ -486,6 +631,15 @@ public class ToolMain {
             int windowCount = 0;
             int firstWindows = 0;
             int firstSize = 0;
+            int firstAppSize = 0;
+            int lastAppSize = 0;
+            // Windows removed by the opt-in --no-system-ui filter, reported as sys_dropped.
+            int droppedSystemUi = 0;
+            // Resolved once, and only when the filter is on: WindowManager's attribution of
+            // which window titles belong to system chrome. Empty when the switch is off, so
+            // the default path pays nothing.
+            java.util.Set<String> chromeTitles = dropSystemUi
+                    ? systemChromeTitles() : java.util.Collections.<String>emptySet();
             // How many attempts the FIRST scan needed. The rescue loop below can push the
             // raw counter much higher, and reporting that as `retries` would make a normal
             // screen look like a struggling one.
@@ -533,9 +687,11 @@ public class ToolMain {
             // The wait is skipped when the caller asked for a paging window: re-reading
             // would return the same clipped result, so it would only burn 2.5s.
             for (int pass = 0; pass < 2; pass++) {
+                int appNodeCount = 0;
                 for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
                     list = new ArrayList<NodeItem>();
                     windowCount = 0;
+                    appNodeCount = 0;
                     int winIndex = 0;
 
                     Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
@@ -551,13 +707,43 @@ public class ToolMain {
                             List<?> wins = (List<?>) valueAt.invoke(displays, i);
                             if (wins == null) continue;
                             for (Object win : wins) {
+                                // Root first: the system-chrome test needs it (see
+                                // isSystemUiWindow), and the same lookup below reuses it.
+                                Object rootObj;
+                                try {
+                                    rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                                } catch (Throwable t) {
+                                    rootObj = null;
+                                }
+                                AccessibilityNodeInfo rootNode =
+                                        (rootObj instanceof AccessibilityNodeInfo)
+                                                ? (AccessibilityNodeInfo) rootObj : null;
+
+                                // The opt-in system-chrome filter. Dropped windows are NOT
+                                // counted in windowCount, so `windows=` keeps describing the
+                                // tree the caller actually receives rather than the raw
+                                // enumeration; sys_dropped carries the count that was removed.
+                                if (dropSystemUi && isSystemUiWindow(win, chromeTitles, rootNode)) {
+                                    droppedSystemUi++;
+                                    continue;
+                                }
                                 windowCount++;
-                                Method getRootMethod = win.getClass().getMethod("getRoot");
-                                Object rootObj = getRootMethod.invoke(win);
-                                if (rootObj instanceof AccessibilityNodeInfo) {
+                                if (rootNode != null) {
+                                    boolean isSys = isSystemWindow(win, rootNode);
+                                    int beforeSize = list.size();
                                     int[] idCounter = new int[] { 1 };
-                                    collectInteractiveNodes((AccessibilityNodeInfo) rootObj, 0,
+                                    collectInteractiveNodes(rootNode, 0,
                                             null, list, idCounter, winIndex);
+                                    // appNodeCount keeps its ORIGINAL meaning — "nodes from
+                                    // non-system windows" — even when the filter is on. Letting
+                                    // it drift to "nodes from every window" the moment a flag
+                                    // was passed made app_nodes silently change meaning with
+                                    // that flag, and `tree_blocked` is derived from it
+                                    // (appNodeCount == 0), so a screen could start reporting
+                                    // tree_blocked purely because the flag was present.
+                                    if (!isSys) {
+                                        appNodeCount += (list.size() - beforeSize);
+                                    }
                                 }
                                 winIndex++;
                             }
@@ -575,15 +761,20 @@ public class ToolMain {
 
                 if (pass == 0) {
                     firstSize = list.size();
+                    firstAppSize = appNodeCount;
+                    lastAppSize = appNodeCount;
                     firstList = list;
                     firstWindows = windowCount;
 
                     // Fast-path: if the screen already yielded a populated node tree and does
                     // not contain a dormant WebView awaiting accessibility initialization,
                     // return immediately without paying the 600ms wake sleep and duplicate scan.
+                    // CRITICAL FIX: On the foreground physical display (Display 0), SystemUI's
+                    // status bar contributes ~5-10 permanent nodes. If firstAppSize == 0, the
+                    // main application window is empty or still transitioning!
                     boolean needWakePass = false;
-                    if (firstWindows > 0 && firstSize == 0) {
-                        needWakePass = true; // WeChat intermittent empty window: retry with sleep
+                    if (firstWindows > 0 && firstAppSize == 0) {
+                        needWakePass = true; // App window empty or only status bar present: retry with sleep
                     } else if (hasDormantWebView(list, firstSize)) {
                         needWakePass = true; // Dormant Chromium WebView: wake and rescan
                     }
@@ -597,18 +788,25 @@ public class ToolMain {
                     // between a blank tree and the real one.
                     try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
                 } else {
+                    lastAppSize = appNodeCount;
                     // Keep whichever pass saw more. A thin second pass must not replace a
                     // thin first one, and a richer second pass is exactly the wake.
                     if (list.size() <= firstSize) {
                         list = firstList;
                         windowCount = firstWindows;
-                    } else if (firstWindows > 0 && firstSize == 0) {
-                        // The screen had a window but no nodes on the first read, and did
-                        // have nodes on the retry. Report it: a caller that knows the tree
-                        // was slow to appear will not read a later `tree_blocked` as "this
-                        // app hides its tree", which is exactly the wrong lesson to take
-                        // from an intermittently-empty window. Measured on WeChat, which
-                        // does this on both displays.
+                        lastAppSize = firstAppSize;
+                    } else if (appNodeCount > firstAppSize) {
+                        // Genuinely recovered: the SECOND pass found more APP content, which
+                        // is the only thing that means "the tree showed up late".
+                        //
+                        // This test used to be `firstWindows > 0 && firstAppSize == 0`, which
+                        // was wrong in a way that mattered: entering this branch already
+                        // proves list.size() > firstSize, but the extra nodes are frequently
+                        // just another SYSTEM window (measured: the IME window supplying 11
+                        // nodes while the app window still yielded nothing). That lit
+                        // recovered=1 on a payload with zero app content, and the plugin's
+                        // `recovered` signal then read as "the retry fixed it" when the
+                        // screen was in fact still unreadable.
                         recovered = true;
                     }
                 }
@@ -625,7 +823,8 @@ public class ToolMain {
             rankForBudget(list);
 
             emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
-                    droppedDup, scanAttempts, recovered, budgetOverride);
+                    droppedDup, scanAttempts, recovered, budgetOverride, lastAppSize,
+                    droppedSystemUi);
 
         } catch (Throwable t) {
             // Never die silently. Emit the SAME shape as a success so "did this fail?"
@@ -699,6 +898,29 @@ public class ToolMain {
             if (n.type != null && n.type.contains("WebView")) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a window or root node belongs to SystemUI (status bar, navigation bar, lockscreen overlay).
+     */
+    private static boolean isSystemWindow(Object win, AccessibilityNodeInfo root) {
+        if (win != null) {
+            try {
+                int type = (Integer) win.getClass().getMethod("getType").invoke(win);
+                // TYPE_SYSTEM = 3, TYPE_ACCESSIBILITY_OVERLAY = 4
+                if (type == 3 || type == 4) return true;
+            } catch (Throwable ignored) {}
+        }
+        if (root != null) {
+            try {
+                CharSequence pkg = root.getPackageName();
+                if (pkg != null) {
+                    String p = pkg.toString().toLowerCase();
+                    if (p.contains("systemui") || p.equals("android")) return true;
+                }
+            } catch (Throwable ignored) {}
         }
         return false;
     }
@@ -943,7 +1165,8 @@ public class ToolMain {
     private static void emitEnvelope(int displayId, int dispW, int dispH,
                                      int windowCount, List<NodeItem> list,
                                      int droppedDup,
-                                     int scanAttempts, boolean recovered, int budgetOverride) {
+                                     int scanAttempts, boolean recovered, int budgetOverride,
+                                     int appNodeCount, int droppedSystemUi) {
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;
@@ -1006,6 +1229,12 @@ public class ToolMain {
         sb.append("ok display=").append(displayId);
         sb.append(" size=").append(dispW).append("x").append(dispH);
         sb.append(" windows=").append(windowCount);
+        // Only emitted when non-zero, so the default (unfiltered) header is byte-identical
+        // to what every existing caller already parses. Its absence therefore means "the
+        // filter was off", not "nothing was dropped" — and a present sys_dropped is the
+        // only way a reader can tell a screen that genuinely has no system chrome from one
+        // whose chrome was removed.
+        if (droppedSystemUi > 0) sb.append(" sys_dropped=").append(droppedSystemUi);
         if (fullMinX != Integer.MAX_VALUE && (fullMinX < 0 || fullMaxX > dispW)) {
             sb.append(" x_extent=").append(fullMinX).append(",").append(fullMaxX);
         }
@@ -1031,9 +1260,10 @@ public class ToolMain {
         // Both are `ok:true` — the call succeeded, the screen just has no readable tree.
         if (windowCount == 0) {
             sb.append(" no_windows=1");
-        } else if (total == 0) {
+        } else if (total == 0 || appNodeCount == 0) {
             sb.append(" tree_blocked=1");
         }
+        sb.append(" app_nodes=").append(appNodeCount);
         if (droppedDup > 0) sb.append(" dup=").append(droppedDup);
         sb.append(" returned=").append(emitted);
         sb.append(" act_sent=").append(actSent);
