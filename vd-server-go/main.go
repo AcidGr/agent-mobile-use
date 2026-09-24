@@ -1040,7 +1040,6 @@ func main() {
 		var p struct {
 			Text   string      `json:"text"`
 			Target interface{} `json:"target"`
-			Submit bool        `json:"submit"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -1062,12 +1061,7 @@ func main() {
 			}
 		}
 
-		submitStr := "false"
-		if p.Submit {
-			submitStr = "true"
-		}
-
-		out, err := runTool("type", did, targetStr, p.Text, submitStr)
+		out, err := runTool("type", did, targetStr, p.Text)
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out, Notice: popPendingHandoffNotice()})
 			return

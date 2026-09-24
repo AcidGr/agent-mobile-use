@@ -414,24 +414,16 @@ public class ToolMain {
             if (!dumpTree(displayId, budgetOverride, dropSystemUi)) exitNow(1);
         } else if ("type".equals(cmd)) {
             if (args.length < 3) {
-                System.err.println("Usage: type <displayId> [targetSpec] <text> [submit:true|false]");
+                System.err.println("Usage: type <displayId> [targetSpec] <text>");
                 exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
             if (args.length == 3) {
-                // Legacy invocation: type <displayId> <text>
-                smartType(displayId, "focused", args[2], false);
-            } else if (args.length == 4) {
-                boolean submit = "true".equalsIgnoreCase(args[3]) || "submit".equalsIgnoreCase(args[3]);
-                if (submit) {
-                    smartType(displayId, "focused", args[2], true);
-                } else {
-                    smartType(displayId, args[2], args[3], false);
-                }
+                // type <displayId> <text>
+                smartType(displayId, "focused", args[2]);
             } else {
-                // type <displayId> <targetSpec> <text> <submit>
-                boolean submit = "true".equalsIgnoreCase(args[4]) || "submit".equalsIgnoreCase(args[4]);
-                smartType(displayId, args[2], args[3], submit);
+                // type <displayId> <targetSpec> <text>
+                smartType(displayId, args[2], args[3]);
             }
         } else if ("clicknode".equals(cmd)) {
             // Click by NODE IDENTITY rather than by coordinate: locate a node whose text
@@ -450,7 +442,7 @@ public class ToolMain {
                 exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
-            smartType(displayId, args[2], args[3], false);
+            smartType(displayId, args[2], args[3]);
         } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
             String query = args.length > 1 ? args[1] : "";
             listApps(query);
@@ -2003,7 +1995,7 @@ public class ToolMain {
      * 4. If submit is true AND the write succeeded, dispatch KEYCODE_ENTER.
      * 5. Return structured JSON with the classification and before/after evidence.
      */
-    private static void smartType(int targetDisplayId, String targetSpec, String text, boolean submit) {
+    private static void smartType(int targetDisplayId, String targetSpec, String text) {
         HandlerThread ht = null;
         Object uiAutomation = null;
         String err = null;
@@ -2190,18 +2182,6 @@ public class ToolMain {
                     }
                 }
             }
-
-            // Handle optional submit/enter
-            if (ok && submit) {
-                try {
-                    targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
-                } catch (Throwable ignored) {}
-                Thread.sleep(100);
-                Runtime.getRuntime().exec(new String[] {
-                        "/system/bin/input", "-d", String.valueOf(targetDisplayId), "keyevent", "66"
-                }).waitFor();
-            }
-
         } catch (Throwable t) {
             err = String.valueOf(t);
             error = "internal_error";
