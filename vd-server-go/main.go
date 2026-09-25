@@ -41,7 +41,7 @@ type StatusResp struct {
 
 var (
 	modeMu      sync.Mutex
-	currentMode = "background" // "background" (default) or "foreground"
+	currentMode = "idle" // "idle" (default / unfocused, display -1), "background", or "foreground"
 
 	noticeMu             sync.Mutex
 	pendingHandoffNotice string
@@ -82,6 +82,9 @@ func setCurrentMode(m string) string {
 	if lower == "foreground" || lower == "fg" || lower == "0" {
 		currentMode = "foreground"
 		go setEdgeGlow(true)
+	} else if lower == "idle" || lower == "standby" || lower == "none" || lower == "-1" {
+		currentMode = "idle"
+		go setEdgeGlow(false)
 	} else {
 		currentMode = "background"
 		go setEdgeGlow(false)
@@ -186,8 +189,11 @@ func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
 }
 
 func getTargetDisplayID(st StatusResp) int {
-	if getCurrentMode() == "foreground" {
+	mode := getCurrentMode()
+	if mode == "foreground" {
 		return 0
+	} else if mode == "idle" {
+		return -1
 	}
 	return st.DisplayID
 }
@@ -343,6 +349,9 @@ func ensureTargetReady() (StatusResp, int, error) {
 
 	if targetDid == 0 {
 		return st, 0, nil
+	}
+	if targetDid < 0 {
+		return st, -1, fmt.Errorf("Agent is currently in idle mode (no focused display, display -1). Please switch mode to 'foreground' or 'background' first")
 	}
 	if st.Status != "running" {
 		st = startVirtualDisplay()
@@ -848,11 +857,15 @@ func main() {
 		st := getStatus()
 		targetDid := getTargetDisplayID(st)
 		mode := getCurrentMode()
+		msg := fmt.Sprintf("Current mode is %s (Target Display %d)", mode, targetDid)
+		if mode == "idle" {
+			msg = "Current mode is idle (No focused display, Display -1)"
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":           true,
 			"mode":              mode,
 			"target_display_id": targetDid,
-			"message":           fmt.Sprintf("Current mode is %s (Target Display %d)", mode, targetDid),
+			"message":           msg,
 		})
 	})
 
@@ -872,7 +885,7 @@ func main() {
 		//
 		// Only the virtual display is served this way: in foreground mode the request
 		// means "the physical screen", which the daemon's cache is not.
-		if st := getStatus(); st.Status == "running" && getTargetDisplayID(st) != 0 {
+		if st := getStatus(); st.Status == "running" && getTargetDisplayID(st) > 0 {
 			if data, err := os.ReadFile(frameCacheFile); err == nil && len(data) > 0 {
 				w.Header().Set("Content-Type", "image/jpeg")
 				w.Header().Set("Cache-Control", "no-store, must-revalidate")
