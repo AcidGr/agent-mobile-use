@@ -229,16 +229,19 @@ public class NotifyReceiver extends BroadcastReceiver {
             }
             builder.setContentText(cleanContent);
 
-            // SubText: Session Title if provided, otherwise default prompt
+            // SubText & Card Header: If session title provided, feature it as the prominent card header!
             String cleanSubtext = cleanEmoji(subtext);
-            if (cleanSubtext.isEmpty()) {
-                cleanSubtext = "执行完毕 · 点击进入控制台";
+            String cardHeaderTitle = "任务已全部完成";
+            if (!cleanSubtext.isEmpty()) {
+                cardHeaderTitle = cleanSubtext;
+                builder.setSubText("已完成 · 点击查看详情");
+            } else {
+                builder.setSubText("已完成 · 点击进入控制台");
             }
-            builder.setSubText(cleanSubtext);
 
             // BigTextStyle for rich clean view without emoji
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            bigStyle.setBigContentTitle("任务已全部完成");
+            bigStyle.setBigContentTitle(cardHeaderTitle);
             bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 
