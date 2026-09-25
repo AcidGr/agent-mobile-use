@@ -219,6 +219,17 @@ public class QuestionActivity extends Activity {
                         sessionId = intent.getStringExtra("session");
                     }
                     if (isCompleted) {
+                        try {
+                            Intent sIntent = new Intent(this, GlowService.class);
+                            stopService(sIntent);
+                        } catch (Throwable ignored) {}
+                        try {
+                            nm.cancel(10086);
+                        } catch (Throwable ignored) {}
+                        try {
+                            android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                            sp.edit().clear().apply();
+                        } catch (Throwable ignored) {}
                         NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
                     } else {
                         NotifyReceiver.postOngoingNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);

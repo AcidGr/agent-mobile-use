@@ -145,6 +145,12 @@ func setSessionActive(active bool, sid string, title string) {
 	isSessionActive = active
 	sessionActiveMu.Unlock()
 
+	if !active {
+		modeMu.Lock()
+		currentMode = "idle"
+		modeMu.Unlock()
+	}
+
 	sessionMetaMu.Lock()
 	if active {
 		if sid != "" {
@@ -184,23 +190,18 @@ func isGlowServiceAlive() bool {
 	return cmd.Run() == nil
 }
 
-func isNotificationActive(notifID int) bool {
-	cmd := exec.Command("/system/bin/sh", "-c", fmt.Sprintf(`dumpsys notification --noredact | sed -n '/Notification List:/,/mArchive=/p' | grep -q "id=%d"`, notifID))
-	return cmd.Run() == nil
-}
-
 func resolveCapsuleAction() string {
+	if !getSessionActive() {
+		return "STOP" // P5: 待机/未运行，彻底注销胶囊与光效
+	}
 	mode := getCurrentMode()
 	if mode == "foreground" {
-		return "START_FOREGROUND" // P1: 接管中 (blue eye + glow)
+		return "START_FOREGROUND" // P1: 前台接管中 (blue eye + glow, display 0)
 	}
 	if mode == "background" {
-		return "START_BACKGROUND" // P2: 后台接管 (blue eye + no glow)
+		return "START_BACKGROUND" // P2: 后台接管 (blue eye + no glow, display > 0)
 	}
-	if getSessionActive() {
-		return "START_RUNNING"    // P3: 运行中 (cyber green terminal + no glow)
-	}
-	return "STOP"                 // P4: 待机彻底注销 (dismissed)
+	return "START_RUNNING" // P3: 会话运行中 (cyber green terminal >_, no glow, display -1)
 }
 
 var (
@@ -228,7 +229,7 @@ func updateCapsuleState() {
 	curPID := getGlowPID()
 
 	if action == "STOP" {
-		if !isGlowServiceAlive() && !isNotificationActive(10086) && lastAppliedCapsuleAction == "STOP" {
+		if !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
 			return
 		}
 	} else {
