@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -84,55 +85,7 @@ public class QuestionActivity extends Activity {
         }
 
         Intent intent = getIntent();
-        if (intent != null) {
-            mRequestId = intent.getStringExtra("request_id");
-            mDataJson = intent.getStringExtra("data");
-
-            boolean isCompleted = intent.getBooleanExtra("is_completed", false);
-            if (isCompleted) {
-                try {
-                    NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                    if (nm != null) {
-                        String title = intent.getStringExtra("title");
-                        String subtext = intent.getStringExtra("subtext");
-                        String content = intent.getStringExtra("content");
-                        String tag = intent.getStringExtra("tag");
-                        if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
-                        int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
-                        int total = intent.getIntExtra("total", 0);
-                        int completed = intent.getIntExtra("completed", 0);
-                        String sessionId = intent.getStringExtra("session_id");
-                        if (sessionId == null || sessionId.isEmpty()) {
-                            sessionId = intent.getStringExtra("session");
-                        }
-                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
-                    }
-                } catch (Throwable t) {
-                    Log.e(TAG, "is_completed postCompletedNotification failed: " + t.getMessage(), t);
-                }
-                finish();
-                overridePendingTransition(0, 0);
-                return;
-            }
-        }
-
-        if (mRequestId == null || mDataJson == null) {
-            finish();
-            return;
-        }
-
-        boolean onlyNotify = (intent != null) && intent.getBooleanExtra("only_notify", false);
-        if (onlyNotify) {
-            try {
-                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                if (nm != null) {
-                    QuestionReceiver.showQuestionNotification(this, nm, mRequestId, mDataJson);
-                }
-            } catch (Throwable t) {
-                Log.e(TAG, "showQuestionNotification failed: " + t.getMessage(), t);
-            }
-            finish();
-            overridePendingTransition(0, 0);
+        if (handleActionIntent(intent)) {
             return;
         }
 
@@ -163,6 +116,119 @@ public class QuestionActivity extends Activity {
             Log.e(TAG, "Failed to build UI: " + t.getMessage(), t);
             finish();
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleActionIntent(intent);
+    }
+
+    private boolean handleActionIntent(Intent intent) {
+        if (intent == null) return false;
+
+        // 1. Capsule action for GlowService (START_FOREGROUND, START_BACKGROUND, STOP)
+        String capsuleAction = intent.getStringExtra("capsule_action");
+        if (capsuleAction != null) {
+            try {
+                Intent sIntent = new Intent(this, GlowService.class);
+                sIntent.setAction(capsuleAction);
+                if ("STOP".equals(capsuleAction)) {
+                    stopService(sIntent);
+                } else {
+                    boolean started = false;
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        try {
+                            java.lang.reflect.Method m = getClass().getMethod("startForegroundService", Intent.class);
+                            m.invoke(this, sIntent);
+                            started = true;
+                        } catch (Throwable ignored) {}
+                    }
+                    if (!started) {
+                        startService(sIntent);
+                    }
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "Failed to handle capsule_action: " + t.getMessage(), t);
+            }
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
+        // 2. Notification cancel
+        if (intent.getBooleanExtra("cancel_question", false)) {
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    nm.cancel(QuestionReceiver.NOTIFICATION_ID);
+                }
+            } catch (Throwable ignored) {}
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
+        // 3. Task Notifications (Completed / In-progress)
+        boolean hasCompleted = intent.hasExtra("is_completed");
+        boolean onlyNotify = intent.getBooleanExtra("only_notify", false);
+        if (hasCompleted || (onlyNotify && intent.hasExtra("content"))) {
+            boolean isCompleted = intent.getBooleanExtra("is_completed", false);
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    String title = intent.getStringExtra("title");
+                    String subtext = intent.getStringExtra("subtext");
+                    String content = intent.getStringExtra("content");
+                    String tag = intent.getStringExtra("tag");
+                    if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
+                    int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
+                    int total = intent.getIntExtra("total", 0);
+                    int completed = intent.getIntExtra("completed", 0);
+                    String sessionId = intent.getStringExtra("session_id");
+                    if (sessionId == null || sessionId.isEmpty()) {
+                        sessionId = intent.getStringExtra("session");
+                    }
+                    if (isCompleted) {
+                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
+                    } else {
+                        NotifyReceiver.postOngoingNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
+                    }
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "postNotification failed: " + t.getMessage(), t);
+            }
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
+        // 4. Question Notification (only_notify=true)
+        mRequestId = intent.getStringExtra("request_id");
+        mDataJson = intent.getStringExtra("data");
+        if (onlyNotify && mRequestId != null && mDataJson != null) {
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    QuestionReceiver.showQuestionNotification(this, nm, mRequestId, mDataJson);
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "showQuestionNotification failed: " + t.getMessage(), t);
+            }
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
+        // 5. If no valid request for interactive BottomSheet, finish immediately
+        if (mRequestId == null || mDataJson == null) {
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
+        return false;
     }
 
     private int dpToPx(int dp) {
