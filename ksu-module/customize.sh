@@ -1,11 +1,11 @@
 SKIPUNZIP=0
 
 ui_print "**********************************************"
-ui_print "*  Agent Mobile Sandbox & Tools v0.6.1-alpha *"
+ui_print "*  Agent Mobile Sandbox & Tools v0.6.2-alpha *"
 ui_print "*               作者：酸小明                 *"
 ui_print "**********************************************"
 
-ui_print "- 正在安装纯隐形 LSPosed 跨屏路由与输入法隔离补丁 (v0.6.1-alpha)..."
+ui_print "- 正在安装纯隐形 LSPosed 跨屏路由与输入法隔离补丁 (v0.6.2-alpha)..."
 pm install -r "$MODPATH/apk/agent_hook.apk" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
     ui_print "- Hook 补丁安装成功"
