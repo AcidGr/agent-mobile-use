@@ -52,57 +52,54 @@ public class GlowService extends Service {
     }
 
     /**
-     * Create crisp vector-drawn Cyber Blue Eyes bitmap (simple line art style).
+     * Create crisp vector-drawn Single Cyber Blue Eye with 100% transparent background (no circle, no background).
      */
-    public static Bitmap createBlueEyesBitmap(int size) {
+    public static Bitmap createSingleBlueEyeBitmap(int size) {
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
 
-        float center = size / 2.0f;
-        float radius = center - 4.0f;
+        float cx = size / 2.0f;
+        float cy = size / 2.0f;
 
-        // 1. Sleek circular dark background
-        Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bgPaint.setColor(0xF010141C);
-        bgPaint.setStyle(Paint.Style.FILL);
-        canvas.drawCircle(center, center, radius, bgPaint);
+        // 100% Transparent background (no white circle, no dark circle, purely transparent)
+        int cyan = 0xFF00D2FF;
 
-        // 2. Vibrant Cyber / Electric Blue
-        int eyeColor = 0xFF00D2FF;
         Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        strokePaint.setColor(eyeColor);
+        strokePaint.setColor(cyan);
         strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeWidth(size * 0.085f);
+        strokePaint.setStrokeWidth(size * 0.08f);
         strokePaint.setStrokeCap(Paint.Cap.ROUND);
         strokePaint.setStrokeJoin(Paint.Join.ROUND);
 
         Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fillPaint.setColor(eyeColor);
+        fillPaint.setColor(cyan);
         fillPaint.setStyle(Paint.Style.FILL);
 
-        float eyeDistance = size * 0.22f;
-        float leftX = center - eyeDistance;
-        float rightX = center + eyeDistance;
-        float eyeY = center * 0.98f;
-        float eyeW = size * 0.15f;
-        float eyeH = size * 0.10f;
+        float w = size * 0.32f;
+        float h = size * 0.18f;
 
-        // Left eye upper arc (curved upper eyelid)
-        android.graphics.Path leftPath = new android.graphics.Path();
-        leftPath.moveTo(leftX - eyeW, eyeY + eyeH * 0.2f);
-        leftPath.quadTo(leftX, eyeY - eyeH * 1.5f, leftX + eyeW, eyeY + eyeH * 0.2f);
-        canvas.drawPath(leftPath, strokePaint);
+        // 1. Upper eyelid arc
+        android.graphics.Path upperPath = new android.graphics.Path();
+        upperPath.moveTo(cx - w, cy - h * 0.1f);
+        upperPath.quadTo(cx, cy - h * 1.5f, cx + w, cy - h * 0.1f);
+        canvas.drawPath(upperPath, strokePaint);
 
-        // Right eye upper arc
-        android.graphics.Path rightPath = new android.graphics.Path();
-        rightPath.moveTo(rightX - eyeW, eyeY + eyeH * 0.2f);
-        rightPath.quadTo(rightX, eyeY - eyeH * 1.5f, rightX + eyeW, eyeY + eyeH * 0.2f);
-        canvas.drawPath(rightPath, strokePaint);
+        // 2. Lower eyelid arc
+        android.graphics.Path lowerPath = new android.graphics.Path();
+        float lowerW = w * 0.65f;
+        lowerPath.moveTo(cx - lowerW, cy + h * 0.65f);
+        lowerPath.quadTo(cx, cy + h * 1.25f, cx + lowerW, cy + h * 0.65f);
+        canvas.drawPath(lowerPath, strokePaint);
 
-        // Pupil dots with keen intelligent gaze
-        float pupilR = size * 0.055f;
-        canvas.drawCircle(leftX, eyeY + eyeH * 0.15f, pupilR, fillPaint);
-        canvas.drawCircle(rightX, eyeY + eyeH * 0.15f, pupilR, fillPaint);
+        // 3. Center Pupil
+        float pupilR = size * 0.09f;
+        canvas.drawCircle(cx, cy + h * 0.05f, pupilR, fillPaint);
+
+        // 4. Subtle white glint / reflection
+        Paint whitePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        whitePaint.setColor(0xFFFFFFFF);
+        whitePaint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(cx - pupilR * 0.32f, cy - pupilR * 0.25f, pupilR * 0.32f, whitePaint);
 
         return bitmap;
     }
@@ -134,11 +131,22 @@ public class GlowService extends Service {
             builder.setContentText("点击切回后台副屏操作 · 屏幕边缘光效运行中");
             builder.setSubText("前台接管中 · 点击切后台");
 
-            // Cyber Blue Eyes Vector Icon (Direct system-supported resource drawable)
-            builder.setSmallIcon(R.drawable.ic_cyber_blue_eyes);
-            Bitmap blueEyesBitmap = createBlueEyesBitmap(192);
-            if (blueEyesBitmap != null) {
-                builder.setLargeIcon(blueEyesBitmap);
+            // Single Cyber Blue Eye Bitmap (100% transparent background, direct BitmapDrawable without Vector colorFilter override)
+            Bitmap singleEyeBitmap = createSingleBlueEyeBitmap(192);
+            Icon singleEyeIcon = null;
+            if (Build.VERSION.SDK_INT >= 23 && singleEyeBitmap != null) {
+                singleEyeIcon = Icon.createWithBitmap(singleEyeBitmap);
+                builder.setSmallIcon(singleEyeIcon);
+                builder.setLargeIcon(singleEyeBitmap);
+            } else {
+                builder.setSmallIcon(R.drawable.dsh_whale_icon);
+            }
+
+            // Explicit Oplus Fluid Cloud Icon slot
+            if (singleEyeIcon != null) {
+                android.os.Bundle extras = new android.os.Bundle();
+                extras.putParcelable("oplus_small_icon", singleEyeIcon);
+                builder.addExtras(extras);
             }
 
             // Eliminate Android 12+ 10-second FGS notification deferral (FOREGROUND_SERVICE_IMMEDIATE = 1)
