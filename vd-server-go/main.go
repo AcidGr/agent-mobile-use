@@ -756,6 +756,56 @@ func observationStatus(env map[string]any) string {
 	return fmt.Sprintf("tree %v nodes, %v/%v actionable", env["returned"], env["act_sent"], env["act_total"])
 }
 
+func resolveSessionTitle(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	// Try loading from session_projcache
+	sessionPath := fmt.Sprintf("/data/local/ubuntu/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID)
+	data, err := os.ReadFile(sessionPath)
+	if err == nil {
+		var root struct {
+			Record struct {
+				Rows struct {
+					Title struct {
+						Val string `json:"val"`
+					} `json:"title"`
+				} `json:"rows"`
+			} `json:"record"`
+		}
+		if json.Unmarshal(data, &root) == nil {
+			title := strings.TrimSpace(root.Record.Rows.Title.Val)
+			if title != "" {
+				return title
+			}
+		}
+	}
+
+	// Fallback: check workspace.json
+	wsData, err := os.ReadFile("/data/local/ubuntu/root/.dsh/storages/workspace.json")
+	if err == nil {
+		var wsRoot map[string]any
+		if json.Unmarshal(wsData, &wsRoot) == nil {
+			if wsList, ok := wsRoot["workspaces"].(map[string]any); ok {
+				for _, v := range wsList {
+					if wsMap, ok := v.(map[string]any); ok {
+						if sIds, ok := wsMap["sessionIds"].([]any); ok {
+							for _, s := range sIds {
+								if sStr, ok := s.(string); ok && sStr == sessionID {
+									if t, ok := wsMap["title"].(string); ok && strings.TrimSpace(t) != "" {
+										return strings.TrimSpace(t)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -1235,9 +1285,20 @@ func main() {
 			sid = p.Session
 		}
 
+		// Ensure subtext is always the genuine session title, never raw user prompt strings
+		resolvedTitle := resolveSessionTitle(sid)
+		if resolvedTitle != "" {
+			p.Subtext = resolvedTitle
+		} else if len(p.Subtext) > 15 || strings.Contains(p.Subtext, "？") || strings.Contains(p.Subtext, "?") || strings.Contains(p.Subtext, "吗") {
+			p.Subtext = "移动端任务"
+		}
+
 		isCompletedStr := "false"
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
 			isCompletedStr = "true"
+			if p.Title == "" || strings.Contains(p.Title, "完成") {
+				p.Title = "已完成"
+			}
 		}
 
 		// Direct foreground broadcast -> ColorOS Native Fluid Cloud (no Activity trampoline needed)
