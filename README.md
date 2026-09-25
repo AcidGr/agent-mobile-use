@@ -12,7 +12,7 @@
 通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度拦截、以及免软键盘弹窗的无障碍文字注入，为大模型 Agent、自动化测试系统及远程控制脚本提供第一层设备操纵能力。
 
 > ⚠️ **版本号命名规则变更声明（SemVer 标准化）**：  
-> 本项目自 **v0.6.0-alpha** 起全面推行语义化版本号（Semantic Versioning）。此前使用的历史版本号体系（如 `v5.2`、`v5.1` 等）已**正式废弃**。原 `v5.2` 版本在语义化演进中等价对应为 `v0.5.2`。当前最新版本为 **`v0.6.0-alpha`**（KSU 模块 versionCode: `600`）。请统一采用新版刷机包与版本规范。
+> 本项目自 **v0.6.0-alpha** 起全面推行语义化版本号（Semantic Versioning）。此前使用的历史版本号体系（如 `v5.2`、`v5.1` 等）已**正式废弃**。原 `v5.2` 版本在语义化演进中等价对应为 `v0.5.2`。当前最新版本为 **`v0.6.1-alpha`**（KSU 模块 versionCode: `601`）。请统一采用新版刷机包与版本规范。
 
 ---
 
@@ -129,7 +129,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载最新的刷机包：
-   **`agent-mobile-use-ksu-v0.6.0-alpha.zip`**
+   **`agent-mobile-use-ksu-v0.6.1-alpha.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -165,7 +165,7 @@
 By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, this project provides a clean substrate for LLM Agents and automated systems.
 
 > ⚠️ **Version Numbering Notice (SemVer Standardization)**:  
-> Starting with **v0.6.0-alpha**, this project officially adopts Semantic Versioning. The legacy version numbering (such as `v5.2`, `v5.1`) is **deprecated**. Former `v5.2` corresponds to `v0.5.2` under SemVer. The current active release is **`v0.6.0-alpha`** (KSU module versionCode: `600`).
+> Starting with **v0.6.0-alpha**, this project officially adopts Semantic Versioning. The legacy version numbering (such as `v5.2`, `v5.1`) is **deprecated**. Former `v5.2` corresponds to `v0.5.2` under SemVer. The current active release is **`v0.6.1-alpha`** (KSU module versionCode: `601`).
 
 ---
 
