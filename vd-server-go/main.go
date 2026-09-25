@@ -146,16 +146,21 @@ func setSessionActive(active bool, sid string, title string) {
 	sessionActiveMu.Unlock()
 
 	sessionMetaMu.Lock()
-	if sid != "" {
-		activeSessionID = sid
-	}
-	if title != "" {
-		activeSessionTitle = title
-	} else if activeSessionID != "" {
-		resolved := resolveSessionTitle(activeSessionID)
-		if resolved != "" {
-			activeSessionTitle = resolved
+	if active {
+		if sid != "" {
+			activeSessionID = sid
 		}
+		if title != "" {
+			activeSessionTitle = title
+		} else if activeSessionID != "" {
+			resolved := resolveSessionTitle(activeSessionID)
+			if resolved != "" {
+				activeSessionTitle = resolved
+			}
+		}
+	} else {
+		activeSessionID = ""
+		activeSessionTitle = ""
 	}
 	sessionMetaMu.Unlock()
 
@@ -176,6 +181,11 @@ func getSessionMeta() (string, string) {
 
 func isGlowServiceAlive() bool {
 	cmd := exec.Command("/system/bin/sh", "-c", `dumpsys activity services com.agent.mobileuse/.GlowService | grep -q "app=ProcessRecord"`)
+	return cmd.Run() == nil
+}
+
+func isNotificationActive(notifID int) bool {
+	cmd := exec.Command("/system/bin/sh", "-c", fmt.Sprintf(`dumpsys notification --noredact | sed -n '/Notification List:/,/mArchive=/p' | grep -q "id=%d"`, notifID))
 	return cmd.Run() == nil
 }
 
@@ -217,11 +227,14 @@ func updateCapsuleState() {
 	action := resolveCapsuleAction()
 	curPID := getGlowPID()
 
-	if lastAppliedCapsuleAction == action && isGlowServiceAlive() && (action == "STOP" || (curPID > 0 && curPID == lastGlowPID)) {
-		return
-	}
-	if action == "STOP" && !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
-		return
+	if action == "STOP" {
+		if !isGlowServiceAlive() && !isNotificationActive(10086) && lastAppliedCapsuleAction == "STOP" {
+			return
+		}
+	} else {
+		if lastAppliedCapsuleAction == action && isGlowServiceAlive() && (curPID > 0 && curPID == lastGlowPID) {
+			return
+		}
 	}
 	lastAppliedCapsuleAction = action
 	lastGlowPID = curPID

@@ -139,7 +139,19 @@ public class QuestionActivity extends Activity {
                 String title = intent.getStringExtra("session_title");
                 if (title != null) sIntent.putExtra("session_title", title);
                 if ("STOP".equals(capsuleAction)) {
-                    stopService(sIntent);
+                    try {
+                        stopService(sIntent);
+                    } catch (Throwable ignored) {}
+                    try {
+                        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                        if (nm != null) {
+                            nm.cancel(10086);
+                        }
+                    } catch (Throwable ignored) {}
+                    try {
+                        android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                        sp.edit().clear().apply();
+                    } catch (Throwable ignored) {}
                 } else {
                     boolean started = false;
                     if (Build.VERSION.SDK_INT >= 26) {

@@ -322,6 +322,15 @@ public class GlowService extends Service {
                         hideGlow();
                     }
                     return START_STICKY;
+                } else {
+                    hideGlow();
+                    stopForeground(true);
+                    try {
+                        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                        if (nm != null) nm.cancel(NOTIFICATION_ID);
+                    } catch (Throwable ignored) {}
+                    stopSelf();
+                    return START_NOT_STICKY;
                 }
             } catch (Throwable ignored) {}
         }
@@ -342,7 +351,12 @@ public class GlowService extends Service {
             } catch (Throwable ignored) {}
             hideGlow();
             stopForeground(true);
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) nm.cancel(NOTIFICATION_ID);
+            } catch (Throwable ignored) {}
             stopSelf();
+            return START_NOT_STICKY;
         }
         return START_STICKY;
     }
@@ -502,6 +516,12 @@ public class GlowService extends Service {
         hideGlow();
         try {
             stopForeground(true);
+        } catch (Throwable ignored) {}
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel(NOTIFICATION_ID);
+            }
         } catch (Throwable ignored) {}
         try {
             android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
