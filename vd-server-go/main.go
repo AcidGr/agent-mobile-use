@@ -116,6 +116,7 @@ func getAppUID() string {
 
 func thawAppProcess() {
 	uid := getAppUID()
+	_ = exec.Command("/system/bin/cmd", "activity", "unfreeze", "--sticky", "com.agent.mobileuse").Run()
 	_ = exec.Command("/system/bin/sh", "-c", fmt.Sprintf("echo 0 > /sys/fs/cgroup/apps/uid_%s/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_%s/cgroup.freeze 2>/dev/null", uid, uid)).Run()
 }
 
@@ -807,6 +808,7 @@ func resolveSessionTitle(sessionID string) string {
 }
 
 func main() {
+	thawAppProcess()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -1301,8 +1303,11 @@ func main() {
 			}
 		}
 
+		// Ensure app process is unfrozen from ColorOS Hans/Freezer and AMS BroadcastQueue
+		thawAppProcess()
+
 		// Direct foreground broadcast -> ColorOS Native Fluid Cloud (no Activity trampoline needed)
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -f 0x01000000 -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
 			"NOTIFY_SUBTEXT="+p.Subtext,
@@ -1377,10 +1382,11 @@ func main() {
 			questionMu.Unlock()
 		}()
 
+		// Wake up process and trigger notification banner via Activity launch or broadcast
+		thawAppProcess()
 		st := getStatus()
 		if st.Mode == "foreground" {
 			// Foreground mode: launch directly with interactive BottomSheet on Display 0
-			thawAppProcess()
 			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"REQ_ID="+p.RequestID,
@@ -1389,7 +1395,7 @@ func main() {
 			cmd.Run()
 		} else {
 			// Background mode: trigger Question via pure foreground broadcast -> Native Fluid Cloud on status bar!
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -f 0x01000000 -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
 			cmd.Env = append(os.Environ(),
 				"REQ_ID="+p.RequestID,
 				"REQ_DATA="+string(bodyBytes),
@@ -1411,9 +1417,11 @@ func main() {
 			})
 		case <-r.Context().Done():
 			// Cancelled from HTTP client
-			exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
+			thawAppProcess()
+			exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -f 0x01000000 -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
 		case <-time.After(timeout):
-			exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
+			thawAppProcess()
+			exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -f 0x01000000 -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Timeout waiting for answer"})
 		}
 	})
@@ -1462,7 +1470,8 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
+		thawAppProcess()
+		exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -f 0x01000000 -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION_CANCEL --es request_id "`+p.RequestID+`"`).Run()
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 
