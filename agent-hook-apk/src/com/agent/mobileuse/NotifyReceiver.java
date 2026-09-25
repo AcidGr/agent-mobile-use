@@ -218,7 +218,7 @@ public class NotifyReceiver extends BroadcastReceiver {
             // Crisp pure title without emoji or count numbers
             String cleanTitle = cleanEmoji(title);
             if (cleanTitle.isEmpty() || cleanTitle.contains("完成")) {
-                cleanTitle = "任务已经完成！";
+                cleanTitle = "已完成";
             }
             builder.setContentTitle(cleanTitle);
 
@@ -238,7 +238,7 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // BigTextStyle for rich clean view without emoji
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            bigStyle.setBigContentTitle(cleanTitle);
+            bigStyle.setBigContentTitle("任务已全部完成");
             bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 

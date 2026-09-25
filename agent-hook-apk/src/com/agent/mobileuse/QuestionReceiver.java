@@ -142,7 +142,8 @@ public class QuestionReceiver extends BroadcastReceiver {
                 }
             }
 
-            builder.setContentTitle(header);
+            // Compact Capsule title: strictly 3 chars "有问题" for sleek status bar pill
+            builder.setContentTitle("有问题");
             builder.setContentText(questionText);
             builder.setSubText("点击处理交互提问");
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
@@ -155,7 +156,7 @@ public class QuestionReceiver extends BroadcastReceiver {
                 }
             } catch (Throwable ignored) {}
 
-            // BigText style
+            // BigText style: preserves rich full question title and content when expanded
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
             bigStyle.setBigContentTitle(header);
             bigStyle.bigText(questionText);
