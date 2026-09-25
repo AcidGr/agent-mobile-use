@@ -134,6 +134,10 @@ public class QuestionActivity extends Activity {
             try {
                 Intent sIntent = new Intent(this, GlowService.class);
                 sIntent.setAction(capsuleAction);
+                String sid = intent.getStringExtra("session_id");
+                if (sid != null) sIntent.putExtra("session_id", sid);
+                String title = intent.getStringExtra("session_title");
+                if (title != null) sIntent.putExtra("session_title", title);
                 if ("STOP".equals(capsuleAction)) {
                     stopService(sIntent);
                 } else {

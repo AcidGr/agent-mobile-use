@@ -44,11 +44,50 @@ public class DemoDialogActivity extends Activity {
     private static final String DSH_WEB_URL = "http://127.0.0.1:3080/?ov=1";
     private static final String DEFAULT_SECRET = "5E8js7iGeZGFiTXVT1Mi0ZnkBqEXqChPpZ2rPT1X0u8";
 
+    public static volatile boolean sIsForeground = false;
+    public static volatile String sCurrentViewingSessionId = "";
+
+    public static void reportViewState(final boolean foreground, final String sessionId) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/view_state");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(800);
+                    conn.setReadTimeout(800);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    org.json.JSONObject json = new org.json.JSONObject();
+                    json.put("foreground", foreground);
+                    json.put("session_id", sessionId != null ? sessionId : "");
+                    java.io.OutputStream os = conn.getOutputStream();
+                    os.write(json.toString().getBytes("UTF-8"));
+                    os.flush();
+                    os.close();
+                    conn.getResponseCode();
+                    conn.disconnect();
+                } catch (Throwable ignored) {}
+            }
+        }).start();
+    }
+
     public static class OverlayBridge {
         private final DemoDialogActivity mActivity;
 
         public OverlayBridge(DemoDialogActivity activity) {
             this.mActivity = activity;
+        }
+
+        @JavascriptInterface
+        public void reportSession(String sessionId) {
+            if (sessionId != null && !sessionId.isEmpty() && !sessionId.equals(sCurrentViewingSessionId)) {
+                sCurrentViewingSessionId = sessionId;
+                if (sIsForeground) {
+                    reportViewState(true, sCurrentViewingSessionId);
+                }
+            }
         }
 
         @JavascriptInterface
@@ -316,6 +355,39 @@ public class DemoDialogActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return false;
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                String js = "(function() {" +
+                    "  if (window.__DSH_SESSION_OBSERVER_INSTALLED__) return;" +
+                    "  window.__DSH_SESSION_OBSERVER_INSTALLED__ = true;" +
+                    "  window.DSH_SWITCH_SESSION = function(id) {" +
+                    "    try {" +
+                    "      localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: id }));" +
+                    "      if (location.search.indexOf('session=') >= 0) {" +
+                    "        location.search = location.search.replace(/session=[^&]+/, 'session=' + id);" +
+                    "      } else {" +
+                    "        location.search += (location.search ? '&' : '?') + 'session=' + id;" +
+                    "      }" +
+                    "    } catch(e) {}" +
+                    "  };" +
+                    "  function check() {" +
+                    "    try {" +
+                    "      var raw = localStorage.getItem('dsh.sessions.current');" +
+                    "      if (raw) {" +
+                    "        var obj = JSON.parse(raw);" +
+                    "        if (obj && obj.sessionId && window.DSHOverlayBridge && window.DSHOverlayBridge.reportSession) {" +
+                    "          window.DSHOverlayBridge.reportSession(obj.sessionId);" +
+                    "        }" +
+                    "      }" +
+                    "    } catch(e) {}" +
+                    "  }" +
+                    "  check();" +
+                    "  setInterval(check, 1000);" +
+                    "})();";
+                view.evaluateJavascript(js, null);
+            }
         });
 
         mWebView.setWebChromeClient(new WebChromeClient() {
@@ -545,6 +617,8 @@ public class DemoDialogActivity extends Activity {
         super.onResume();
         overridePendingTransition(0, 0);
         hideSoftInput();
+        sIsForeground = true;
+        reportViewState(true, sCurrentViewingSessionId);
         if (mWebView != null) {
             mWebView.clearFocus();
             mWebView.onResume();
@@ -555,6 +629,8 @@ public class DemoDialogActivity extends Activity {
     protected void onPause() {
         super.onPause();
         overridePendingTransition(0, 0);
+        sIsForeground = false;
+        reportViewState(false, sCurrentViewingSessionId);
         if (mWebView != null) {
             mWebView.onPause();
         }

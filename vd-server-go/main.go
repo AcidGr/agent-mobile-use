@@ -125,17 +125,40 @@ func thawAppProcess() {
 }
 
 var (
+	viewStateMu             sync.Mutex
+	isOverlayForeground     bool
+	currentViewingSessionID string
+
 	sessionActiveMu sync.Mutex
 	isSessionActive bool
+
+	sessionMetaMu      sync.Mutex
+	activeSessionID    string
+	activeSessionTitle string
 
 	lastAppliedCapsuleAction   string
 	lastAppliedCapsuleActionMu sync.Mutex
 )
 
-func setSessionActive(active bool) {
+func setSessionActive(active bool, sid string, title string) {
 	sessionActiveMu.Lock()
 	isSessionActive = active
 	sessionActiveMu.Unlock()
+
+	sessionMetaMu.Lock()
+	if sid != "" {
+		activeSessionID = sid
+	}
+	if title != "" {
+		activeSessionTitle = title
+	} else if activeSessionID != "" {
+		resolved := resolveSessionTitle(activeSessionID)
+		if resolved != "" {
+			activeSessionTitle = resolved
+		}
+	}
+	sessionMetaMu.Unlock()
+
 	go updateCapsuleState()
 }
 
@@ -143,6 +166,12 @@ func getSessionActive() bool {
 	sessionActiveMu.Lock()
 	defer sessionActiveMu.Unlock()
 	return isSessionActive
+}
+
+func getSessionMeta() (string, string) {
+	sessionMetaMu.Lock()
+	defer sessionMetaMu.Unlock()
+	return activeSessionID, activeSessionTitle
 }
 
 func isGlowServiceAlive() bool {
@@ -177,9 +206,15 @@ func updateCapsuleState() {
 	}
 	lastAppliedCapsuleAction = action
 
+	sid, title := getSessionMeta()
+
 	thawAppProcess()
-	cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es capsule_action "$CAPSULE_ACTION" 2>/dev/null`)
-	cmd.Env = append(os.Environ(), "CAPSULE_ACTION="+action)
+	cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es capsule_action "$CAPSULE_ACTION" --es session_id "$CAPSULE_SID" --es session_title "$CAPSULE_TITLE" 2>/dev/null`)
+	cmd.Env = append(os.Environ(),
+		"CAPSULE_ACTION="+action,
+		"CAPSULE_SID="+sid,
+		"CAPSULE_TITLE="+title,
+	)
 	_ = cmd.Run()
 }
 
@@ -1323,9 +1358,27 @@ func main() {
 		isCompletedStr := "false"
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
 			isCompletedStr = "true"
-			setSessionActive(false)
+			setSessionActive(false, sid, p.Subtext)
 			if p.Title == "" || strings.Contains(p.Title, "完成") {
 				p.Title = "已完成"
+			}
+
+			// Context Suppression Check:
+			// If DemoDialogActivity is in foreground on Display 0 AND viewing this exact session:
+			// Silently suppress notification so as not to obstruct the user's view!
+			viewStateMu.Lock()
+			fg := isOverlayForeground
+			viewing := currentViewingSessionID
+			viewStateMu.Unlock()
+
+			if fg && viewing != "" && sid != "" && (viewing == sid || strings.Contains(viewing, sid) || strings.Contains(sid, viewing)) {
+				// Double-check with dumpsys that DemoDialogActivity is truly resumed
+				out, err := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep "topResumedActivity" | head -1`).Output()
+				if err == nil && strings.Contains(string(out), "DemoDialogActivity") {
+					fmt.Printf("[notify] User is actively viewing completed session %s in foreground. Suppressing completion notification.\n", sid)
+					json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Suppressed: user is currently viewing this session in foreground"})
+					return
+				}
 			}
 		}
 
@@ -1497,6 +1550,28 @@ func main() {
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 
+	mux.HandleFunc("/api/view_state", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			return
+		}
+		var p struct {
+			Foreground bool   `json:"foreground"`
+			SessionID  string `json:"session_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
+			viewStateMu.Lock()
+			isOverlayForeground = p.Foreground
+			if p.SessionID != "" {
+				currentViewingSessionID = p.SessionID
+			}
+			viewStateMu.Unlock()
+			fmt.Printf("[view_state] Overlay foreground: %v, viewing session: %s\n", p.Foreground, p.SessionID)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
 	mux.HandleFunc("/api/task_event", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -1504,15 +1579,17 @@ func main() {
 			return
 		}
 		var p struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+			Type         string `json:"type"`
+			Status       string `json:"status"`
+			SessionID    string `json:"session_id"`
+			SessionTitle string `json:"session_title"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
 			if p.Type == "agent_status" {
 				if p.Status == "running" {
-					setSessionActive(true)
+					setSessionActive(true, p.SessionID, p.SessionTitle)
 				} else if p.Status == "idle" || p.Status == "ready" || p.Status == "stopped" || p.Status == "error" || p.Status == "disposed" {
-					setSessionActive(false)
+					setSessionActive(false, p.SessionID, p.SessionTitle)
 				}
 			}
 		}
