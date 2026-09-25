@@ -1240,35 +1240,11 @@ func main() {
 			isCompletedStr = "true"
 		}
 
-		// Ensure process is thawed if frozen by ColorOS Hans/Freezer
-		thawAppProcess()
-
-		// If this is a completion notification, use Activity wake-up (am start -f 0x18000000)
-		// which immediately wakes the frozen process in 0ms and posts the notification before finish()
-		// TaskAffinity is strictly isolated (.question vs .overlay), keeping DemoDialogActivity 100% untouched!
-		if isCompletedStr == "true" {
-			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed true --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
-			cmd.Env = append(os.Environ(),
-				"NOTIFY_TITLE="+p.Title,
-				"NOTIFY_SUBTEXT="+p.Subtext,
-				"NOTIFY_TAG="+p.Tag,
-				"NOTIFY_CONTENT="+p.Content,
-				"NOTIFY_URL="+p.URL,
-				"NOTIFY_SESSION_ID="+sid,
-				fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
-				fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
-			)
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
-				return
-			}
-		}
-
-		// For normal in-progress steps or broadcast fallback:
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
+		// Direct foreground broadcast -> ColorOS Native Fluid Cloud (no Activity trampoline needed)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.NotifyReceiver -a com.agent.mobileuse.ACTION_NOTIFY --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" --ez is_completed "$NOTIFY_IS_COMPLETED"`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
+			"NOTIFY_SUBTEXT="+p.Subtext,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
 			"NOTIFY_URL="+p.URL,
@@ -1340,23 +1316,25 @@ func main() {
 			questionMu.Unlock()
 		}()
 
-		// Wake up process and trigger notification banner via Activity launch in 0ms
-		// If in foreground mode, launch directly with interactive card (only_notify=false);
-		// If in background mode, launch with only_notify=true (posts heads-up banner with sound, then finishes immediately)
 		st := getStatus()
-		onlyNotifyStr := "true"
 		if st.Mode == "foreground" {
-			onlyNotifyStr = "false"
+			// Foreground mode: launch directly with interactive BottomSheet on Display 0
+			thawAppProcess()
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+			cmd.Env = append(os.Environ(),
+				"REQ_ID="+p.RequestID,
+				"REQ_DATA="+string(bodyBytes),
+			)
+			cmd.Run()
+		} else {
+			// Background mode: trigger Question via pure foreground broadcast -> Native Fluid Cloud on status bar!
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am broadcast --receiver-foreground -n com.agent.mobileuse/.QuestionReceiver -a com.agent.mobileuse.ACTION_QUESTION --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
+			cmd.Env = append(os.Environ(),
+				"REQ_ID="+p.RequestID,
+				"REQ_DATA="+string(bodyBytes),
+			)
+			cmd.Run()
 		}
-
-		thawAppProcess()
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify "$ONLY_NOTIFY" --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
-		cmd.Env = append(os.Environ(),
-			"ONLY_NOTIFY="+onlyNotifyStr,
-			"REQ_ID="+p.RequestID,
-			"REQ_DATA="+string(bodyBytes),
-		)
-		cmd.Run()
 
 		timeout := 10 * time.Minute
 		if p.TimeoutMs > 0 {

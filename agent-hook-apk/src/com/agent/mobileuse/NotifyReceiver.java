@@ -73,7 +73,7 @@ public class NotifyReceiver extends BroadcastReceiver {
             if (isCompleted) {
                 postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed, sessionId);
             } else {
-                Log.i(TAG, "In-progress step (" + completed + "/" + total + ") suppressed to avoid disturbance.");
+                postOngoingNotification(context, nm, tag, id, title, subtext, content, total, completed, sessionId);
             }
         }
     }
@@ -279,6 +279,72 @@ public class NotifyReceiver extends BroadcastReceiver {
             Log.i(TAG, "Task completed heads-up notification posted: tag=" + tag + ", id=" + id);
         } catch (Throwable t) {
             Log.e(TAG, "postCompletedNotification failed: " + t.getMessage(), t);
+        }
+    }
+
+    public static void postOngoingNotification(Context context, NotificationManager nm, String tag, int id,
+                                               String title, String subtext, String content,
+                                               int total, int completed, String sessionId) {
+        try {
+            ensureChannel(nm);
+
+            Notification.Builder builder = new Notification.Builder(context);
+            if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
+                    setChannelMethod.invoke(builder, CHANNEL_ID);
+                } catch (Throwable t) {
+                    Log.w(TAG, "setChannelId reflection warning: " + t.getMessage());
+                }
+            }
+
+            String cleanTitle = cleanEmoji(title);
+            if (cleanTitle.isEmpty()) {
+                cleanTitle = "Agent 正在运行中...";
+            }
+            builder.setContentTitle(cleanTitle);
+
+            String cleanContent = cleanEmoji(content);
+            if (cleanContent.isEmpty()) {
+                cleanContent = "正在执行移动端任务";
+            }
+            if (total > 0) {
+                cleanContent = "(" + completed + "/" + total + ") " + cleanContent;
+            }
+            builder.setContentText(cleanContent);
+
+            String cleanSubtext = cleanEmoji(subtext);
+            if (cleanSubtext.isEmpty()) {
+                cleanSubtext = "DeepSeek Agent · 运行中";
+            }
+            builder.setSubText(cleanSubtext);
+
+            builder.setSmallIcon(R.drawable.dsh_whale_icon);
+
+            // Click Jump PendingIntent -> Launch DemoDialogActivity
+            Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
+            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if (sessionId != null && !sessionId.isEmpty()) {
+                overlayIntent.putExtra("session_id", sessionId);
+            }
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) {
+                flags |= 0x04000000; // FLAG_IMMUTABLE
+            }
+            int requestCode = (sessionId != null && !sessionId.isEmpty()) ? sessionId.hashCode() : id;
+            PendingIntent pi = PendingIntent.getActivity(context, requestCode, overlayIntent, flags);
+            builder.setContentIntent(pi);
+
+            builder.setOngoing(true);
+            builder.setAutoCancel(false);
+            builder.setPriority(2); // Notification.PRIORITY_MAX = 2
+            builder.setShowWhen(true);
+
+            Notification notification = builder.build();
+            nm.notify(tag, id, notification);
+            Log.i(TAG, "Ongoing task notification posted for Fluid Cloud: tag=" + tag + ", id=" + id);
+        } catch (Throwable t) {
+            Log.e(TAG, "postOngoingNotification failed: " + t.getMessage(), t);
         }
     }
 }

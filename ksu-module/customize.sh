@@ -27,6 +27,7 @@ if [ -f "$LSP_DB" ] && [ -x "$SQLITE_BIN" ]; then
         "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO modules_state (module_pkg_name, user_id, enabled) VALUES ('com.agent.mobileuse', 0, 1);" 2>/dev/null
         "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'android', 0);" 2>/dev/null
         "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'system', 0);" 2>/dev/null
+        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'com.android.systemui', 0);" 2>/dev/null
         ui_print "- LSPosed 作用域配置完成: $APK_PATH"
     fi
 fi

@@ -17,6 +17,10 @@ public class HookEntry implements IXposedHookLoadPackage {
         if ("android".equals(lpparam.packageName) || "system".equals(lpparam.packageName)) {
             hookSystemServer(lpparam);
         }
+        // Hook SystemUI (ColorOS Fluid Cloud)
+        if ("com.android.systemui".equals(lpparam.packageName)) {
+            hookSystemUI(lpparam);
+        }
     }
 
     private void hookSystemServer(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -115,6 +119,82 @@ public class HookEntry implements IXposedHookLoadPackage {
             XposedBridge.log("[AgentMobileUseHook] StrategyActionButtonKeyLaunchApp hooked successfully!");
         } catch (Throwable t) {
             XposedBridge.log("[AgentMobileUseHook] Failed to hook StrategyActionButtonKeyLaunchApp: " + t.getMessage());
+        }
+    }
+
+    private static Object invokeNoArg(Object obj, String methodName) {
+        if (obj == null) return null;
+        try {
+            java.lang.reflect.Method m = obj.getClass().getMethod(methodName);
+            m.setAccessible(true);
+            return m.invoke(obj);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private void hookSystemUI(XC_LoadPackage.LoadPackageParam lpparam) {
+        XposedBridge.log("[AgentMobileUseHook] SystemUI loaded: " + lpparam.packageName);
+        ClassLoader cl = lpparam.classLoader;
+
+        // 1. Hook OplusLiveAlertFilters.shouldFilter to allow com.agent.mobileuse into Fluid Cloud
+        try {
+            Class<?> filtersClass = XposedHelpers.findClass(
+                "com.oplus.systemui.statusbar.notification.livealert.data.repository.OplusLiveAlertFilters",
+                cl
+            );
+            XposedBridge.hookAllMethods(filtersClass, "shouldFilter", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                        Object entry = param.args[0];
+                        try {
+                            Object sbn = invokeNoArg(entry, "getSbn");
+                            if (sbn != null) {
+                                String pkg = (String) invokeNoArg(sbn, "getPackageName");
+                                if ("com.agent.mobileuse".equals(pkg)) {
+                                    XposedBridge.log("[AgentMobileUseHook] FluidCloud: Forced shouldFilter=true for " + pkg);
+                                    param.setResult(Boolean.TRUE);
+                                }
+                            }
+                        } catch (Throwable t) {
+                            XposedBridge.log("[AgentMobileUseHook] Error inspecting entry: " + t.getMessage());
+                        }
+                    }
+                }
+            });
+            XposedBridge.log("[AgentMobileUseHook] OplusLiveAlertFilters.shouldFilter hooked!");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook OplusLiveAlertFilters: " + t.getMessage());
+        }
+
+        // 2. Hook OplusLiveAlertFilterByPlugin.shouldFilter (Double insurance)
+        try {
+            Class<?> pluginFilterClass = XposedHelpers.findClass(
+                "com.oplus.systemui.statusbar.notification.livealert.data.repository.OplusLiveAlertFilterByPlugin",
+                cl
+            );
+            XposedBridge.hookAllMethods(pluginFilterClass, "shouldFilter", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                        Object entry = param.args[0];
+                        try {
+                            Object sbn = invokeNoArg(entry, "getSbn");
+                            if (sbn != null) {
+                                String pkg = (String) invokeNoArg(sbn, "getPackageName");
+                                if ("com.agent.mobileuse".equals(pkg)) {
+                                    param.setResult(Boolean.TRUE);
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            });
+            XposedBridge.log("[AgentMobileUseHook] OplusLiveAlertFilterByPlugin.shouldFilter hooked!");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook OplusLiveAlertFilterByPlugin: " + t.getMessage());
         }
     }
 }
