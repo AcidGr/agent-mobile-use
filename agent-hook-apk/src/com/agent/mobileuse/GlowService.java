@@ -31,7 +31,7 @@ import java.util.List;
 public class GlowService extends Service {
     public static final String ACTION_TOUCH = "com.agent.mobileuse.ACTION_TOUCH";
 
-    private static final String CHANNEL_ID = "agent_glow_notify_channel";
+    private static final String CHANNEL_ID = "agent_capsule_channel_v2";
     private static final int NOTIFICATION_ID = 10086;
     private WindowManager mWindowManager;
     private GlowView mGlowView;
@@ -48,7 +48,6 @@ public class GlowService extends Service {
     public void onCreate() {
         super.onCreate();
         mMainHandler = new Handler(Looper.getMainLooper());
-        promoteToForeground();
     }
 
     /**
@@ -104,7 +103,7 @@ public class GlowService extends Service {
         return bitmap;
     }
 
-    private void promoteToForeground() {
+    private void promoteToForeground(boolean isForeground) {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
@@ -126,10 +125,19 @@ public class GlowService extends Service {
                 } catch (Throwable ignored) {}
             }
 
-            // Compact Capsule Right Ear: strictly 3 chars "接管中"
-            builder.setContentTitle("接管中");
-            builder.setContentText("点击切回后台副屏操作 · 屏幕边缘光效运行中");
-            builder.setSubText("前台接管中 · 点击切后台");
+            // Compact Capsule Right Ear: 
+            // Foreground: strictly 3 chars "接管中"
+            // Background: strictly 4 chars "后台运行"
+            String capsuleTitle = isForeground ? "接管中" : "后台运行";
+            builder.setContentTitle(capsuleTitle);
+
+            if (isForeground) {
+                builder.setContentText("点击切回后台副屏操作 · 屏幕边缘光效运行中");
+                builder.setSubText("前台接管中 · 点击切后台");
+            } else {
+                builder.setContentText("独立虚拟副屏静默运行中 · 点击呼出控制台");
+                builder.setSubText("后台运行中 · 点击查看");
+            }
 
             // Single Cyber Blue Eye Bitmap (100% transparent background, direct BitmapDrawable without Vector colorFilter override)
             Bitmap singleEyeBitmap = createSingleBlueEyeBitmap(192);
@@ -155,15 +163,24 @@ public class GlowService extends Service {
                 setBehavior.invoke(builder, 1);
             } catch (Throwable ignored) {}
 
-            // Click pendingIntent -> Handoff to background
-            Intent handoffIntent = new Intent(NotifyReceiver.ACTION_HANDOFF);
-            handoffIntent.setPackage(getPackageName());
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 23) {
                 flags |= 0x04000000; // FLAG_IMMUTABLE
             }
-            PendingIntent pi = PendingIntent.getBroadcast(this, 2028, handoffIntent, flags);
-            builder.setContentIntent(pi);
+
+            if (isForeground) {
+                // Foreground: Click pendingIntent -> Handoff to background
+                Intent handoffIntent = new Intent(NotifyReceiver.ACTION_HANDOFF);
+                handoffIntent.setPackage(getPackageName());
+                PendingIntent pi = PendingIntent.getBroadcast(this, 2028, handoffIntent, flags);
+                builder.setContentIntent(pi);
+            } else {
+                // Background: Click pendingIntent -> Open DemoDialogActivity (Web Console)
+                Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
+                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                PendingIntent pi = PendingIntent.getActivity(this, 2029, consoleIntent, flags);
+                builder.setContentIntent(pi);
+            }
 
             builder.setOngoing(true);
             builder.setAutoCancel(false);
@@ -171,12 +188,17 @@ public class GlowService extends Service {
             builder.setShowWhen(true);
 
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            bigStyle.setBigContentTitle("Agent 正在接管前台操作");
-            bigStyle.bigText("点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。");
+            if (isForeground) {
+                bigStyle.setBigContentTitle("Agent 正在接管前台操作");
+                bigStyle.bigText("点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。");
+            } else {
+                bigStyle.setBigContentTitle("Agent 正在后台副屏运行");
+                bigStyle.bigText("任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出控制台浮层。");
+            }
             builder.setStyle(bigStyle);
 
             startForeground(NOTIFICATION_ID, builder.build());
-            android.util.Log.i("AgentGlowService", "Promoted to Native Fluid Cloud Foreground successfully (接管中)!");
+            android.util.Log.i("AgentGlowService", "Promoted to Native Fluid Cloud successfully (" + capsuleTitle + ")!");
         } catch (Throwable t) {
             android.util.Log.e("AgentGlowService", "Failed to promote to foreground: " + t.getMessage(), t);
         }
@@ -184,10 +206,13 @@ public class GlowService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        promoteToForeground();
         String action = (intent != null) ? intent.getAction() : null;
-        if ("START".equals(action)) {
+        if ("START_FOREGROUND".equals(action) || "START".equals(action)) {
+            promoteToForeground(true);
             showGlow();
+        } else if ("START_BACKGROUND".equals(action)) {
+            hideGlow();
+            promoteToForeground(false);
         } else if ("STOP".equals(action)) {
             hideGlow();
             stopForeground(true);

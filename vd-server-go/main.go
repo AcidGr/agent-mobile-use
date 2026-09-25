@@ -76,20 +76,28 @@ func getCurrentMode() string {
 }
 
 func setCurrentMode(m string) string {
-	modeMu.Lock()
-	defer modeMu.Unlock()
 	lower := strings.ToLower(strings.TrimSpace(m))
+	var mode string
+	modeMu.Lock()
 	if lower == "foreground" || lower == "fg" || lower == "0" {
 		currentMode = "foreground"
-		go setEdgeGlow(true)
 	} else if lower == "idle" || lower == "standby" || lower == "none" || lower == "-1" {
 		currentMode = "idle"
-		go setEdgeGlow(false)
 	} else {
 		currentMode = "background"
-		go setEdgeGlow(false)
 	}
-	return currentMode
+	mode = currentMode
+	modeMu.Unlock()
+
+	targetDid := -1
+	if mode == "foreground" {
+		targetDid = 0
+	} else if mode == "background" {
+		st := getStatus()
+		targetDid = st.DisplayID
+	}
+	go syncGlowStateWithDisplay(targetDid)
+	return mode
 }
 
 var (
@@ -123,54 +131,42 @@ func thawAppProcess() {
 	_ = exec.Command("/system/bin/sh", "-c", fmt.Sprintf("echo 0 > /sys/fs/cgroup/apps/uid_%s/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_%s/cgroup.freeze 2>/dev/null", uid, uid)).Run()
 }
 
-func setEdgeGlow(enable bool) {
-	if enable {
-		exec.Command("/system/bin/sh", "-c", "am force-stop com.agent.mobileuse").Run()
-		thawAppProcess()
-		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a START com.agent.mobileuse/.GlowService")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			fmt.Printf("[setEdgeGlow] START error: %v, output: %s\n", err, string(out))
-		}
-	} else {
-		cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service -a STOP com.agent.mobileuse/.GlowService")
-		_ = cmd.Run()
-	}
-}
-
 var (
-	glowLastRestartMu sync.Mutex
-	glowLastRestart   time.Time
+	lastAppliedTargetDid   = -999
+	lastAppliedTargetDidMu sync.Mutex
 )
 
 func isGlowServiceAlive() bool {
-	out, err := exec.Command("/system/bin/pidof", "com.agent.mobileuse").Output()
-	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
-		return false
-	}
 	cmd := exec.Command("/system/bin/sh", "-c", `dumpsys activity services com.agent.mobileuse/.GlowService | grep -q "app=ProcessRecord"`)
 	return cmd.Run() == nil
 }
 
 func syncGlowStateWithDisplay(targetDid int) {
-	if targetDid == 0 {
-		// Target is Display 0: light must be ON!
-		if !isGlowServiceAlive() {
-			glowLastRestartMu.Lock()
-			now := time.Now()
-			if now.Sub(glowLastRestart) < 2*time.Second {
-				glowLastRestartMu.Unlock()
-				return
-			}
-			glowLastRestart = now
-			glowLastRestartMu.Unlock()
+	lastAppliedTargetDidMu.Lock()
+	defer lastAppliedTargetDidMu.Unlock()
 
-			go setEdgeGlow(true)
+	thawAppProcess()
+
+	if targetDid == 0 {
+		// Target is Display 0: Foreground mode (Edge glow ON + "接管中" Fluid Cloud)
+		if lastAppliedTargetDid != 0 || !isGlowServiceAlive() {
+			lastAppliedTargetDid = 0
+			cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service --user 0 -a START_FOREGROUND -n com.agent.mobileuse/com.agent.mobileuse.GlowService")
+			_ = cmd.Run()
+		}
+	} else if targetDid > 0 {
+		// Target is Virtual Display: Background mode (Edge glow OFF + "后台运行" Fluid Cloud)
+		if lastAppliedTargetDid != targetDid || !isGlowServiceAlive() {
+			lastAppliedTargetDid = targetDid
+			cmd := exec.Command("/system/bin/sh", "-c", "am start-foreground-service --user 0 -a START_BACKGROUND -n com.agent.mobileuse/com.agent.mobileuse.GlowService")
+			_ = cmd.Run()
 		}
 	} else {
-		// Target is NOT Display 0: light must be OFF!
-		if isGlowServiceAlive() {
-			go setEdgeGlow(false)
+		// Target is < 0: Idle mode (Edge glow OFF + No Fluid Cloud)
+		if lastAppliedTargetDid != -1 || isGlowServiceAlive() {
+			lastAppliedTargetDid = -1
+			_ = exec.Command("/system/bin/sh", "-c", "am stopservice --user 0 -n com.agent.mobileuse/com.agent.mobileuse.GlowService").Run()
+			_ = exec.Command("/system/bin/sh", "-c", "am start-foreground-service --user 0 -a STOP -n com.agent.mobileuse/com.agent.mobileuse.GlowService").Run()
 		}
 	}
 }
