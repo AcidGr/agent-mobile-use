@@ -1,0 +1,38 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Dark circular background protection -->
+    <path
+        android:fillColor="#EE10141C"
+        android:pathData="M12,12m-10.5,0a10.5,10.5 0 1,0 21,0a10.5,10.5 0 1,0 -21,0" />
+
+    <!-- Left Eye Curved Eyelid -->
+    <path
+        android:strokeColor="#00D2FF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 4.8,12.8 Q 7.8,8.8 10.8,12.8" />
+
+    <!-- Left Eye Intelligent Pupil -->
+    <path
+        android:fillColor="#00D2FF"
+        android:pathData="M 7.8,12.8m -1.1,0 a 1.1,1.1 0 1,0 2.2,0 a 1.1,1.1 0 1,0 -2.2,0" />
+
+    <!-- Right Eye Curved Eyelid -->
+    <path
+        android:strokeColor="#00D2FF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 13.2,12.8 Q 16.2,8.8 19.2,12.8" />
+
+    <!-- Right Eye Intelligent Pupil -->
+    <path
+        android:fillColor="#00D2FF"
+        android:pathData="M 16.2,12.8m -1.1,0 a 1.1,1.1 0 1,0 2.2,0 a 1.1,1.1 0 1,0 -2.2,0" />
+
+</vector>

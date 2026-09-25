@@ -22,6 +22,7 @@ public class NotifyReceiver extends BroadcastReceiver {
     private static final String TAG = "AgentNotifyReceiver";
     public static final String ACTION_NOTIFY = "com.agent.mobileuse.ACTION_NOTIFY";
     public static final String ACTION_CLEAR = "com.agent.mobileuse.ACTION_CLEAR";
+    public static final String ACTION_HANDOFF = "com.agent.mobileuse.ACTION_HANDOFF";
 
     public static final String CHANNEL_ID = "dsh_agent_completed";
     public static final String CHANNEL_NAME = "DeepSeek Agent 任务完成";
@@ -49,6 +50,31 @@ public class NotifyReceiver extends BroadcastReceiver {
         if (ACTION_CLEAR.equals(action)) {
             Log.i(TAG, "Canceling notification: tag=" + tag + ", id=" + id);
             nm.cancel(tag, id);
+            return;
+        }
+
+        if (ACTION_HANDOFF.equals(action)) {
+            Log.i(TAG, "ACTION_HANDOFF received from Fluid Cloud click! Triggering handoff to background...");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/handoff");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(1500);
+                        conn.setReadTimeout(1500);
+                        int code = conn.getResponseCode();
+                        Log.i(TAG, "Handoff finished, response code: " + code);
+                        conn.disconnect();
+                    } catch (Throwable t) {
+                        Log.w(TAG, "HTTP handoff error, trying curl fallback: " + t.getMessage());
+                        try {
+                            Runtime.getRuntime().exec(new String[]{"/system/bin/sh", "-c", "curl -s http://127.0.0.1:3070/api/handoff"}).waitFor();
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }).start();
             return;
         }
 

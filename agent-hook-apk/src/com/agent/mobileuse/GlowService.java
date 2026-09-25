@@ -5,16 +5,19 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
+import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -32,7 +35,6 @@ public class GlowService extends Service {
     private static final int NOTIFICATION_ID = 10086;
     private WindowManager mWindowManager;
     private GlowView mGlowView;
-    private CapsuleView mCapsuleView;
     private boolean mIsShowing = false;
     private BroadcastReceiver mTouchReceiver;
     private Handler mMainHandler;
@@ -49,30 +51,124 @@ public class GlowService extends Service {
         promoteToForeground();
     }
 
+    /**
+     * Create crisp vector-drawn Cyber Blue Eyes bitmap (simple line art style).
+     */
+    public static Bitmap createBlueEyesBitmap(int size) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        float center = size / 2.0f;
+        float radius = center - 4.0f;
+
+        // 1. Sleek circular dark background
+        Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setColor(0xF010141C);
+        bgPaint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(center, center, radius, bgPaint);
+
+        // 2. Vibrant Cyber / Electric Blue
+        int eyeColor = 0xFF00D2FF;
+        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        strokePaint.setColor(eyeColor);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(size * 0.085f);
+        strokePaint.setStrokeCap(Paint.Cap.ROUND);
+        strokePaint.setStrokeJoin(Paint.Join.ROUND);
+
+        Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fillPaint.setColor(eyeColor);
+        fillPaint.setStyle(Paint.Style.FILL);
+
+        float eyeDistance = size * 0.22f;
+        float leftX = center - eyeDistance;
+        float rightX = center + eyeDistance;
+        float eyeY = center * 0.98f;
+        float eyeW = size * 0.15f;
+        float eyeH = size * 0.10f;
+
+        // Left eye upper arc (curved upper eyelid)
+        android.graphics.Path leftPath = new android.graphics.Path();
+        leftPath.moveTo(leftX - eyeW, eyeY + eyeH * 0.2f);
+        leftPath.quadTo(leftX, eyeY - eyeH * 1.5f, leftX + eyeW, eyeY + eyeH * 0.2f);
+        canvas.drawPath(leftPath, strokePaint);
+
+        // Right eye upper arc
+        android.graphics.Path rightPath = new android.graphics.Path();
+        rightPath.moveTo(rightX - eyeW, eyeY + eyeH * 0.2f);
+        rightPath.quadTo(rightX, eyeY - eyeH * 1.5f, rightX + eyeW, eyeY + eyeH * 0.2f);
+        canvas.drawPath(rightPath, strokePaint);
+
+        // Pupil dots with keen intelligent gaze
+        float pupilR = size * 0.055f;
+        canvas.drawCircle(leftX, eyeY + eyeH * 0.15f, pupilR, fillPaint);
+        canvas.drawCircle(rightX, eyeY + eyeH * 0.15f, pupilR, fillPaint);
+
+        return bitmap;
+    }
+
     private void promoteToForeground() {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (Build.VERSION.SDK_INT >= 26 && nm != null) {
+            if (nm == null) return;
+
+            if (Build.VERSION.SDK_INT >= 26) {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 java.lang.reflect.Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                Object channel = ctor.newInstance(CHANNEL_ID, "Agent Foreground Glow", 1);
+                // IMPORTANCE_DEFAULT = 3 (Displays Fluid Cloud capsule on status bar without noisy audible interrupt)
+                Object channel = ctor.newInstance(CHANNEL_ID, "Agent Foreground Activity", 3);
                 java.lang.reflect.Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
-
-                Notification.Builder builder = new Notification.Builder(this);
-                java.lang.reflect.Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
-                setChannelMethod.invoke(builder, CHANNEL_ID);
-                builder.setContentTitle("Agent 移动端前台操作中")
-                       .setContentText("屏幕边缘光效与触控轨迹常驻运行")
-                       .setSmallIcon(android.R.drawable.stat_notify_sync);
-                startForeground(NOTIFICATION_ID, builder.build());
-            } else {
-                Notification.Builder builder = new Notification.Builder(this);
-                builder.setContentTitle("Agent 移动端前台操作中")
-                       .setSmallIcon(android.R.drawable.stat_notify_sync);
-                startForeground(NOTIFICATION_ID, builder.build());
             }
-            android.util.Log.i("AgentGlowService", "Promoted to ForegroundService successfully!");
+
+            Notification.Builder builder = new Notification.Builder(this);
+            if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    java.lang.reflect.Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
+                    setChannelMethod.invoke(builder, CHANNEL_ID);
+                } catch (Throwable ignored) {}
+            }
+
+            // Compact Capsule Right Ear: strictly 3 chars "接管中"
+            builder.setContentTitle("接管中");
+            builder.setContentText("点击切回后台副屏操作 · 屏幕边缘光效运行中");
+            builder.setSubText("前台接管中 · 点击切后台");
+
+            // Cyber Blue Eyes Vector Icon (Direct system-supported resource drawable)
+            builder.setSmallIcon(R.drawable.ic_cyber_blue_eyes);
+            Bitmap blueEyesBitmap = createBlueEyesBitmap(192);
+            if (blueEyesBitmap != null) {
+                builder.setLargeIcon(blueEyesBitmap);
+            }
+
+            // Eliminate Android 12+ 10-second FGS notification deferral (FOREGROUND_SERVICE_IMMEDIATE = 1)
+            try {
+                java.lang.reflect.Method setBehavior = builder.getClass().getMethod("setForegroundServiceBehavior", int.class);
+                setBehavior.invoke(builder, 1);
+            } catch (Throwable ignored) {}
+
+            // Click pendingIntent -> Handoff to background
+            Intent handoffIntent = new Intent(NotifyReceiver.ACTION_HANDOFF);
+            handoffIntent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) {
+                flags |= 0x04000000; // FLAG_IMMUTABLE
+            }
+            PendingIntent pi = PendingIntent.getBroadcast(this, 2028, handoffIntent, flags);
+            builder.setContentIntent(pi);
+
+            builder.setOngoing(true);
+            builder.setAutoCancel(false);
+            builder.setPriority(2); // Notification.PRIORITY_MAX = 2
+            builder.setShowWhen(true);
+
+            Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
+            bigStyle.setBigContentTitle("Agent 正在接管前台操作");
+            bigStyle.bigText("点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。");
+            builder.setStyle(bigStyle);
+
+            startForeground(NOTIFICATION_ID, builder.build());
+            android.util.Log.i("AgentGlowService", "Promoted to Native Fluid Cloud Foreground successfully (接管中)!");
         } catch (Throwable t) {
             android.util.Log.e("AgentGlowService", "Failed to promote to foreground: " + t.getMessage(), t);
         }
@@ -156,51 +252,6 @@ public class GlowService extends Service {
             mWindowManager.addView(mGlowView, lp);
             mGlowView.startPulseAnimation();
 
-            // Add Centered Dynamic Island Capsule over camera cutout (Width 400, Height 140, Centered at X=636)
-            try {
-                int capWidth = 400;
-                int capHeight = 140;
-                mCapsuleView = new CapsuleView(this, new Runnable() {
-                    @Override
-                    public void run() {
-                        triggerHandoff();
-                    }
-                });
-
-                int capWindowType = 2038; // TYPE_APPLICATION_OVERLAY
-                int capWinFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
-
-                WindowManager.LayoutParams capLp = new WindowManager.LayoutParams(
-                    capWidth,
-                    capHeight,
-                    capWindowType,
-                    capWinFlags,
-                    PixelFormat.TRANSLUCENT
-                );
-                capLp.gravity = Gravity.TOP | Gravity.LEFT;
-                capLp.x = 436; // Perfectly centered at X=636 (436 + 200 = 636)
-                capLp.y = 24;  // Enclosing camera cutout, extending to Y=164 (>141) for seamless and easy touch
-                capLp.setTitle("AgentMobileCapsule");
-
-                try {
-                    java.lang.reflect.Field cutoutField = WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode");
-                    cutoutField.setInt(capLp, 3); // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                } catch (Throwable ignored) {}
-
-                try {
-                    java.lang.reflect.Method fitInsetsMethod = WindowManager.LayoutParams.class.getMethod("setFitInsetsTypes", int.class);
-                    fitInsetsMethod.invoke(capLp, 0);
-                } catch (Throwable ignored) {}
-
-                mWindowManager.addView(mCapsuleView, capLp);
-                applySkipScreenshot(mCapsuleView);
-                android.util.Log.i("AgentGlowService", "CapsuleView added at (" + capLp.x + ", " + capLp.y + ") with size " + capWidth + "x" + capHeight);
-            } catch (Throwable capErr) {
-                android.util.Log.e("AgentGlowService", "Failed to add capsule view: " + capErr.getMessage(), capErr);
-            }
-
             registerTouchReceiver();
             mIsShowing = true;
             android.util.Log.i("AgentGlowService", "Glow Overlay added (full screen edge glow + touch indicator enabled).");
@@ -280,153 +331,10 @@ public class GlowService extends Service {
                 }
                 mGlowView = null;
             }
-            if (mCapsuleView != null) {
-                if (mWindowManager != null) {
-                    try {
-                        mWindowManager.removeView(mCapsuleView);
-                    } catch (Throwable ignored) {}
-                }
-                mCapsuleView = null;
-            }
             mIsShowing = false;
-            android.util.Log.i("AgentGlowService", "Glow Overlay and CapsuleView removed.");
+            android.util.Log.i("AgentGlowService", "Glow Overlay removed.");
         } catch (Throwable t) {
             android.util.Log.e("AgentGlowService", "Failed to remove views: " + t.getMessage(), t);
-        }
-    }
-
-    private void triggerHandoff() {
-        android.util.Log.i("AgentGlowService", "Capsule clicked! Triggering handoff to background...");
-        if (mCapsuleView != null) {
-            mCapsuleView.animate().alpha(0f).scaleX(0.5f).scaleY(0.5f).setDuration(150).start();
-        }
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/handoff");
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(1500);
-                    conn.setReadTimeout(1500);
-                    int code = conn.getResponseCode();
-                    android.util.Log.i("AgentGlowService", "Handoff request finished, response code: " + code);
-                    conn.disconnect();
-                } catch (Throwable t) {
-                    android.util.Log.w("AgentGlowService", "HTTP handoff failed, trying curl fallback: " + t.getMessage());
-                    try {
-                        Runtime.getRuntime().exec(new String[]{"/system/bin/sh", "-c", "curl -s http://127.0.0.1:3070/api/handoff"}).waitFor();
-                        android.util.Log.i("AgentGlowService", "Fallback curl handoff executed.");
-                    } catch (Throwable t2) {
-                        android.util.Log.e("AgentGlowService", "Curl fallback failed: " + t2.getMessage(), t2);
-                    }
-                }
-            }
-        }).start();
-    }
-
-    private void applySkipScreenshot(final View view) {
-        mMainHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    java.lang.reflect.Method getRoot = view.getClass().getMethod("getViewRootImpl");
-                    Object vri = getRoot.invoke(view);
-                    if (vri != null) {
-                        java.lang.reflect.Method getSc = vri.getClass().getMethod("getSurfaceControl");
-                        Object sc = getSc.invoke(vri);
-                        if (sc != null) {
-                            Class<?> tClass = Class.forName("android.view.SurfaceControl$Transaction");
-                            Object t = tClass.getConstructor().newInstance();
-                            java.lang.reflect.Method setSkip = tClass.getMethod("setSkipScreenshot", Class.forName("android.view.SurfaceControl"), boolean.class);
-                            setSkip.invoke(t, sc, true);
-                            java.lang.reflect.Method apply = tClass.getMethod("apply");
-                            apply.invoke(t);
-                            android.util.Log.i("AgentGlowService", "setSkipScreenshot(true) applied to CapsuleView!");
-                        }
-                    }
-                } catch (Throwable t) {
-                    android.util.Log.w("AgentGlowService", "SkipScreenshot reflection: " + t.getMessage());
-                }
-            }
-        }, 100);
-    }
-
-    private static class CapsuleView extends View {
-        private final Paint mBgPaint;
-        private final Paint mStrokePaint;
-        private final Paint mTextPaint;
-        private final Paint mDotPaint;
-        private final RectF mBounds = new RectF();
-        private final Runnable mOnClickCallback;
-
-        public CapsuleView(Context context, Runnable onClick) {
-            super(context);
-            mOnClickCallback = onClick;
-            mBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            mBgPaint.setColor(0xF2121316); // 深黑灰，高对比度
-            mBgPaint.setStyle(Paint.Style.FILL);
-
-            mStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-            mDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            mDotPaint.setColor(0xFF00E5FF); // 呼吸青色圆点
-            mDotPaint.setStyle(Paint.Style.FILL);
-
-            mTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            mTextPaint.setColor(0xFFFFFFFF);
-            mTextPaint.setTextSize(28f);
-            mTextPaint.setFakeBoldText(true);
-            mTextPaint.setTextAlign(Paint.Align.LEFT);
-
-            setClickable(true);
-            setWillNotDraw(false);
-            setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-        }
-
-        @Override
-        public boolean onTouchEvent(android.view.MotionEvent event) {
-            switch (event.getAction()) {
-                case android.view.MotionEvent.ACTION_DOWN:
-                    animate().scaleX(0.92f).scaleY(0.92f).setDuration(100).start();
-                    invalidate();
-                    return true;
-                case android.view.MotionEvent.ACTION_UP:
-                    animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
-                    invalidate();
-                    if (mOnClickCallback != null) {
-                        mOnClickCallback.run();
-                    }
-                    return true;
-                case android.view.MotionEvent.ACTION_CANCEL:
-                    animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
-                    invalidate();
-                    return true;
-            }
-            return super.onTouchEvent(event);
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            int w = getWidth();
-            int h = getHeight();
-            float r = h / 2.0f;
-            mBounds.set(0, 0, w, h);
-
-            canvas.drawRoundRect(mBounds, r, r, mBgPaint);
-
-            // Front camera cutout is centered at X=200 (occupies [162, 238])
-            // Left side: Glowing cyan breathing dot
-            float dotX = 75f;
-            float centerY = h / 2.0f;
-            canvas.drawCircle(dotX, centerY, 8f, mDotPaint);
-
-            // Right side: "切到后台" bold text
-            mTextPaint.setTextSize(30f);
-            Paint.FontMetrics fm = mTextPaint.getFontMetrics();
-            float textY = centerY - (fm.descent + fm.ascent) / 2.0f;
-            canvas.drawText("切到后台", 242f, textY, mTextPaint);
         }
     }
 

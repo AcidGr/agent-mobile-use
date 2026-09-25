@@ -57,6 +57,7 @@
             <intent-filter>
                 <action android:name="com.agent.mobileuse.ACTION_NOTIFY" />
                 <action android:name="com.agent.mobileuse.ACTION_CLEAR" />
+                <action android:name="com.agent.mobileuse.ACTION_HANDOFF" />
             </intent-filter>
         </receiver>
 
