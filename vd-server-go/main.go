@@ -252,8 +252,9 @@ func updateCapsuleState() {
 	_ = cmd.Run()
 }
 
-func syncGlowStateWithDisplay(_ int) {
-	go updateCapsuleState()
+func cancelQuestionOnDevice(reqID string) {
+	thawAppProcess()
+	exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+reqID+`" 2>/dev/null`).Run()
 }
 
 func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
@@ -426,7 +427,7 @@ func handoffToBackground() map[string]interface{} {
 func ensureTargetReady() (StatusResp, int, error) {
 	st := getStatus()
 	targetDid := getTargetDisplayID(st)
-	syncGlowStateWithDisplay(targetDid)
+	go updateCapsuleState()
 
 	if targetDid == 0 {
 		return st, 0, nil
@@ -560,42 +561,14 @@ func stopVirtualDisplay() StatusResp {
 	return getStatus()
 }
 
-// ── Accessibility service, on only for the duration of one tree read ──
-//
-// WeChat only exposes its node tree while a genuine accessibility service is bound.
-// Measured on this device (2026-09-20):
-//
-//	enabled=0, service list empty       -> tree_blocked, 0 nodes
-//	enabled=1, service list empty       -> tree_blocked, 0 nodes   <- the boolean alone does nothing
-//	enabled=0, service list has SelectToSpeak -> 68 nodes, readable
-//	enabled=1, service list has it      -> 68 nodes, readable
-//
-// So the ONLY thing that matters is that a real service is bound. Every tree read is
-// therefore wrapped: put the service in the list, run the tool, put the list back.
-//
-// Timings measured here, which is what this is built on:
-//
-//	bind    write returns +19..47ms, service bound +51..76ms warm; ~700ms cold
-//	        (cold = the TalkBack process has to be started, e.g. after a reboot)
-//	unbind  delete returns +21ms, state cleared by +53ms
-//	wait    NOT needed: with delays of 0 / 300 / 1000ms before the dump, WeChat read
-//	        68 nodes in 9/9 trials, including one where TalkBack was force-stopped
-//	        immediately before the write
-//	total   enable + dump + restore = 2383ms against a 2218ms plain dump, so +165ms
-//
-// What the earlier version of this got wrong, and is not repeated here:
-//   - it also wrote `accessibility_enabled`; the boolean has no effect on binding, and
-//     neither does leaving it as "0" on the way out
-//   - it slept 1000ms before every call; the nine trials above say that wait buys nothing
-//
-// It only appends to whatever the user already had, and only undoes what it itself did:
-// if the service is already in the list it is left alone.
+// ── Accessibility service wrapper ──
+// Certain apps (e.g. WeChat) only expose their accessibility node tree while a real
+// service is bound. We temporarily append SelectToSpeakService during tree reads.
 const a11yService = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
 
 const a11yKey = "enabled_accessibility_services"
 
-// Serialises the toggle so two concurrent tool calls cannot interleave their
-// save/restore and leave the list in a state neither of them intended.
+// Serialises the toggle so two concurrent tool calls cannot interleave their save/restore.
 var a11yToggleMu sync.Mutex
 
 func readSecure(key string) string {
@@ -1016,21 +989,8 @@ func main() {
 			return
 		}
 		did := strconv.Itoa(targetDid)
-		// No paging parameters. The dump budget is sized to deliver a dense screen whole
-		// in one call (see ToolMain's MAX_NODES_CHARS), so there is nothing to page to.
-		//
-		// This used to accept ?y_min=&y_max= as a window, paired with a `next_y` hint the
-		// tool emitted so a caller could fetch whatever the budget could not fit. That
-		// hint was wrong whenever the budget cut into the node RANKING rather than into
-		// the screen: nodes are ordered by usefulness, so the omitted ones are scattered
-		// instead of sitting below the last emitted one, and next_y pointed at the bottom
-		// of the screen. Measured on Amap with a 3000-char budget: 39/88 controls on page
-		// one, next_y=2800, second page empty. A silent dead end is worse than no paging.
 		// Opt-in: ?no_system_ui=1 drops system-chrome windows (status bar, nav bar,
-		// notification shade, the ColorOS smart sidebar) so the physical display and the
-		// virtual display hand the model the SAME tree for the same app screen. Off by
-		// default; the un-filtered header is unchanged, and when the filter runs it
-		// reports sys_dropped=N so a reader can tell "no chrome here" from "chrome removed".
+		// smart sidebar) so physical and virtual displays yield the same tree.
 		treeArgs := []string{"tree", did}
 		if v := r.URL.Query().Get("no_system_ui"); v == "1" || v == "true" {
 			treeArgs = append(treeArgs, "0", "--no-system-ui")
@@ -1049,15 +1009,7 @@ func main() {
 		}
 
 		// ToolMain emits a flat observation: a machine-readable header line, a column
-		// line, then ONE LINE PER ELEMENT. Decode the header, decorate it with the
-		// geometry and mode only the daemon knows, and reply with that whole body as a
-		// JSON string plus the fields a machine needs to read without parsing rows.
-		//
-		// This used to `json.Unmarshal` the dump into a map and re-encode it, because
-		// ToolMain used to emit a JSON envelope. It no longer does: repeating `"id"`,
-		// `"type"` and `"b"` on every node was 62% of the payload, all of it pure key
-		// name tax. The rows are the model's interface; the envelope here is the
-		// caller's, and the two must not be entangled again.
+		// line, then one line per element. Decode header and decorate with daemon info.
 		env, rows, ok := splitObservation(trimmed)
 		if !ok {
 			json.NewEncoder(w).Encode(ActionResponse{
@@ -1525,12 +1477,9 @@ func main() {
 				"answers":    ans.Answers,
 			})
 		case <-r.Context().Done():
-			// Cancelled from HTTP client
-			thawAppProcess()
-			exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+p.RequestID+`" 2>/dev/null`).Run()
+			cancelQuestionOnDevice(p.RequestID)
 		case <-time.After(timeout):
-			thawAppProcess()
-			exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+p.RequestID+`" 2>/dev/null`).Run()
+			cancelQuestionOnDevice(p.RequestID)
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Timeout waiting for answer"})
 		}
 	})
@@ -1557,9 +1506,7 @@ func main() {
 			return
 		}
 
-		// Dismiss question notification immediately upon receiving answer
-		thawAppProcess()
-		exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+p.RequestID+`" 2>/dev/null`).Run()
+		cancelQuestionOnDevice(p.RequestID)
 
 		select {
 		case ch <- &p:
@@ -1583,8 +1530,7 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
 			return
 		}
-		thawAppProcess()
-		exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+p.RequestID+`" 2>/dev/null`).Run()
+		cancelQuestionOnDevice(p.RequestID)
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 

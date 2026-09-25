@@ -25,7 +25,6 @@ zip -r "$WORKSPACE/agent-mobile-use-ksu.zip" . -x "*.git*" -x "pack.sh"
 
 mkdir -p "$WORKSPACE/release"
 cp "$WORKSPACE/agent-mobile-use-ksu.zip" "$WORKSPACE/release/agent-mobile-use-ksu-v${VERSION}.zip"
-cp "$WORKSPACE/agent-mobile-use-ksu.zip" "$WORKSPACE/release/agent-mobile-use-ksu-${VERSION}.zip"
 
 # 5. Copy to Download folder for easy flashing
 cp "$WORKSPACE/agent-mobile-use-ksu.zip" /storage/emulated/0/Download/agent-mobile-use-ksu.zip 2>/dev/null || true

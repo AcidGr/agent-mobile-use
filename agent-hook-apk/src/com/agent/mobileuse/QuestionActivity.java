@@ -1,11 +1,14 @@
 package com.agent.mobileuse;
 
 import android.app.Activity;
+import android.app.Notification;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -33,6 +36,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.OutputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -42,10 +47,12 @@ import java.util.Set;
 
 public class QuestionActivity extends Activity {
     private static final String TAG = "QuestionActivity";
+    public static final int NOTIFICATION_ID = 20086;
+    private static final String CHANNEL_ID = "agent_question_channel";
+    private static final String CHANNEL_NAME = "Agent 交互确认";
 
     private String mRequestId;
     private String mDataJson;
-    private BroadcastReceiver mDismissReceiver;
     private boolean mAnswered = false;
 
     private static class OptionItem {
@@ -93,22 +100,9 @@ public class QuestionActivity extends Activity {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) {
-                nm.cancel(QuestionReceiver.NOTIFICATION_ID);
+                nm.cancel(NOTIFICATION_ID);
             }
         } catch (Throwable ignored) {}
-
-        // Register dismiss receiver to close card if cancelled from Web
-        mDismissReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (QuestionReceiver.ACTION_DISMISS_CARD.equals(intent.getAction())) {
-                    Log.i(TAG, "Dismiss card received from external broadcast");
-                    finish();
-                }
-            }
-        };
-        IntentFilter filter = new IntentFilter(QuestionReceiver.ACTION_DISMISS_CARD);
-        registerReceiver(mDismissReceiver, filter);
 
         try {
             buildUI();
@@ -178,7 +172,7 @@ public class QuestionActivity extends Activity {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                 if (nm != null) {
-                    nm.cancel(QuestionReceiver.NOTIFICATION_ID);
+                    nm.cancel(NOTIFICATION_ID);
                 }
             } catch (Throwable ignored) {}
             finish();
@@ -250,7 +244,7 @@ public class QuestionActivity extends Activity {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                 if (nm != null) {
-                    QuestionReceiver.showQuestionNotification(this, nm, mRequestId, mDataJson);
+                    showQuestionNotification(this, nm, mRequestId, mDataJson);
                 }
             } catch (Throwable t) {
                 Log.e(TAG, "showQuestionNotification failed: " + t.getMessage(), t);
@@ -670,7 +664,7 @@ public class QuestionActivity extends Activity {
         // Dismiss notification immediately
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
-            nm.cancel(QuestionReceiver.NOTIFICATION_ID);
+            nm.cancel(NOTIFICATION_ID);
         }
 
         new Thread(new Runnable() {
@@ -735,14 +729,139 @@ public class QuestionActivity extends Activity {
         }, 150);
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (mDismissReceiver != null) {
+    public static void ensureChannel(NotificationManager nm) {
+        if (Build.VERSION.SDK_INT >= 26) {
             try {
-                unregisterReceiver(mDismissReceiver);
-            } catch (Throwable ignored) {}
-            mDismissReceiver = null;
+                Class<?> channelClass = Class.forName("android.app.NotificationChannel");
+                Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
+                Object channel = ctor.newInstance(CHANNEL_ID, CHANNEL_NAME, 4);
+
+                Method setDesc = channelClass.getMethod("setDescription", String.class);
+                setDesc.invoke(channel, "DeepSeek Harness Agent 交互提问与选择通知");
+
+                Method enableLights = channelClass.getMethod("enableLights", boolean.class);
+                enableLights.invoke(channel, true);
+
+                Method enableVibration = channelClass.getMethod("enableVibration", boolean.class);
+                enableVibration.invoke(channel, true);
+
+                try {
+                    android.media.AudioAttributes audioAttributes = new android.media.AudioAttributes.Builder()
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .build();
+                    android.net.Uri soundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION);
+                    Method setSound = channelClass.getMethod("setSound", android.net.Uri.class, android.media.AudioAttributes.class);
+                    setSound.invoke(channel, soundUri, audioAttributes);
+                } catch (Throwable ignored) {}
+
+                Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
+                createMethod.invoke(nm, channel);
+            } catch (Throwable t) {
+                Log.w(TAG, "ensureChannel warning: " + t.getMessage());
+            }
         }
+    }
+
+    public static void showQuestionNotification(Context context, NotificationManager nm, String requestId, String dataJson) {
+        try {
+            ensureChannel(nm);
+
+            JSONObject root = new JSONObject(dataJson);
+            JSONArray questions = root.optJSONArray("questions");
+            if (questions == null || questions.length() == 0) return;
+
+            int qCount = questions.length();
+            JSONObject firstQ = questions.getJSONObject(0);
+            String header = firstQ.optString("header", "DeepSeek Agent 需要您的选择");
+            if (qCount > 1) {
+                header = header + " (共 " + qCount + " 个问题)";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < qCount; i++) {
+                JSONObject q = questions.getJSONObject(i);
+                if (i > 0) sb.append("\n");
+                if (qCount > 1) sb.append((i + 1)).append(". ");
+                sb.append(q.optString("question", ""));
+            }
+            String questionText = sb.toString();
+
+            Notification.Builder builder = new Notification.Builder(context);
+            if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
+                    setChannelMethod.invoke(builder, CHANNEL_ID);
+                } catch (Throwable t) {
+                    Log.w(TAG, "setChannelId warning: " + t.getMessage());
+                }
+            }
+
+            builder.setContentTitle("有问题");
+            builder.setContentText(questionText);
+            builder.setSubText("点击处理交互提问");
+            builder.setSmallIcon(R.drawable.dsh_whale_icon);
+
+            try {
+                Bitmap questionIcon = createWhiteBlackQuestionBitmap(192);
+                if (questionIcon != null) {
+                    builder.setLargeIcon(questionIcon);
+                }
+            } catch (Throwable ignored) {}
+
+            Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
+            bigStyle.setBigContentTitle(header);
+            bigStyle.bigText(questionText);
+            builder.setStyle(bigStyle);
+
+            Intent cardIntent = new Intent(context, QuestionActivity.class);
+            cardIntent.putExtra("request_id", requestId);
+            cardIntent.putExtra("data", dataJson);
+            cardIntent.putExtra("only_notify", false);
+            cardIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) {
+                piFlags |= 0x04000000;
+            }
+            PendingIntent contentPi = PendingIntent.getActivity(context, 101, cardIntent, piFlags);
+            builder.setContentIntent(contentPi);
+
+            builder.setDefaults(Notification.DEFAULT_ALL);
+            builder.setPriority(2);
+            builder.setAutoCancel(true);
+            builder.setShowWhen(true);
+
+            Notification notification = builder.build();
+            nm.notify(NOTIFICATION_ID, notification);
+            Log.i(TAG, "Question notification posted: requestId=" + requestId);
+        } catch (Throwable t) {
+            Log.e(TAG, "showQuestionNotification failed: " + t.getMessage(), t);
+        }
+    }
+
+    private static Bitmap createWhiteBlackQuestionBitmap(int size) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+        float center = size / 2.0f;
+        float radius = center - 4.0f;
+
+        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setColor(0xFFFFFFFF);
+        bgPaint.setStyle(android.graphics.Paint.Style.FILL);
+        canvas.drawCircle(center, center, radius, bgPaint);
+
+        android.graphics.Paint textPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        textPaint.setColor(0xFF1E2024);
+        textPaint.setTextSize(size * 0.65f);
+        textPaint.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
+        textPaint.setTextAlign(android.graphics.Paint.Align.CENTER);
+
+        android.graphics.Paint.FontMetrics fm = textPaint.getFontMetrics();
+        float textY = center - (fm.descent + fm.ascent) / 2.0f;
+        canvas.drawText("?", center, textY, textPaint);
+
+        return bitmap;
     }
 }

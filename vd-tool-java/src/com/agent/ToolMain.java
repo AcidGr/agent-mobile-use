@@ -26,8 +26,9 @@ import java.util.Set;
  * Host-side UI tool for agent-mobile-use.
  *
  * Commands:
- *   tree|dump <displayId>   Read-only accessibility dump (JSON envelope; see dumpTree)
- *   type <displayId> <text> Inject text into the focused field via clipboard + PASTE
+ *   tree|dump <displayId> [budget] [--no-system-ui]  Flat accessibility observation dump
+ *   type <displayId> [targetSpec] <text>             Silent dual-track text injection
+ *   apps|list_apps [query]                           List launchable apps and activities
  *
  * NOTE ON THE MAIN LOOPER (do not remove):
  * app_process starts a process with no main Looper. UiAutomation.connect() reaches
@@ -387,26 +388,10 @@ public class ToolMain {
         String cmd = args[0];
         if ("tree".equals(cmd) || "dump".equals(cmd)) {
             int displayId = args.length > 1 ? Integer.parseInt(args[1]) : 0;
-            // Diagnostic escape hatch: raise the char budget so a full tree can be
-            // compared against what the model actually receives. Never sent by the
-            // server, so production behaviour is unchanged.
-            //
-            // There is deliberately no paging argument any more. An earlier design
-            // exposed y_min/y_max plus a next_y hint so a caller could fetch the part
-            // of a screen the budget could not fit. It was removed because the hint was
-            // wrong in the common case: nodes are ranked by usefulness, not by position,
-            // so when the budget runs out the omitted nodes are scattered across the
-            // whole screen rather than sitting below the last emitted one. next_y then
-            // pointed at the bottom of the screen and "page from here" returned nothing
-            // (measured: 39/88 controls on page 1, next_y=2800, page 2 empty). The
-            // budget is sized instead so a dense screen arrives whole in one call.
+            // Optional diagnostic budget override and system-chrome filter
             int budgetOverride = args.length > 2 && args[2].length() > 0
                     ? Integer.parseInt(args[2]) : 0;
-            // Diagnostic / opt-in switch: drop system-chrome windows so the physical
-            // display (which carries status bar, nav bar and the OEM smart sidebar) and
-            // the virtual display (which carries none of them) hand the model the SAME
-            // tree for the same app screen. Default OFF: existing behaviour is unchanged
-            // unless a caller asks for it.
+            // --no-system-ui drops status bar / navigation bar chrome to match virtual display
             boolean dropSystemUi = false;
             for (int ai = 3; ai < args.length; ai++) {
                 if ("--no-system-ui".equals(args[ai])) dropSystemUi = true;
@@ -579,17 +564,7 @@ public class ToolMain {
             AccessibilityServiceInfo info = new AccessibilityServiceInfo();
             info.eventTypes = -1;
             info.feedbackType = 16;
-            // Bits below were read off this device at runtime, not copied from a doc:
-            //   FLAG_INCLUDE_NOT_IMPORTANT_VIEWS        0x2
-            //   FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY 0x8
-            //   FLAG_REPORT_VIEW_IDS                    0x10
-            //   FLAG_RETRIEVE_INTERACTIVE_WINDOWS       0x40
-            // 0x52 (the original set) is enough for native views. 0x8 is kept because it
-            // is the correct declaration for reading web content, but it is NOT a fix for
-            // WebViews here: measured, an H5 page still collapses to a single WebView node
-            // because Settings.Secure.accessibility_enabled is 0, so Chromium's
-            // AccessibilityBridge never attaches. Flipping that setting is a device-level
-            // change that would affect the whole system, so it stays off.
+            // 0x2 (INCLUDE_NOT_IMPORTANT) | 0x8 (WEB_ACCESSIBILITY) | 0x10 (VIEW_IDS) | 0x40 (RETRIEVE_INTERACTIVE_WINDOWS)
             info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
 
@@ -625,42 +600,8 @@ public class ToolMain {
             boolean recovered = false;
             int attempt = 0;
 
-            // Reading a tree is a race, so no single scan is trusted on its own. Three shapes
-            // of "not ready yet" were measured on this device, and they need DIFFERENT
-            // waits:
-            //
-            //  - a dump racing an activity transition returns zero WINDOWS. UiAutomation
-            //    .connect() returns before the service is bound, so
-            //    AccessibilityInteractionClient has no window list to hand out. Measured on
-            //    Zhihu: windows:0 and a perfectly good tree two seconds later. A 350ms
-            //    retry loop fixes this cheaply.
-            //
-            //  - a window exists but yields NO NODES, and keeps doing so for seconds.
-            //    Measured on WeChat, and this was the surprise: it is INTERMITTENT, not
-            //    conditional. Six consecutive scans of one unchanged screen, ~6s apart,
-            //    returned 0, 0, 0, 68, 0, 70 nodes — with `tree_blocked` on every empty
-            //    one. There is no "correct display" or "correct launch order" to find; the
-            //    tree simply is not there every time it is asked for. Reacting to that with
-            //    a single re-read is what produced the contradiction: the same screen was
-            //    reported as tree_blocked and as 73 readable nodes, hours apart, and the
-            //    only variable was luck. So the second scan waits 2.5s, which is what
-            //    actually catches a non-empty window.
-            //
-            //  - a WebView whose renderer-side accessibility was auto-disabled. Chromium
-            //    tears its tree down after NO_ACCESSIBILITY_SERVICES_ENABLED_DELAY_MS (5s)
-            //    when it cannot see an accessibility service
-            //    (AccessibilityState.isAnyAccessibilityServiceEnabled consults
-            //    getEnabledAccessibilityServiceList, which UiAutomation never appears in).
-            //    Querying it re-enables it asynchronously: the first dump returns only the
-            //    WebView's chrome (9 nodes, no page content) and the next one returns the
-            //    page (15 nodes with the real buttons). Measured deterministic 3/3.
-            //
-            // All three are covered by the same shape: scan, wait, scan again, and keep
-            // whichever scan saw more. Ordering it that way matters — the second scan must
-            // be allowed to REPLACE a thin first one, or the WebView wake is lost.
-            //
-            // The wait is skipped when the caller asked for a paging window: re-reading
-            // would return the same clipped result, so it would only burn 2.5s.
+            // Two-pass scan: recovers transient empty trees during window transitions,
+            // Chromium WebView accessibility wake-up, or intermittent app node availability.
             for (int pass = 0; pass < 2; pass++) {
                 int appNodeCount = 0;
                 for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
@@ -771,17 +712,7 @@ public class ToolMain {
                         windowCount = firstWindows;
                         lastAppSize = firstAppSize;
                     } else if (appNodeCount > firstAppSize) {
-                        // Genuinely recovered: the SECOND pass found more APP content, which
-                        // is the only thing that means "the tree showed up late".
-                        //
-                        // This test used to be `firstWindows > 0 && firstAppSize == 0`, which
-                        // was wrong in a way that mattered: entering this branch already
-                        // proves list.size() > firstSize, but the extra nodes are frequently
-                        // just another SYSTEM window (measured: the IME window supplying 11
-                        // nodes while the app window still yielded nothing). That lit
-                        // recovered=1 on a payload with zero app content, and the plugin's
-                        // `recovered` signal then read as "the retry fixed it" when the
-                        // screen was in fact still unreadable.
+                        // Recovered: second pass found more app content from non-system windows
                         recovered = true;
                     }
                 }
@@ -1245,17 +1176,7 @@ public class ToolMain {
         sb.append(" act_total=").append(actTotal);
         sb.append(" truncated=").append(truncated ? 1 : 0);
         if (truncated) {
-            // Say WHAT was lost, not just that something was. "omitted":73 alone tells the
-            // model nothing about how much of the screen it is missing; combined with the
-            // top tier it does.
-            //
-            // There is no "where to resume" field. An earlier next_y was removed because it
-            // was wrong whenever the budget cut into the ranking rather than the screen:
-            // nodes are ordered by usefulness, so the omitted ones are scattered rather
-            // than sitting below the last emitted one, and next_y pointed at the bottom of
-            // the screen. A caller that followed it got an empty second page and no reason
-            // to doubt it. Nothing replaces it: the budget is instead sized so that a dense
-            // screen arrives whole, and `truncated` is the honest signal that it did not.
+            // Report omitted count and top-tier loss indicators when truncated
             sb.append(" omitted=").append(omitted);
             if (omittedTopTier) sb.append(" omitted_top=1");
             if (omittedMinPriority != Integer.MAX_VALUE) {

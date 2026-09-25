@@ -42,16 +42,6 @@
             android:exported="true" />
 
         <receiver
-            android:name=".QuestionReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.agent.mobileuse.ACTION_QUESTION" />
-                <action android:name="com.agent.mobileuse.ACTION_QUESTION_CANCEL" />
-                <action android:name="com.agent.mobileuse.ACTION_QUESTION_DIRECT_ANSWER" />
-            </intent-filter>
-        </receiver>
-
-        <receiver
             android:name=".NotifyReceiver"
             android:exported="true">
             <intent-filter>

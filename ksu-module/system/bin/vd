@@ -167,7 +167,7 @@ case "$1" in
         launch_app "$2"
         ;;
     tree|dump)
-        if ! is_running; then echo "[]"; exit 1; fi
+        if ! is_running; then echo 'fail error="virtual display not running"'; exit 1; fi
         did=$(get_display_id)
         run_tool tree "$did"
         ;;
@@ -213,14 +213,14 @@ case "$1" in
         run_tool apps "$2"
         ;;
     *)
-        echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v0.6.0-alpha)"
+        echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v0.6.1-alpha)"
         echo ""
         echo "用法: vd <command> [args...]"
         echo ""
         echo "感知与输入工具:"
-        echo "  tree                         输出副屏结构化无障碍控件树与中心坐标 (JSON)"
+        echo "  tree                         输出副屏结构化无障碍平铺控件树与中心坐标"
         echo "  tap <x> <y>                  在副屏上发送物理触控点击"
-        echo "  type \"<文本>\"                静默输入中文、长难句与任意字符 (0 弹窗)"
+        echo "  type [target] \"<文本>\"       静默输入中文与任意字符 (支持节点 ID 或当前焦点)"
         echo "  swipe <x1> <y1> <x2> <y2>    在副屏上模拟滑动手势与长按"
         echo "  key <keycode>                向副屏发送按键 (4:返回, 3:主页, 66:回车, 67:退格)"
         echo "  screenshot [path]            截取副屏当前帧 PNG 图片"
