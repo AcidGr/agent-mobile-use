@@ -48,6 +48,19 @@ public class GlowService extends Service {
     public void onCreate() {
         super.onCreate();
         mMainHandler = new Handler(Looper.getMainLooper());
+        try {
+            android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            String savedMode = sp.getString("mode", "");
+            if (!savedMode.isEmpty() && !"STOP".equals(savedMode)) {
+                String savedSid = sp.getString("session_id", "");
+                String savedTitle = sp.getString("session_title", "");
+                android.util.Log.i("AgentGlowService", "onCreate auto-restoring capsule from crash/recents kill: mode=" + savedMode);
+                promoteToForeground(savedMode, savedSid, savedTitle);
+                if ("FOREGROUND".equals(savedMode)) {
+                    showGlow();
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     /**
@@ -273,6 +286,14 @@ public class GlowService extends Service {
             builder.setStyle(bigStyle);
 
             startForeground(NOTIFICATION_ID, builder.build());
+            try {
+                android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                sp.edit()
+                  .putString("mode", mode)
+                  .putString("session_id", sid != null ? sid : "")
+                  .putString("session_title", displayTitle != null ? displayTitle : "")
+                  .apply();
+            } catch (Throwable ignored) {}
             android.util.Log.i("AgentGlowService", "Promoted to Native Fluid Cloud successfully (" + capsuleTitle + ") for session: " + sid + " (" + displayTitle + ")");
         } catch (Throwable t) {
             android.util.Log.e("AgentGlowService", "Failed to promote to foreground: " + t.getMessage(), t);
@@ -285,6 +306,26 @@ public class GlowService extends Service {
         String sid = (intent != null) ? intent.getStringExtra("session_id") : null;
         String title = (intent != null) ? intent.getStringExtra("session_title") : null;
 
+        // Auto-recover state if intent is null (e.g. killed by user clearing recent apps, restarted by START_STICKY)
+        if (intent == null || action == null) {
+            try {
+                android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                String savedMode = sp.getString("mode", "");
+                if (!savedMode.isEmpty() && !"STOP".equals(savedMode)) {
+                    String savedSid = sp.getString("session_id", "");
+                    String savedTitle = sp.getString("session_title", "");
+                    android.util.Log.i("AgentGlowService", "onStartCommand intent=null, auto-restoring capsule: mode=" + savedMode);
+                    promoteToForeground(savedMode, savedSid, savedTitle);
+                    if ("FOREGROUND".equals(savedMode)) {
+                        showGlow();
+                    } else {
+                        hideGlow();
+                    }
+                    return START_STICKY;
+                }
+            } catch (Throwable ignored) {}
+        }
+
         if ("START_FOREGROUND".equals(action) || "START".equals(action)) {
             promoteToForeground("FOREGROUND", sid, title);
             showGlow();
@@ -295,6 +336,10 @@ public class GlowService extends Service {
             hideGlow();
             promoteToForeground("RUNNING", sid, title);
         } else if ("STOP".equals(action)) {
+            try {
+                android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                sp.edit().clear().apply();
+            } catch (Throwable ignored) {}
             hideGlow();
             stopForeground(true);
             stopSelf();
@@ -457,6 +502,10 @@ public class GlowService extends Service {
         hideGlow();
         try {
             stopForeground(true);
+        } catch (Throwable ignored) {}
+        try {
+            android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            sp.edit().clear().apply();
         } catch (Throwable ignored) {}
         super.onDestroy();
     }

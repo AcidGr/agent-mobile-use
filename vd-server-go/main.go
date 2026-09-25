@@ -193,18 +193,38 @@ func resolveCapsuleAction() string {
 	return "STOP"                 // P4: 待机彻底注销 (dismissed)
 }
 
+var (
+	lastGlowPID int
+)
+
+func getGlowPID() int {
+	out, err := exec.Command("/system/bin/pidof", "com.agent.mobileuse").Output()
+	if err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) > 0 {
+			if pid, err := strconv.Atoi(fields[0]); err == nil {
+				return pid
+			}
+		}
+	}
+	return 0
+}
+
 func updateCapsuleState() {
 	lastAppliedCapsuleActionMu.Lock()
 	defer lastAppliedCapsuleActionMu.Unlock()
 
 	action := resolveCapsuleAction()
-	if lastAppliedCapsuleAction == action && isGlowServiceAlive() {
+	curPID := getGlowPID()
+
+	if lastAppliedCapsuleAction == action && isGlowServiceAlive() && (action == "STOP" || (curPID > 0 && curPID == lastGlowPID)) {
 		return
 	}
 	if action == "STOP" && !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
 		return
 	}
 	lastAppliedCapsuleAction = action
+	lastGlowPID = curPID
 
 	sid, title := getSessionMeta()
 
@@ -1522,6 +1542,10 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "No active question found for request_id or already expired"})
 			return
 		}
+
+		// Dismiss question notification immediately upon receiving answer
+		thawAppProcess()
+		exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+p.RequestID+`" 2>/dev/null`).Run()
 
 		select {
 		case ch <- &p:
