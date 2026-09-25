@@ -170,6 +170,18 @@ public class QuestionActivity extends Activity {
             return true;
         }
 
+        if (intent.getBooleanExtra("clear_completed", false)) {
+            try {
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    nm.cancel(NotifyReceiver.DEFAULT_TAG, NotifyReceiver.DEFAULT_ID);
+                }
+            } catch (Throwable ignored) {}
+            finish();
+            overridePendingTransition(0, 0);
+            return true;
+        }
+
         // 3. Task Notifications (Completed / In-progress)
         boolean hasCompleted = intent.hasExtra("is_completed");
         boolean onlyNotify = intent.getBooleanExtra("only_notify", false);

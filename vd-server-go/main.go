@@ -89,14 +89,7 @@ func setCurrentMode(m string) string {
 	mode = currentMode
 	modeMu.Unlock()
 
-	targetDid := -1
-	if mode == "foreground" {
-		targetDid = 0
-	} else if mode == "background" {
-		st := getStatus()
-		targetDid = st.DisplayID
-	}
-	go syncGlowStateWithDisplay(targetDid)
+	go updateCapsuleState()
 	return mode
 }
 
@@ -132,48 +125,66 @@ func thawAppProcess() {
 }
 
 var (
-	lastAppliedTargetDid   = -999
-	lastAppliedTargetDidMu sync.Mutex
+	sessionActiveMu sync.Mutex
+	isSessionActive bool
+
+	lastAppliedCapsuleAction   string
+	lastAppliedCapsuleActionMu sync.Mutex
 )
+
+func setSessionActive(active bool) {
+	sessionActiveMu.Lock()
+	isSessionActive = active
+	sessionActiveMu.Unlock()
+	go updateCapsuleState()
+}
+
+func getSessionActive() bool {
+	sessionActiveMu.Lock()
+	defer sessionActiveMu.Unlock()
+	return isSessionActive
+}
 
 func isGlowServiceAlive() bool {
 	cmd := exec.Command("/system/bin/sh", "-c", `dumpsys activity services com.agent.mobileuse/.GlowService | grep -q "app=ProcessRecord"`)
 	return cmd.Run() == nil
 }
 
-func syncGlowStateWithDisplay(targetDid int) {
-	lastAppliedTargetDidMu.Lock()
-	defer lastAppliedTargetDidMu.Unlock()
+func resolveCapsuleAction() string {
+	mode := getCurrentMode()
+	if mode == "foreground" {
+		return "START_FOREGROUND" // P1: 接管中 (blue eye + glow)
+	}
+	if mode == "background" {
+		return "START_BACKGROUND" // P2: 后台接管 (blue eye + no glow)
+	}
+	if getSessionActive() {
+		return "START_RUNNING"    // P3: 运行中 (cyber green terminal + no glow)
+	}
+	return "STOP"                 // P4: 待机彻底注销 (dismissed)
+}
+
+func updateCapsuleState() {
+	lastAppliedCapsuleActionMu.Lock()
+	defer lastAppliedCapsuleActionMu.Unlock()
+
+	action := resolveCapsuleAction()
+	if lastAppliedCapsuleAction == action && isGlowServiceAlive() {
+		return
+	}
+	if action == "STOP" && !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
+		return
+	}
+	lastAppliedCapsuleAction = action
 
 	thawAppProcess()
-
-	var action string
-	if targetDid == 0 {
-		// Target is Display 0: Foreground mode (Edge glow ON + "接管中" Fluid Cloud)
-		if lastAppliedTargetDid == 0 && isGlowServiceAlive() {
-			return
-		}
-		lastAppliedTargetDid = 0
-		action = "START_FOREGROUND"
-	} else if targetDid > 0 {
-		// Target is Virtual Display: Background mode (Edge glow OFF + "后台运行" Fluid Cloud)
-		if lastAppliedTargetDid == targetDid && isGlowServiceAlive() {
-			return
-		}
-		lastAppliedTargetDid = targetDid
-		action = "START_BACKGROUND"
-	} else {
-		// Target is < 0: Idle mode (Edge glow OFF + No Fluid Cloud)
-		if lastAppliedTargetDid == -1 && !isGlowServiceAlive() {
-			return
-		}
-		lastAppliedTargetDid = -1
-		action = "STOP"
-	}
-
 	cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es capsule_action "$CAPSULE_ACTION" 2>/dev/null`)
 	cmd.Env = append(os.Environ(), "CAPSULE_ACTION="+action)
 	_ = cmd.Run()
+}
+
+func syncGlowStateWithDisplay(_ int) {
+	go updateCapsuleState()
 }
 
 func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
@@ -1312,6 +1323,7 @@ func main() {
 		isCompletedStr := "false"
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
 			isCompletedStr = "true"
+			setSessionActive(false)
 			if p.Title == "" || strings.Contains(p.Title, "完成") {
 				p.Title = "已完成"
 			}
@@ -1490,6 +1502,19 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
 			return
+		}
+		var p struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
+			if p.Type == "agent_status" {
+				if p.Status == "running" {
+					setSessionActive(true)
+				} else if p.Status == "idle" || p.Status == "ready" || p.Status == "stopped" || p.Status == "error" || p.Status == "disposed" {
+					setSessionActive(false)
+				}
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	})

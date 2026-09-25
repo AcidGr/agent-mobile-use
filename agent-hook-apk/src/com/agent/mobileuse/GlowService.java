@@ -103,7 +103,58 @@ public class GlowService extends Service {
         return bitmap;
     }
 
-    private void promoteToForeground(boolean isForeground) {
+    /**
+     * Create crisp vector-drawn Cyber Terminal (>_) in vivid cyber green/cyan (#00FF9D) with 100% transparent background.
+     */
+    public static Bitmap createCyberTerminalBitmap(int size) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        float cx = size / 2.0f;
+        float cy = size / 2.0f;
+
+        // Vivid Cyber Mint / Cyan-Green (#00FF9D)
+        int cyberGreen = 0xFF00FF9D;
+
+        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        strokePaint.setColor(cyberGreen);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(size * 0.08f);
+        strokePaint.setStrokeCap(Paint.Cap.ROUND);
+        strokePaint.setStrokeJoin(Paint.Join.ROUND);
+
+        float w = size * 0.74f;
+        float h = size * 0.54f;
+        float r = size * 0.12f;
+
+        // 1. Terminal window frame
+        RectF frame = new RectF(cx - w / 2.0f, cy - h / 2.0f, cx + w / 2.0f, cy + h / 2.0f);
+        canvas.drawRoundRect(frame, r, r, strokePaint);
+
+        // 2. Terminal prompt chevron `>`
+        android.graphics.Path path = new android.graphics.Path();
+        float pX1 = cx - w * 0.22f;
+        float pY1 = cy - h * 0.20f;
+        float pX2 = cx - w * 0.05f;
+        float pY2 = cy;
+        float pX3 = cx - w * 0.22f;
+        float pY3 = cy + h * 0.20f;
+
+        path.moveTo(pX1, pY1);
+        path.lineTo(pX2, pY2);
+        path.lineTo(pX3, pY3);
+        canvas.drawPath(path, strokePaint);
+
+        // 3. Terminal cursor `_`
+        float cX1 = cx + w * 0.06f;
+        float cX2 = cx + w * 0.25f;
+        float cY = cy + h * 0.20f;
+        canvas.drawLine(cX1, cY, cX2, cY, strokePaint);
+
+        return bitmap;
+    }
+
+    private void promoteToForeground(String mode) {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
@@ -126,34 +177,57 @@ public class GlowService extends Service {
             }
 
             // Compact Capsule Right Ear: 
-            // Foreground: strictly 3 chars "接管中"
-            // Background: strictly 4 chars "后台运行"
-            String capsuleTitle = isForeground ? "接管中" : "后台运行";
-            builder.setContentTitle(capsuleTitle);
+            // Foreground: "接管中" (3 chars)
+            // Background: "后台接管" (4 chars)
+            // Running:    "运行中" (3 chars)
+            String capsuleTitle = "运行中";
+            String contentText = "正在处理会话任务 · 点击呼出控制台";
+            String subText = "AI 正在运行中 · 点击查看";
+            String cardHeader = "Agent 正在运行中";
+            String bigText = "Agent 正在处理当前会话任务，可在控制台实时查看交互过程。";
+            Bitmap iconBitmap = null;
 
-            if (isForeground) {
-                builder.setContentText("点击切回后台副屏操作 · 屏幕边缘光效运行中");
-                builder.setSubText("前台接管中 · 点击切后台");
+            if ("FOREGROUND".equals(mode)) {
+                capsuleTitle = "接管中";
+                contentText = "点击切回后台副屏操作 · 屏幕边缘光效运行中";
+                subText = "前台接管中 · 点击切后台";
+                cardHeader = "Agent 正在接管前台操作";
+                bigText = "点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。";
+                iconBitmap = createSingleBlueEyeBitmap(192);
+            } else if ("BACKGROUND".equals(mode)) {
+                capsuleTitle = "后台接管";
+                contentText = "独立虚拟副屏静默运行中 · 点击呼出控制台";
+                subText = "后台接管中 · 点击查看";
+                cardHeader = "Agent 正在后台副屏运行";
+                bigText = "任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出控制台浮层。";
+                iconBitmap = createSingleBlueEyeBitmap(192);
             } else {
-                builder.setContentText("独立虚拟副屏静默运行中 · 点击呼出控制台");
-                builder.setSubText("后台运行中 · 点击查看");
+                // RUNNING
+                capsuleTitle = "运行中";
+                contentText = "AI 正在全力思考或执行指令 · 点击查看";
+                subText = "AI 正在运行中 · 点击查看";
+                cardHeader = "Agent 正在处理会话";
+                bigText = "Agent 正在处理当前会话任务，可点击呼出控制台查看实时详情。";
+                iconBitmap = createCyberTerminalBitmap(192);
             }
 
-            // Single Cyber Blue Eye Bitmap (100% transparent background, direct BitmapDrawable without Vector colorFilter override)
-            Bitmap singleEyeBitmap = createSingleBlueEyeBitmap(192);
-            Icon singleEyeIcon = null;
-            if (Build.VERSION.SDK_INT >= 23 && singleEyeBitmap != null) {
-                singleEyeIcon = Icon.createWithBitmap(singleEyeBitmap);
-                builder.setSmallIcon(singleEyeIcon);
-                builder.setLargeIcon(singleEyeBitmap);
+            builder.setContentTitle(capsuleTitle);
+            builder.setContentText(contentText);
+            builder.setSubText(subText);
+
+            Icon capsuleIcon = null;
+            if (Build.VERSION.SDK_INT >= 23 && iconBitmap != null) {
+                capsuleIcon = Icon.createWithBitmap(iconBitmap);
+                builder.setSmallIcon(capsuleIcon);
+                builder.setLargeIcon(iconBitmap);
             } else {
                 builder.setSmallIcon(R.drawable.dsh_whale_icon);
             }
 
             // Explicit Oplus Fluid Cloud Icon slot
-            if (singleEyeIcon != null) {
+            if (capsuleIcon != null) {
                 android.os.Bundle extras = new android.os.Bundle();
-                extras.putParcelable("oplus_small_icon", singleEyeIcon);
+                extras.putParcelable("oplus_small_icon", capsuleIcon);
                 builder.addExtras(extras);
             }
 
@@ -168,14 +242,14 @@ public class GlowService extends Service {
                 flags |= 0x04000000; // FLAG_IMMUTABLE
             }
 
-            if (isForeground) {
+            if ("FOREGROUND".equals(mode)) {
                 // Foreground: Click pendingIntent -> Handoff to background
                 Intent handoffIntent = new Intent(NotifyReceiver.ACTION_HANDOFF);
                 handoffIntent.setPackage(getPackageName());
                 PendingIntent pi = PendingIntent.getBroadcast(this, 2028, handoffIntent, flags);
                 builder.setContentIntent(pi);
             } else {
-                // Background: Click pendingIntent -> Open DemoDialogActivity (Web Console)
+                // Background & Running: Click pendingIntent -> Open DemoDialogActivity (Web Console)
                 Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
                 consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 PendingIntent pi = PendingIntent.getActivity(this, 2029, consoleIntent, flags);
@@ -188,13 +262,8 @@ public class GlowService extends Service {
             builder.setShowWhen(true);
 
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
-            if (isForeground) {
-                bigStyle.setBigContentTitle("Agent 正在接管前台操作");
-                bigStyle.bigText("点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。");
-            } else {
-                bigStyle.setBigContentTitle("Agent 正在后台副屏运行");
-                bigStyle.bigText("任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出控制台浮层。");
-            }
+            bigStyle.setBigContentTitle(cardHeader);
+            bigStyle.bigText(bigText);
             builder.setStyle(bigStyle);
 
             startForeground(NOTIFICATION_ID, builder.build());
@@ -208,11 +277,14 @@ public class GlowService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = (intent != null) ? intent.getAction() : null;
         if ("START_FOREGROUND".equals(action) || "START".equals(action)) {
-            promoteToForeground(true);
+            promoteToForeground("FOREGROUND");
             showGlow();
         } else if ("START_BACKGROUND".equals(action)) {
             hideGlow();
-            promoteToForeground(false);
+            promoteToForeground("BACKGROUND");
+        } else if ("START_RUNNING".equals(action)) {
+            hideGlow();
+            promoteToForeground("RUNNING");
         } else if ("STOP".equals(action)) {
             hideGlow();
             stopForeground(true);
