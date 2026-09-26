@@ -461,6 +461,35 @@ func clearCompletedOnDevice() {
 	exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez clear_completed true 2>/dev/null`).Run()
 }
 
+func startCapsuleWatchdog() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		var failCount int
+		for range ticker.C {
+			if !getSessionActive() {
+				failCount = 0
+				continue
+			}
+			pid := getGlowPID()
+			if pid <= 0 || !isGlowServiceAlive() {
+				// ponytail: simple 5-strike cooldown ceiling, add exponential backoff if crash-loop occurs
+				if failCount >= 5 {
+					time.Sleep(5 * time.Second)
+					failCount = 0
+					continue
+				}
+				failCount++
+				fmt.Printf("[capsule-watchdog] GlowService died while session is active (pid=%d). Resurrecting...\n", pid)
+				updateCapsuleState()
+			} else {
+				failCount = 0
+			}
+		}
+	}()
+}
+
 func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
 	if getCurrentMode() != "foreground" {
 		return
@@ -1140,6 +1169,7 @@ func resolveSessionTitle(sessionID string) string {
 
 func main() {
 	thawAppProcess()
+	startCapsuleWatchdog()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
