@@ -213,7 +213,7 @@ case "$1" in
         run_tool apps "$2"
         ;;
     *)
-        echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v0.6.2-alpha)"
+        echo "Agent Mobile Use - 虚拟副屏全能控制总线 (v0.6.3-alpha)"
         echo ""
         echo "用法: vd <command> [args...]"
         echo ""
