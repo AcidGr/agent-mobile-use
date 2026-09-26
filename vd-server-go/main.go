@@ -1,10 +1,16 @@
 package main
 
 import (
+	"crypto/sha1"
 	_ "embed"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,11 +28,9 @@ var indexHTML []byte
 const (
 	statusFile = "/data/local/tmp/vd_status.json"
 	stopSignal = "/data/local/tmp/vd_stop"
-	// The newest frame of the virtual display, published by the daemon as JPEG. It
-	// already holds the display's output surface, so this costs it one encode per
-	// changed frame instead of the ~1.8s of CPU screencap spends in the PNG encoder.
-	frameCacheFile = "/data/local/tmp/vd_latest.jpg"
 )
+
+var reSfDisplay = regexp.MustCompile(`Display\s+([0-9]+).*Agent.*VirtualDisplay`)
 
 type StatusResp struct {
 	Status          string `json:"status"`
@@ -53,6 +57,174 @@ var (
 type QuestionAnswerPayload struct {
 	RequestID string `json:"request_id"`
 	Answers   []any  `json:"answers"`
+}
+
+func writeWSBinaryFrame(w io.Writer, payload []byte) error {
+	n := len(payload)
+	var header []byte
+	if n < 126 {
+		header = []byte{0x82, byte(n)}
+	} else if n <= 65535 {
+		header = []byte{0x82, 126, byte(n >> 8), byte(n)}
+	} else {
+		header = make([]byte, 10)
+		header[0] = 0x82
+		header[1] = 127
+		binary.BigEndian.PutUint64(header[2:], uint64(n))
+	}
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
+}
+
+type StreamHub struct {
+	mu         sync.Mutex
+	clients    map[net.Conn]struct{}
+	daemonConn net.Conn
+	spsPps     []byte
+	lastIDR    []byte
+}
+
+var hub = &StreamHub{
+	clients: make(map[net.Conn]struct{}),
+}
+
+func (h *StreamHub) register(conn net.Conn) {
+	h.mu.Lock()
+	h.clients[conn] = struct{}{}
+	count := len(h.clients)
+	sps := h.spsPps
+	idr := h.lastIDR
+	h.mu.Unlock()
+
+	fmt.Printf("[StreamHub] Client connected, total watchers: %d\n", count)
+
+	if len(sps) > 0 {
+		_ = writeWSBinaryFrame(conn, sps)
+	}
+	if len(idr) > 0 {
+		_ = writeWSBinaryFrame(conn, idr)
+	}
+
+	if count == 1 {
+		go h.connectDaemonLoop()
+	}
+}
+
+func (h *StreamHub) unregister(conn net.Conn) {
+	h.mu.Lock()
+	delete(h.clients, conn)
+	_ = conn.Close()
+	count := len(h.clients)
+	if count == 0 && h.daemonConn != nil {
+		_ = h.daemonConn.Close()
+		h.daemonConn = nil
+		fmt.Printf("[StreamHub] All watchers disconnected, released hardware encoder\n")
+	}
+	h.mu.Unlock()
+	fmt.Printf("[StreamHub] Client disconnected, remaining watchers: %d\n", count)
+}
+
+func (h *StreamHub) broadcast(msg []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		_ = c.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+		if err := writeWSBinaryFrame(c, msg); err != nil {
+			_ = c.Close()
+			delete(h.clients, c)
+		}
+	}
+}
+
+func (h *StreamHub) connectDaemonLoop() {
+	var conn net.Conn
+	var err error
+	for i := 0; i < 30; i++ {
+		h.mu.Lock()
+		clientCount := len(h.clients)
+		h.mu.Unlock()
+		if clientCount == 0 {
+			return
+		}
+		conn, err = net.DialTimeout("tcp", "127.0.0.1:3071", 300*time.Millisecond)
+		if err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	if conn == nil {
+		fmt.Printf("[StreamHub] Failed to connect to daemon stream on 127.0.0.1:3071: %v\n", err)
+		return
+	}
+
+	h.mu.Lock()
+	if len(h.clients) == 0 {
+		_ = conn.Close()
+		h.mu.Unlock()
+		return
+	}
+	h.daemonConn = conn
+	h.mu.Unlock()
+
+	fmt.Printf("[StreamHub] Connected to hardware stream on 127.0.0.1:3071\n")
+	buf := make([]byte, 1024*1024)
+
+	for {
+		var size int32
+		var flags int32
+		var pts int64
+
+		if err := binary.Read(conn, binary.BigEndian, &size); err != nil {
+			break
+		}
+		if err := binary.Read(conn, binary.BigEndian, &flags); err != nil {
+			break
+		}
+		if err := binary.Read(conn, binary.BigEndian, &pts); err != nil {
+			break
+		}
+
+		if size <= 0 || int(size) > len(buf) {
+			break
+		}
+
+		if _, err := io.ReadFull(conn, buf[:size]); err != nil {
+			break
+		}
+
+		isKey := byte(0)
+		if (flags & 3) != 0 {
+			isKey = 1
+		}
+
+		msg := make([]byte, 1+size)
+		msg[0] = isKey
+		copy(msg[1:], buf[:size])
+
+		if (flags & 2) != 0 {
+			h.mu.Lock()
+			h.spsPps = msg
+			h.mu.Unlock()
+		} else if (flags & 1) != 0 {
+			h.mu.Lock()
+			h.lastIDR = msg
+			h.mu.Unlock()
+		}
+
+		h.broadcast(msg)
+	}
+
+	h.mu.Lock()
+	if h.daemonConn == conn {
+		h.daemonConn = nil
+	}
+	_ = conn.Close()
+	h.mu.Unlock()
+	fmt.Printf("[StreamHub] Hardware stream loop ended\n")
 }
 
 func setPendingHandoffNotice(notice string) {
@@ -498,12 +670,12 @@ func displaySize(targetDid int, st StatusResp) (int, int) {
 	return w, h
 }
 
-func getSfDisplayID() string {	out, err := exec.Command("/system/bin/dumpsys", "SurfaceFlinger", "--display-id").Output()
+func getSfDisplayID() string {
+	out, err := exec.Command("/system/bin/dumpsys", "SurfaceFlinger", "--display-id").Output()
 	if err != nil {
 		return ""
 	}
-	re := regexp.MustCompile(`Display\s+([0-9]+).*Agent.*VirtualDisplay`)
-	matches := re.FindStringSubmatch(string(out))
+	matches := reSfDisplay.FindStringSubmatch(string(out))
 	if len(matches) > 1 {
 		return matches[1]
 	}
@@ -930,53 +1102,105 @@ func main() {
 		json.NewEncoder(w).Encode(res)
 	})
 
+	mux.HandleFunc("/api/stream/ws", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "Expected websocket upgrade", http.StatusBadRequest)
+			return
+		}
+		key := r.Header.Get("Sec-WebSocket-Key")
+		if key == "" {
+			http.Error(w, "Missing Sec-WebSocket-Key", http.StatusBadRequest)
+			return
+		}
+
+		h := sha1.New()
+		h.Write([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "Webserver doesn't support hijacking", http.StatusInternalServerError)
+			return
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		resp := "HTTP/1.1 101 Switching Protocols\r\n" +
+			"Upgrade: websocket\r\n" +
+			"Connection: Upgrade\r\n" +
+			"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"
+		if _, err := bufrw.WriteString(resp); err != nil {
+			_ = conn.Close()
+			return
+		}
+		if err := bufrw.Flush(); err != nil {
+			_ = conn.Close()
+			return
+		}
+
+		hub.register(conn)
+
+		go func() {
+			defer hub.unregister(conn)
+			b := make([]byte, 512)
+			for {
+				if _, err := conn.Read(b); err != nil {
+					break
+				}
+			}
+		}()
+	})
+
 	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		// Preferred path: serve the daemon's cached frame. It is the picture the
-		// display last produced, already encoded, so this transfers ~271 KB instead of
-		// screencap's 2.9 MB and spends no CPU on encoding at all.
-		//
-		// Only the virtual display is served this way: in foreground mode the request
-		// means "the physical screen", which the daemon's cache is not.
-		if st := getStatus(); st.Status == "running" && getTargetDisplayID(st) > 0 {
-			if data, err := os.ReadFile(frameCacheFile); err == nil && len(data) > 0 {
-				w.Header().Set("Content-Type", "image/jpeg")
-				w.Header().Set("Cache-Control", "no-store, must-revalidate")
-				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-				w.Write(data)
-				return
-			}
-		}
-
-		// Fallback: no daemon, no frame cached yet, or the physical display is the
-		// target. Unchanged from before, including the on-demand display start.
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		var out []byte
+
+		var args []string
 		if targetDid == 0 {
-			out, err = exec.Command("/system/bin/screencap", "-p").Output()
+			args = []string{"/system/bin/screencap"}
 		} else {
 			sfID := getSfDisplayID()
 			if sfID != "" {
-				out, err = exec.Command("/system/bin/screencap", "-d", sfID, "-p").Output()
+				args = []string{"/system/bin/screencap", "-d", sfID}
 			} else {
-				out, err = exec.Command("/system/bin/screencap", "-d", strconv.Itoa(targetDid), "-p").Output()
+				args = []string{"/system/bin/screencap", "-d", strconv.Itoa(targetDid)}
 			}
 		}
 
-		if err != nil || len(out) == 0 {
+		raw, err := exec.Command(args[0], args[1:]...).Output()
+		if err != nil || len(raw) < 16 {
 			http.Error(w, "Capture error", http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "image/png")
+		wPx := binary.LittleEndian.Uint32(raw[0:4])
+		hPx := binary.LittleEndian.Uint32(raw[4:8])
+		needed := 16 + int(wPx*hPx*4)
+		if wPx == 0 || hPx == 0 || len(raw) < needed {
+			http.Error(w, "Invalid frame buffer", http.StatusInternalServerError)
+			return
+		}
+
+		img := &image.RGBA{
+			Pix:    raw[16:needed],
+			Stride: int(wPx) * 4,
+			Rect:   image.Rect(0, 0, int(wPx), int(hPx)),
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		w.Header().Set("Content-Length", strconv.Itoa(len(out)))
-		w.Write(out)
+		if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
+			http.Error(w, "JPEG encode error", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	mux.HandleFunc("/api/dump_ui", func(w http.ResponseWriter, r *http.Request) {

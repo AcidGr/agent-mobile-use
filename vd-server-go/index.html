@@ -3,14 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>虚拟副屏快照监控</title>
+    <title>虚拟副屏实时监控</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html { height: 100%; }
-        /* The page never scrolls: the header/controls/footer keep their intrinsic
-           height and the snapshot box absorbs whatever vertical space is left, so
-           the phone frame always fits the viewer's browser viewport. Using dvh
-           (with a vh fallback) keeps that true while the mobile URL bar hides/shows. */
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             background: #0f1117;
@@ -26,7 +22,7 @@
         .header {
             flex: 0 0 auto;
             width: 100%;
-            max-width: 400px;
+            max-width: 360px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -40,9 +36,9 @@
         .controls {
             flex: 0 0 auto;
             width: 100%;
-            max-width: 400px;
+            max-width: 360px;
             display: flex;
-            gap: 12px;
+            gap: 10px;
             margin-bottom: 12px;
         }
         button {
@@ -57,10 +53,15 @@
         }
         button:active { opacity: 0.75; }
         button:disabled { opacity: 0.5; cursor: default; }
-        .btn-refresh {
-            background: #238636;
+        .btn-stream {
+            background: #1f6feb;
             color: #ffffff;
-            border-color: #2ea043;
+            border-color: #388bfd;
+        }
+        .btn-stream-active {
+            background: #8957e5;
+            color: #ffffff;
+            border-color: #a371f7;
         }
         .btn-stop {
             background: #b62324;
@@ -72,9 +73,6 @@
             color: #ffffff;
             border-color: #2ea043;
         }
-        /* flex-basis 0 (not auto) keeps the box's content-driven size out of the
-           flex calculation, so its height is exactly the leftover space and the
-           image below can resolve height:100% against a definite box. */
         .screen-box {
             position: relative;
             flex: 1 1 0;
@@ -90,7 +88,7 @@
             user-select: none;
             -webkit-user-select: none;
         }
-        #snapshot-img {
+        #stream-canvas {
             width: 100%;
             height: 100%;
             object-fit: contain;
@@ -110,8 +108,6 @@
             color: #8b949e;
             text-align: center;
         }
-        /* Very short viewports (landscape / split screen): give up the fixed
-           layout and let the page scroll, so the buttons can never be squeezed out. */
         @media (max-height: 520px) {
             body { height: auto; min-height: 100vh; overflow: auto; }
             .screen-box { flex: 0 0 auto; min-height: 240px; }
@@ -124,43 +120,49 @@
     </div>
 
     <div class="controls">
-        <button class="btn-refresh" onclick="refreshSnapshot()">手动刷新</button>
+        <button id="btn-stream" class="btn-stream" onclick="toggleStream()">开启视频流</button>
         <button id="btn-toggle" class="btn-stop" onclick="toggleScreen()">关闭副屏</button>
     </div>
 
     <div class="screen-box">
-        <img id="snapshot-img" alt="副屏快照" />
+        <canvas id="stream-canvas"></canvas>
         <div id="empty-tip">副屏未启动</div>
     </div>
 
-    <div class="footer-note">无自动轮询 / 零后台CPU占用 / 点击手动刷新截取当前画面</div>
+    <div class="footer-note">H.264 硬件直通 / WebCodecs 原生硬解 / 零多余常驻功耗</div>
 
     <script>
         const statusEl = document.getElementById('status-display');
-        const imgEl = document.getElementById('snapshot-img');
+        const canvasEl = document.getElementById('stream-canvas');
+        const ctx = canvasEl.getContext('2d');
         const tipEl = document.getElementById('empty-tip');
         const toggleEl = document.getElementById('btn-toggle');
+        const streamBtn = document.getElementById('btn-stream');
 
-        // 'running' | 'stopped' | 'unreachable'
-        // `unreachable` must stay distinct from `stopped`: when the gateway is down
-        // there is nothing to start, so the toggle is disabled instead of offering
-        // an "开启副屏" that could never work.
         let screenState = 'unreachable';
         let toggling = false;
+        let isStreaming = false;
+        let ws = null;
+        let decoder = null;
 
         function renderToggle() {
             if (screenState === 'running') {
                 toggleEl.className = 'btn-stop';
                 toggleEl.innerText = '关闭副屏';
                 toggleEl.disabled = false;
+                streamBtn.disabled = false;
             } else if (screenState === 'stopped') {
                 toggleEl.className = 'btn-start';
                 toggleEl.innerText = '开启副屏';
                 toggleEl.disabled = false;
+                streamBtn.disabled = true;
+                stopStream();
             } else {
                 toggleEl.className = 'btn-start';
                 toggleEl.innerText = '服务未连接';
                 toggleEl.disabled = true;
+                streamBtn.disabled = true;
+                stopStream();
             }
         }
 
@@ -170,49 +172,128 @@
                 const data = await res.json();
                 if (data.status === 'running') {
                     const did = data.display_id !== undefined ? data.display_id : data.displayId;
-                    statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ')';
-                    statusEl.style.color = '#7ee787';
+                    if (!isStreaming) {
+                        statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ')';
+                        statusEl.style.color = '#7ee787';
+                    }
                     screenState = 'running';
                 } else {
                     statusEl.innerText = '屏幕状态: 已休眠';
                     statusEl.style.color = '#f85149';
-                    imgEl.style.display = 'none';
+                    canvasEl.style.display = 'none';
                     tipEl.style.display = 'block';
                     tipEl.innerText = '副屏未启动';
                     screenState = 'stopped';
+                    stopStream();
                 }
             } catch (e) {
                 statusEl.innerText = '无法连接服务';
                 statusEl.style.color = '#f85149';
                 screenState = 'unreachable';
+                stopStream();
             }
             renderToggle();
             return screenState;
         }
 
-        async function refreshSnapshot() {
-            // /api/screenshot starts the virtual display on demand, so it is only
-            // ever called once the status check has confirmed the display is up.
-            if (await updateStatus() !== 'running') return;
-
-            statusEl.innerText = '正在截取快照...';
-            const img = new Image();
-            img.onload = () => {
-                imgEl.src = img.src;
-                imgEl.style.display = 'block';
-                tipEl.style.display = 'none';
-                updateStatus();
-            };
-            img.onerror = () => {
-                statusEl.innerText = '获取快照失败';
-                statusEl.style.color = '#f85149';
-            };
-            img.src = '/api/screenshot?t=' + Date.now();
+        function initDecoder() {
+            if (decoder) {
+                try { decoder.close(); } catch (_) {}
+            }
+            if (!window.VideoDecoder) {
+                alert('当前浏览器未启用 WebCodecs 硬件解码，请使用手机 Chrome/Edge 并直接访问 http://127.0.0.1:3070/');
+                return false;
+            }
+            decoder = new VideoDecoder({
+                output: (frame) => {
+                    if (canvasEl.width !== frame.displayWidth || canvasEl.height !== frame.displayHeight) {
+                        canvasEl.width = frame.displayWidth;
+                        canvasEl.height = frame.displayHeight;
+                    }
+                    ctx.drawImage(frame, 0, 0);
+                    frame.close();
+                    if (canvasEl.style.display !== 'block') {
+                        canvasEl.style.display = 'block';
+                        tipEl.style.display = 'none';
+                    }
+                },
+                error: (e) => {
+                    console.error('VideoDecoder error:', e);
+                }
+            });
+            decoder.configure({
+                codec: 'avc1.42E01E',
+                optimizeForLatency: true
+            });
+            return true;
         }
 
-        // start/stop are synchronous on the server (they poll the daemon for up to
-        // 3s / 2s before answering), so the button locks out repeat taps while a
-        // switch is in flight.
+        function startStream() {
+            if (isStreaming || screenState !== 'running') return;
+            if (!initDecoder()) return;
+
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/api/stream/ws`);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = () => {
+                isStreaming = true;
+                streamBtn.innerText = '暂停视频流';
+                streamBtn.className = 'btn-stream-active';
+                statusEl.innerText = '视频流运行中 (H.264 硬件直通)';
+                statusEl.style.color = '#a371f7';
+            };
+
+            ws.onmessage = (event) => {
+                if (!decoder || decoder.state !== 'configured') return;
+                const raw = new Uint8Array(event.data);
+                if (raw.length < 2) return;
+                const isKey = raw[0] === 1;
+                const chunkData = raw.subarray(1);
+
+                try {
+                    const chunk = new EncodedVideoChunk({
+                        type: isKey ? 'key' : 'delta',
+                        timestamp: performance.now() * 1000,
+                        data: chunkData
+                    });
+                    decoder.decode(chunk);
+                } catch (err) {
+                    console.error('Decode chunk error:', err);
+                }
+            };
+
+            ws.onclose = ws.onerror = () => {
+                stopStream();
+            };
+        }
+
+        function stopStream() {
+            if (ws) {
+                try { ws.close(); } catch (_) {}
+                ws = null;
+            }
+            if (decoder) {
+                try { decoder.close(); } catch (_) {}
+                decoder = null;
+            }
+            isStreaming = false;
+            streamBtn.innerText = '开启视频流';
+            streamBtn.className = 'btn-stream';
+            if (screenState === 'running') {
+                statusEl.innerText = '视频流已暂停';
+                statusEl.style.color = '#7ee787';
+            }
+        }
+
+        function toggleStream() {
+            if (isStreaming) {
+                stopStream();
+            } else {
+                startStream();
+            }
+        }
+
         async function toggleScreen() {
             if (toggling || screenState === 'unreachable') return;
             toggling = true;
@@ -226,11 +307,24 @@
 
             toggling = false;
             const state = await updateStatus();
-            if (state === 'running') await refreshSnapshot();
+            if (state === 'running') {
+                startStream();
+            }
         }
 
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && isStreaming) {
+                stopStream();
+            }
+        });
+        window.addEventListener('beforeunload', () => {
+            stopStream();
+        });
+
         updateStatus().then(state => {
-            if (state === 'running') refreshSnapshot();
+            if (state === 'running') {
+                startStream();
+            }
         });
     </script>
 </body>

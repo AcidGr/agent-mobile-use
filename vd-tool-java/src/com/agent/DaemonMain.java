@@ -1,43 +1,30 @@
 package com.agent;
 
-import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
+import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.SystemClock;
 import android.view.Display;
+import android.view.Surface;
+import java.io.BufferedOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DaemonMain {
     private static final String STATUS_FILE = "/data/local/tmp/vd_status.json";
     private static final String STOP_SIGNAL = "/data/local/tmp/vd_stop";
-
-    /**
-     * Newest frame of the virtual display, published as JPEG for whoever asks for a
-     * screenshot. This daemon already owns the display's output surface, so caching
-     * a frame here costs one encode per changed frame — against the ~1.8s of CPU
-     * `screencap -p` burns inside the PNG encoder to produce a 2.9 MB file.
-     *
-     * It MUST stay at the display's full resolution: the screenshot tool derives the
-     * model-facing scale factor from these pixel dimensions, so a downscaled cache
-     * would silently break its coordinate mapping.
-     */
-    private static final String FRAME_CACHE = "/data/local/tmp/vd_latest.jpg";
-    private static final int FRAME_JPEG_QUALITY = 85;
-    /**
-     * Ceiling on cache updates, not a rate paid continuously: the display only
-     * composites when its content changes, so a still screen produces no frames at
-     * all. 66ms keeps the cache within about one frame of the screen.
-     */
-    private static final long FRAME_MIN_INTERVAL_MS = 66;
 
     private static int sWidth = 1080;
     private static int sHeight = 2400;
@@ -55,10 +42,6 @@ public class DaemonMain {
         }
 
         System.out.println("[AgentDaemon] Starting virtual display: " + sWidth + "x" + sHeight + " @ " + sDpi + " DPI");
-
-        // Drop any cache left behind by a previous run before this daemon publishes
-        // anything, so a stale frame can never be served as if it were current.
-        new File(FRAME_CACHE).delete();
 
         try {
             if (android.os.Looper.myLooper() == null) {
@@ -88,16 +71,6 @@ public class DaemonMain {
             drainThread.start();
             Handler drainHandler = new Handler(drainThread.getLooper());
 
-            // Encoding gets its own thread: a ~16ms JPEG encode on the drainer would
-            // keep the reader's buffer checked out longer than it needs to be.
-            HandlerThread encodeThread = new HandlerThread("FrameJpegEncoder");
-            encodeThread.start();
-            final Handler encodeHandler = new Handler(encodeThread.getLooper());
-
-            final Bitmap frameBuf = Bitmap.createBitmap(sWidth, sHeight, Bitmap.Config.ARGB_8888);
-            final AtomicBoolean encoding = new AtomicBoolean(false);
-            final long[] lastFrameAt = {0L};
-
             ImageReader reader = ImageReader.newInstance(sWidth, sHeight, PixelFormat.RGBA_8888, 2);
             reader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
                 @Override
@@ -105,35 +78,7 @@ public class DaemonMain {
                     Image img = null;
                     try {
                         img = r.acquireLatestImage();
-                        if (img == null) return;
-                        long now = SystemClock.uptimeMillis();
-                        if (now - lastFrameAt[0] >= FRAME_MIN_INTERVAL_MS && encoding.compareAndSet(false, true)) {
-                            lastFrameAt[0] = now;
-                            try {
-                                // Copy out, then leave the buffer alone: the display owns
-                                // only two of these, and holding one while encoding would
-                                // starve its producer.
-                                copyImageToBitmap(img, frameBuf);
-                                encodeHandler.post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        try {
-                                            writeFrameJpeg(frameBuf);
-                                        } catch (Throwable t) {
-                                            System.err.println("[AgentDaemon] Frame cache failed: " + t);
-                                        } finally {
-                                            encoding.set(false);
-                                        }
-                                    }
-                                });
-                            } catch (Throwable t) {
-                                encoding.set(false); // never leave the cache permanently latched
-                            }
-                        }
-                    } catch (Throwable t) {
-                        // This listener MUST NOT die: the display's output queue is drained
-                        // here, and a dead drainer stops the display producing frames. A
-                        // failed cache update is never worth that.
+                    } catch (Throwable ignored) {
                     } finally {
                         if (img != null) {
                             try { img.close(); } catch (Throwable ignored) {}
@@ -201,6 +146,8 @@ public class DaemonMain {
             int pid = android.os.Process.myPid();
             writeStatus("running", displayId, pid, sWidth, sHeight, sDpi);
 
+            startStreamServer(vd, reader);
+
             File stopFile = new File(STOP_SIGNAL);
             if (stopFile.exists()) stopFile.delete();
 
@@ -214,62 +161,17 @@ public class DaemonMain {
             }
 
             System.out.println("[AgentDaemon] Stop signal detected. Cleaning up...");
+            stopStreamServer();
             vd.release();
             reader.close();
             drainThread.quitSafely();
-            encodeThread.quitSafely();
             new File(STATUS_FILE).delete();
-            new File(FRAME_CACHE).delete();
             System.out.println("[AgentDaemon] Daemon safely terminated.");
             System.exit(0);
 
         } catch (Throwable t) {
             t.printStackTrace();
             System.exit(1);
-        }
-    }
-
-    /**
-     * Copy one frame out of the reader's buffer.
-     *
-     * The plane may carry row padding — gralloc aligns the stride, and 1272*4 = 5088
-     * is not a multiple of the usual 64-byte alignment — while copyPixelsFromBuffer
-     * assumes tightly packed rows. A padded plane is therefore repacked row by row
-     * instead of copied whole, which would skew the image.
-     */
-    private static void copyImageToBitmap(Image img, Bitmap out) {
-        Image.Plane plane = img.getPlanes()[0];
-        ByteBuffer src = plane.getBuffer();
-        int packedRow = sWidth * 4;
-        if (plane.getPixelStride() == 4 && plane.getRowStride() == packedRow) {
-            out.copyPixelsFromBuffer(src);
-            return;
-        }
-        byte[] packed = new byte[packedRow * sHeight];
-        for (int y = 0; y < sHeight; y++) {
-            src.position(y * plane.getRowStride());
-            src.get(packed, y * packedRow, packedRow);
-        }
-        out.copyPixelsFromBuffer(ByteBuffer.wrap(packed));
-    }
-
-    /**
-     * Publish the cached frame atomically, so a reader can never pick up a
-     * half-written file.
-     */
-    private static void writeFrameJpeg(Bitmap bmp) throws Exception {
-        File tmp = new File(FRAME_CACHE + ".tmp");
-        FileOutputStream fos = new FileOutputStream(tmp);
-        try {
-            if (!bmp.compress(Bitmap.CompressFormat.JPEG, FRAME_JPEG_QUALITY, fos)) {
-                throw new IllegalStateException("JPEG encoder reported failure");
-            }
-            fos.flush();
-        } finally {
-            try { fos.close(); } catch (Throwable ignored) {}
-        }
-        if (!tmp.renameTo(new File(FRAME_CACHE))) {
-            throw new IllegalStateException("could not publish " + FRAME_CACHE);
         }
     }
 
@@ -287,6 +189,117 @@ public class DaemonMain {
             fos.close();
         } catch (Exception e) {
             System.err.println("[AgentDaemon] Failed to write status file: " + e.getMessage());
+        }
+    }
+
+    private static ServerSocket sStreamServer = null;
+
+    private static void startStreamServer(final VirtualDisplay vd, final ImageReader reader) {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    sStreamServer = new ServerSocket();
+                    sStreamServer.setReuseAddress(true);
+                    sStreamServer.bind(new InetSocketAddress("127.0.0.1", 3071));
+                    System.out.println("[AgentDaemon] Stream server listening on 127.0.0.1:3071");
+
+                    while (!sStreamServer.isClosed()) {
+                        Socket client = null;
+                        try {
+                            client = sStreamServer.accept();
+                            client.setTcpNoDelay(true);
+                            System.out.println("[AgentDaemon] Stream client connected from " + client.getRemoteSocketAddress());
+                            handleStreamClient(vd, reader, client);
+                        } catch (Throwable err) {
+                            if (sStreamServer.isClosed()) break;
+                            System.err.println("[AgentDaemon] Stream client session closed: " + err.getMessage());
+                        } finally {
+                            if (client != null) {
+                                try { client.close(); } catch (Throwable ignored) {}
+                            }
+                        }
+                    }
+                } catch (Throwable err) {
+                    System.err.println("[AgentDaemon] Stream server error: " + err.getMessage());
+                }
+            }
+        }, "StreamServerThread");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void stopStreamServer() {
+        if (sStreamServer != null) {
+            try {
+                sStreamServer.close();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void handleStreamClient(VirtualDisplay vd, ImageReader reader, Socket client) throws Exception {
+        MediaCodec codec = null;
+        Surface encoderSurface = null;
+        try {
+            codec = MediaCodec.createEncoderByType("video/avc");
+            MediaFormat format = MediaFormat.createVideoFormat("video/avc", sWidth, sHeight);
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 4000000); // 4 Mbps
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1); // 1s keyframe interval
+            try {
+                format.setLong("repeat-previous-frame-after", 100000L); // 100ms
+            } catch (Throwable ignored) {}
+
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            encoderSurface = codec.createInputSurface();
+            codec.start();
+
+            // Direct SurfaceFlinger GPU composition to hardware encoder
+            vd.setSurface(encoderSurface);
+            System.out.println("[AgentDaemon] VirtualDisplay output directed to MediaCodec");
+
+            DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(client.getOutputStream(), 65536));
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            byte[] buf = null;
+
+            while (!client.isClosed() && !client.isOutputShutdown()) {
+                int outIndex = codec.dequeueOutputBuffer(info, 20000);
+                if (outIndex >= 0) {
+                    ByteBuffer outputBuffer = codec.getOutputBuffer(outIndex);
+                    if (outputBuffer != null && info.size > 0) {
+                        outputBuffer.position(info.offset);
+                        outputBuffer.limit(info.offset + info.size);
+
+                        if (buf == null || buf.length < info.size) {
+                            buf = new byte[info.size];
+                        }
+                        outputBuffer.get(buf, 0, info.size);
+
+                        dos.writeInt(info.size);
+                        dos.writeInt(info.flags);
+                        dos.writeLong(info.presentationTimeUs);
+                        dos.write(buf, 0, info.size);
+                        dos.flush();
+                    }
+                    codec.releaseOutputBuffer(outIndex, false);
+                }
+            }
+        } finally {
+            // Restore surface back to ImageReader
+            try {
+                vd.setSurface(reader.getSurface());
+                System.out.println("[AgentDaemon] VirtualDisplay output restored to ImageReader");
+            } catch (Throwable t) {
+                System.err.println("[AgentDaemon] Failed to restore surface: " + t.getMessage());
+            }
+            if (codec != null) {
+                try { codec.stop(); } catch (Throwable ignored) {}
+                try { codec.release(); } catch (Throwable ignored) {}
+            }
+            if (encoderSurface != null) {
+                try { encoderSurface.release(); } catch (Throwable ignored) {}
+            }
         }
     }
 }
