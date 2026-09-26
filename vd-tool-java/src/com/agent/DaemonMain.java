@@ -87,8 +87,10 @@ public class DaemonMain {
                 }
             }, drainHandler);
 
-            // 0x609 = FLAG_PUBLIC (1) | FLAG_OWN_CONTENT_ONLY (8) | FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS (512) | FLAG_TRUSTED (1024)
-            int flags = 1545;
+            // 0x14609 = FLAG_PUBLIC (1) | FLAG_OWN_CONTENT_ONLY (8) | FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS (512) |
+            //           FLAG_TRUSTED (1024) | VIRTUAL_DISPLAY_FLAG_OWN_FOCUS (16384) |
+            //           VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED (65536)
+            int flags = 1545 | 16384 | 65536;
             VirtualDisplay vd = null;
 
             // Attempt to dynamically copy Display 0 Cutout (notch / hole-punch) to match physical metrics 1:1
