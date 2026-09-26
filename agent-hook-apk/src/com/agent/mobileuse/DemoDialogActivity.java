@@ -101,9 +101,7 @@ public class DemoDialogActivity extends Activity {
                 mActivity.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        mActivity.hideSoftInput();
-                        mActivity.moveTaskToBack(true);
-                        mActivity.overridePendingTransition(0, 0);
+                        mActivity.finish();
                     }
                 });
             }
@@ -188,6 +186,7 @@ public class DemoDialogActivity extends Activity {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
 
@@ -596,8 +595,7 @@ public class DemoDialogActivity extends Activity {
     @Override
     public void onBackPressed() {
         hideSoftInput();
-        moveTaskToBack(true);
-        overridePendingTransition(0, 0);
+        finish();
     }
 
     @Override
