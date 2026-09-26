@@ -328,13 +328,17 @@ func setSessionActive(active bool, sid string, title string) {
 		if sid != "" {
 			activeSessionID = sid
 		}
-		if title != "" {
+		// Priority 1: Authoritative disk resolution of genuine session title
+		resolved := ""
+		if activeSessionID != "" {
+			resolved = resolveSessionTitle(activeSessionID)
+		}
+		if resolved != "" {
+			activeSessionTitle = resolved
+		} else if title != "" && title != "移动端任务" && title != "闲聊" {
 			activeSessionTitle = title
-		} else if activeSessionID != "" {
-			resolved := resolveSessionTitle(activeSessionID)
-			if resolved != "" {
-				activeSessionTitle = resolved
-			}
+		} else if activeSessionTitle == "" {
+			activeSessionTitle = "移动端任务"
 		}
 	} else {
 		activeSessionID = ""
@@ -377,7 +381,8 @@ func resolveCapsuleAction() string {
 }
 
 var (
-	lastGlowPID int
+	lastGlowPID             int
+	lastAppliedCapsuleTitle string
 )
 
 func getGlowPID() int {
@@ -400,19 +405,30 @@ func updateCapsuleState() {
 	action := resolveCapsuleAction()
 	curPID := getGlowPID()
 
+	sid, title := getSessionMeta()
+	// Re-verify from disk if active to catch async title summarization
+	if action != "STOP" && sid != "" {
+		if resolved := resolveSessionTitle(sid); resolved != "" {
+			title = resolved
+			sessionMetaMu.Lock()
+			activeSessionTitle = resolved
+			sessionMetaMu.Unlock()
+		}
+	}
+
 	if action == "STOP" {
 		if !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
 			return
 		}
 	} else {
-		if lastAppliedCapsuleAction == action && isGlowServiceAlive() && (curPID > 0 && curPID == lastGlowPID) {
+		// Only early-return if action, process AND title are identical!
+		if lastAppliedCapsuleAction == action && isGlowServiceAlive() && (curPID > 0 && curPID == lastGlowPID) && (lastAppliedCapsuleTitle == title) {
 			return
 		}
 	}
 	lastAppliedCapsuleAction = action
+	lastAppliedCapsuleTitle = title
 	lastGlowPID = curPID
-
-	sid, title := getSessionMeta()
 
 	thawAppProcess()
 	cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es capsule_action "$CAPSULE_ACTION" --es session_id "$CAPSULE_SID" --es session_title "$CAPSULE_TITLE" 2>/dev/null`)
@@ -1036,39 +1052,50 @@ func resolveSessionTitle(sessionID string) string {
 		return ""
 	}
 	// Try loading from session_projcache
-	sessionPath := fmt.Sprintf("/data/local/ubuntu/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID)
-	data, err := os.ReadFile(sessionPath)
-	if err == nil {
-		var root struct {
-			Record struct {
-				Rows struct {
-					Title struct {
-						Val string `json:"val"`
-					} `json:"title"`
-				} `json:"rows"`
-			} `json:"record"`
-		}
-		if json.Unmarshal(data, &root) == nil {
-			title := strings.TrimSpace(root.Record.Rows.Title.Val)
-			if title != "" {
-				return title
+	candidatePaths := []string{
+		fmt.Sprintf("/data/local/ubuntu/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID),
+		fmt.Sprintf("/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID),
+	}
+	for _, sessionPath := range candidatePaths {
+		data, err := os.ReadFile(sessionPath)
+		if err == nil {
+			var root struct {
+				Record struct {
+					Rows struct {
+						Title struct {
+							Val string `json:"val"`
+						} `json:"title"`
+					} `json:"rows"`
+				} `json:"record"`
+			}
+			if json.Unmarshal(data, &root) == nil {
+				title := strings.TrimSpace(root.Record.Rows.Title.Val)
+				if title != "" {
+					return title
+				}
 			}
 		}
 	}
 
 	// Fallback: check workspace.json
-	wsData, err := os.ReadFile("/data/local/ubuntu/root/.dsh/storages/workspace.json")
-	if err == nil {
-		var wsRoot map[string]any
-		if json.Unmarshal(wsData, &wsRoot) == nil {
-			if wsList, ok := wsRoot["workspaces"].(map[string]any); ok {
-				for _, v := range wsList {
-					if wsMap, ok := v.(map[string]any); ok {
-						if sIds, ok := wsMap["sessionIds"].([]any); ok {
-							for _, s := range sIds {
-								if sStr, ok := s.(string); ok && sStr == sessionID {
-									if t, ok := wsMap["title"].(string); ok && strings.TrimSpace(t) != "" {
-										return strings.TrimSpace(t)
+	wsPaths := []string{
+		"/data/local/ubuntu/root/.dsh/storages/workspace.json",
+		"/root/.dsh/storages/workspace.json",
+	}
+	for _, wsPath := range wsPaths {
+		wsData, err := os.ReadFile(wsPath)
+		if err == nil {
+			var wsRoot map[string]any
+			if json.Unmarshal(wsData, &wsRoot) == nil {
+				if wsList, ok := wsRoot["workspaces"].(map[string]any); ok {
+					for _, v := range wsList {
+						if wsMap, ok := v.(map[string]any); ok {
+							if sIds, ok := wsMap["sessionIds"].([]any); ok {
+								for _, s := range sIds {
+									if sStr, ok := s.(string); ok && sStr == sessionID {
+										if t, ok := wsMap["title"].(string); ok && strings.TrimSpace(t) != "" {
+											return strings.TrimSpace(t)
+										}
 									}
 								}
 							}

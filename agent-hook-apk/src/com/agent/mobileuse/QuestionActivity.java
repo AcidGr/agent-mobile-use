@@ -225,8 +225,6 @@ public class QuestionActivity extends Activity {
                             sp.edit().clear().apply();
                         } catch (Throwable ignored) {}
                         NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
-                    } else {
-                        NotifyReceiver.postOngoingNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
                     }
                 }
             } catch (Throwable t) {
@@ -798,8 +796,6 @@ public class QuestionActivity extends Activity {
             }
 
             builder.setContentTitle("有问题");
-            builder.setContentText(questionText);
-            builder.setSubText("点击处理交互提问");
             builder.setSmallIcon(R.drawable.dsh_whale_icon);
 
             try {

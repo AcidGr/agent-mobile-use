@@ -191,44 +191,31 @@ public class GlowService extends Service {
 
             String displayTitle = (sessionTitle != null && !sessionTitle.trim().isEmpty()) ? sessionTitle.trim() : null;
 
-            // Compact Capsule Right Ear: 
-            // Foreground: "接管中" (3 chars)
-            // Background: "后台接管" (4 chars)
-            // Running:    "运行中" (3 chars)
+            // Compact Capsule Right Ear (3~4 chars): "前台接管", "后台接管", "运行中"
             String capsuleTitle = "运行中";
-            String contentText = "正在处理会话任务 · 点击进入";
-            String subText = (displayTitle != null) ? (displayTitle + " · 运行中") : "AI 正在运行中 · 点击查看";
             String cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在运行中";
             String bigText = "Agent 正在处理当前会话任务，可在控制台实时查看交互过程。";
             Bitmap iconBitmap = null;
 
             if ("FOREGROUND".equals(mode)) {
-                capsuleTitle = "接管中";
-                contentText = "点击切回后台副屏操作 · 屏幕边缘光效运行中";
-                subText = (displayTitle != null) ? (displayTitle + " · 接管中") : "前台接管中 · 点击切后台";
-                cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在接管前台操作";
+                capsuleTitle = "前台接管";
+                cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在前台接管";
                 bigText = "点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。";
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else if ("BACKGROUND".equals(mode)) {
                 capsuleTitle = "后台接管";
-                contentText = "副屏静默运行中 · 点击查看实时监控";
-                subText = (displayTitle != null) ? (displayTitle + " · 后台接管") : "后台接管中 · 点击查看监控";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在后台副屏运行";
                 bigText = "任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出副屏实时画面与控制。";
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else {
                 // RUNNING
                 capsuleTitle = "运行中";
-                contentText = "AI 正在全力思考或执行指令 · 点击进入";
-                subText = (displayTitle != null) ? (displayTitle + " · 运行中") : "AI 正在运行中 · 点击查看";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在运行中";
                 bigText = "Agent 正在处理当前会话任务，可点击呼出控制台查看实时详情。";
                 iconBitmap = createCyberTerminalBitmap(192);
             }
 
             builder.setContentTitle(capsuleTitle);
-            builder.setContentText(contentText);
-            builder.setSubText(subText);
 
             Icon capsuleIcon = null;
             if (Build.VERSION.SDK_INT >= 23 && iconBitmap != null) {
