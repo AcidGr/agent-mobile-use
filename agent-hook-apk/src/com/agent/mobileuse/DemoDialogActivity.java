@@ -2,9 +2,11 @@ package com.agent.mobileuse;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,6 +25,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -162,7 +165,9 @@ public class DemoDialogActivity extends Activity {
     private ProgressBar mProgressBar;
     private volatile boolean mIsKeyboardShowing = false;
     private static final int REQUEST_CODE_PERMISSIONS = 1001;
+    private static final int REQUEST_CODE_FILE_CHOOSER = 1002;
     private PermissionRequest mPendingPermissionRequest;
+    private ValueCallback<Uri[]> mFilePathCallback;
     private String mTargetSessionId = null;
     private String mTargetUrl = null;
 
@@ -447,6 +452,36 @@ public class DemoDialogActivity extends Activity {
                     mPendingPermissionRequest = null;
                 }
             }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (mFilePathCallback != null) {
+                    mFilePathCallback.onReceiveValue(null);
+                    mFilePathCallback = null;
+                }
+                mFilePathCallback = filePathCallback;
+
+                try {
+                    Intent intent = null;
+                    if (fileChooserParams != null) {
+                        intent = fileChooserParams.createIntent();
+                    }
+                    if (intent == null) {
+                        intent = new Intent(Intent.ACTION_GET_CONTENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("*/*");
+                    }
+                    startActivityForResult(Intent.createChooser(intent, "选择文件"), REQUEST_CODE_FILE_CHOOSER);
+                    return true;
+                } catch (Throwable t) {
+                    Log.e(TAG, "Failed to start file chooser", t);
+                    if (mFilePathCallback != null) {
+                        mFilePathCallback.onReceiveValue(null);
+                        mFilePathCallback = null;
+                    }
+                    return false;
+                }
+            }
         });
     }
 
@@ -587,6 +622,32 @@ public class DemoDialogActivity extends Activity {
                     }
                 }
                 mPendingPermissionRequest = null;
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_CODE_FILE_CHOOSER) {
+            if (mFilePathCallback != null) {
+                Uri[] results = null;
+                if (resultCode == RESULT_OK && data != null) {
+                    try {
+                        results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                    } catch (Throwable ignored) {}
+                    if (results == null && data.getData() != null) {
+                        results = new Uri[]{data.getData()};
+                    } else if (results == null && data.getClipData() != null) {
+                        int count = data.getClipData().getItemCount();
+                        results = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            results[i] = data.getClipData().getItemAt(i).getUri();
+                        }
+                    }
+                }
+                mFilePathCallback.onReceiveValue(results);
+                mFilePathCallback = null;
             }
         }
     }
