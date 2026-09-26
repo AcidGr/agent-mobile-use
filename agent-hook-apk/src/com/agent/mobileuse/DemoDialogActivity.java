@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -101,6 +102,9 @@ public class DemoDialogActivity extends Activity {
                 mActivity.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        if (mActivity.mWebView != null) {
+                            mActivity.mWebView.setAlpha(0f);
+                        }
                         mActivity.hideSoftInput();
                         mActivity.moveTaskToBack(true);
                         mActivity.overridePendingTransition(0, 0);
@@ -226,6 +230,9 @@ public class DemoDialogActivity extends Activity {
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (mWebView != null) {
+            mWebView.setAlpha(0f);
+        }
         if (intent != null) {
             mTargetUrl = intent.getStringExtra("target_url");
             String sid = intent.getStringExtra("session_id");
@@ -317,6 +324,7 @@ public class DemoDialogActivity extends Activity {
         );
         mWebView.setLayoutParams(webLp);
         mWebView.setBackgroundColor(Color.TRANSPARENT);
+        mWebView.setAlpha(0f);
 
         setupWebViewSettings();
         mCard.addView(mWebView);
@@ -355,8 +363,19 @@ public class DemoDialogActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                if (mWebView != null) {
+                    mWebView.setAlpha(1.0f);
+                }
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                if (mWebView != null) {
+                    mWebView.setAlpha(1.0f);
+                }
                 view.clearHistory();
                 String js = "(function() {" +
                     "  if (window.__DSH_SESSION_OBSERVER_INSTALLED__) return;" +
@@ -627,6 +646,7 @@ public class DemoDialogActivity extends Activity {
         sIsForeground = false;
         reportViewState(false, sCurrentViewingSessionId);
         if (mWebView != null) {
+            mWebView.setAlpha(0f);
             mWebView.onPause();
         }
     }
