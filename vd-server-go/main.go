@@ -487,6 +487,7 @@ func getTargetDisplayID(st StatusResp) int {
 type StackInfo struct {
 	StackID   int
 	DisplayID int
+	UserID    int
 	Packages  []string
 	TopAct    string
 	Visible   bool
@@ -503,6 +504,7 @@ func getStackList() []StackInfo {
 
 	reRoot := regexp.MustCompile(`RootTask id=(\d+).*displayId=(\d+)`)
 	reTask := regexp.MustCompile(`taskId=(\d+):\s+([^/]+)/([^\s]+).*visible=(true|false)`)
+	reUser := regexp.MustCompile(`userId=(\d+)`)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -512,11 +514,21 @@ func getStackList() []StackInfo {
 			}
 			sId, _ := strconv.Atoi(m[1])
 			dId, _ := strconv.Atoi(m[2])
+			uId := 0
+			if mu := reUser.FindStringSubmatch(line); len(mu) > 1 {
+				uId, _ = strconv.Atoi(mu[1])
+			}
 			cur = &StackInfo{
 				StackID:   sId,
 				DisplayID: dId,
+				UserID:    uId,
 			}
 		} else if cur != nil {
+			if cur.UserID == 0 {
+				if mu := reUser.FindStringSubmatch(line); len(mu) > 1 {
+					cur.UserID, _ = strconv.Atoi(mu[1])
+				}
+			}
 			if m := reTask.FindStringSubmatch(line); len(m) > 4 {
 				cur.Packages = append(cur.Packages, m[2])
 				if cur.TopAct == "" {
@@ -534,19 +546,21 @@ func getStackList() []StackInfo {
 	return list
 }
 
-func findStackForPackageAndActivity(pkg, act string) (StackInfo, bool) {
+func findStackForPackageAndActivity(pkg, act string, userId int) (StackInfo, bool) {
 	stacks := getStackList()
 	if act != "" {
 		for _, s := range stacks {
-			if strings.Contains(s.TopAct, pkg) && strings.Contains(s.TopAct, act) {
+			if s.UserID == userId && strings.Contains(s.TopAct, pkg) && strings.Contains(s.TopAct, act) {
 				return s, true
 			}
 		}
 	}
 	for _, s := range stacks {
-		for _, p := range s.Packages {
-			if p == pkg {
-				return s, true
+		if s.UserID == userId {
+			for _, p := range s.Packages {
+				if p == pkg {
+					return s, true
+				}
 			}
 		}
 	}
@@ -1544,6 +1558,7 @@ func main() {
 		var p struct {
 			Package  string `json:"package"`
 			Activity string `json:"activity"`
+			User     *int   `json:"user"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -1551,16 +1566,25 @@ func main() {
 			return
 		}
 
-		// 1. Check if the requested app is already running in an activity stack
-		if existingStack, found := findStackForPackageAndActivity(p.Package, p.Activity); found {
+		userId := 0
+		if p.User != nil {
+			userId = *p.User
+		}
+
+		// 1. Check if the requested app is already running in an activity stack for target userId
+		if existingStack, found := findStackForPackageAndActivity(p.Package, p.Activity, userId); found {
 			if existingStack.DisplayID != targetDid {
 				// App is running on another display (e.g. Display 0) -> Smoothly reparent to targetDid!
 				cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(existingStack.StackID), strconv.Itoa(targetDid))
 				out, err := cmd.CombinedOutput()
 				if err == nil {
+					userDesc := ""
+					if userId != 0 {
+						userDesc = fmt.Sprintf(" (user %d)", userId)
+					}
 					json.NewEncoder(w).Encode(ActionResponse{
 						Success: true,
-						Message: fmt.Sprintf("Smoothly moved existing stack %d of %s to display %d", existingStack.StackID, p.Package, targetDid),
+						Message: fmt.Sprintf("Smoothly moved existing stack %d of %s%s to display %d", existingStack.StackID, p.Package, userDesc, targetDid),
 						Data:    string(out),
 						Notice:  popPendingHandoffNotice(),
 					})
@@ -1570,9 +1594,13 @@ func main() {
 			} else {
 				// App is already on target display
 				if existingStack.Visible && p.Activity == "" {
+					userDesc := ""
+					if userId != 0 {
+						userDesc = fmt.Sprintf(" (user %d)", userId)
+					}
 					json.NewEncoder(w).Encode(ActionResponse{
 						Success: true,
-						Message: fmt.Sprintf("App %s is already active on display %d", p.Package, targetDid),
+						Message: fmt.Sprintf("App %s%s is already active on display %d", p.Package, userDesc, targetDid),
 						Notice:  popPendingHandoffNotice(),
 					})
 					return
@@ -1580,13 +1608,14 @@ func main() {
 			}
 		}
 
-		// 2. Cold start fallback: launch via am start --display
+		// 2. Cold start fallback: launch via am start --display <did> --user <userId>
 		did := strconv.Itoa(targetDid)
-		args := []string{"start", "--display", did}
+		uStr := strconv.Itoa(userId)
+		args := []string{"start", "--display", did, "--user", uStr}
 		if p.Activity != "" {
 			args = append(args, "-n", p.Package+"/"+p.Activity)
 		} else {
-			actBytes, _ := exec.Command("/system/bin/cmd", "package", "resolve-activity", "--brief", p.Package).Output()
+			actBytes, _ := exec.Command("/system/bin/cmd", "package", "resolve-activity", "--brief", "--user", uStr, p.Package).Output()
 			actLines := strings.Split(strings.TrimSpace(string(actBytes)), "\n")
 			targetAct := ""
 			if len(actLines) > 0 && !strings.Contains(actLines[len(actLines)-1], "No activity found") {

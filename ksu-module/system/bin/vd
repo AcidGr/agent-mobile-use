@@ -113,8 +113,12 @@ show_status() {
 
 launch_app() {
     local pkg="$1"
+    local uid="0"
+    if [ "$2" = "--user" ] && [ -n "$3" ]; then
+        uid="$3"
+    fi
     if [ -z "$pkg" ]; then
-        echo "用法: vd launch <包名>"
+        echo "用法: vd launch <包名> [--user <用户ID>]"
         exit 1
     fi
     if ! is_running; then
@@ -122,13 +126,13 @@ launch_app() {
         start_vd || exit 1
     fi
     local did=$(get_display_id)
-    local act=$(cmd package resolve-activity --brief "$pkg" 2>/dev/null | tail -n 1)
+    local act=$(cmd package resolve-activity --user "$uid" --brief "$pkg" 2>/dev/null | tail -n 1)
     if [ -n "$act" ] && [ "$act" != "No activity found" ]; then
-        echo "[vd] 正在向 Display $did 启动应用: $act"
-        am start -n "$act" --display "$did"
+        echo "[vd] 正在向 Display $did (user $uid) 启动应用: $act"
+        am start -n "$act" --display "$did" --user "$uid"
     else
-        echo "[vd] 正在向 Display $did 调度包名: $pkg"
-        am start --display "$did" "$pkg"
+        echo "[vd] 正在向 Display $did (user $uid) 调度包名: $pkg"
+        am start --display "$did" --user "$uid" "$pkg"
     fi
 }
 
