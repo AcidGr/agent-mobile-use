@@ -211,10 +211,10 @@ public class GlowService extends Service {
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else if ("BACKGROUND".equals(mode)) {
                 capsuleTitle = "后台接管";
-                contentText = "独立虚拟副屏静默接管中 · 点击进入";
-                subText = (displayTitle != null) ? (displayTitle + " · 后台接管") : "后台接管中 · 点击查看";
+                contentText = "副屏静默运行中 · 点击查看实时监控";
+                subText = (displayTitle != null) ? (displayTitle + " · 后台接管") : "后台接管中 · 点击查看监控";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在后台副屏运行";
-                bigText = "任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出控制台浮层。";
+                bigText = "任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出副屏实时画面与控制。";
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else {
                 // RUNNING
@@ -263,8 +263,19 @@ public class GlowService extends Service {
                 handoffIntent.setPackage(getPackageName());
                 PendingIntent pi = PendingIntent.getBroadcast(this, 2028, handoffIntent, flags);
                 builder.setContentIntent(pi);
+            } else if ("BACKGROUND".equals(mode)) {
+                // Background: Click pendingIntent -> Open DemoDialogActivity loading http://127.0.0.1:3070/
+                Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
+                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                consoleIntent.putExtra("target_url", "http://127.0.0.1:3070/");
+                if (sid != null && !sid.isEmpty()) {
+                    consoleIntent.putExtra("session_id", sid);
+                }
+                int reqCode = 2030;
+                PendingIntent pi = PendingIntent.getActivity(this, reqCode, consoleIntent, flags);
+                builder.setContentIntent(pi);
             } else {
-                // Background & Running: Click pendingIntent -> Open DemoDialogActivity (Web Console) targeting specific session!
+                // Running (idle session active, etc.): Click pendingIntent -> Open DemoDialogActivity (Web Console) targeting specific session!
                 Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
                 consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 if (sid != null && !sid.isEmpty()) {

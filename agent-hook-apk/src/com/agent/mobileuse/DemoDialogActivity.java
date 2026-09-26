@@ -166,6 +166,7 @@ public class DemoDialogActivity extends Activity {
     private static final int REQUEST_CODE_PERMISSIONS = 1001;
     private PermissionRequest mPendingPermissionRequest;
     private String mTargetSessionId = null;
+    private String mTargetUrl = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -174,6 +175,7 @@ public class DemoDialogActivity extends Activity {
 
         Intent intent = getIntent();
         if (intent != null) {
+            mTargetUrl = intent.getStringExtra("target_url");
             mTargetSessionId = intent.getStringExtra("session_id");
             if (mTargetSessionId == null) mTargetSessionId = intent.getStringExtra("session");
         }
@@ -225,6 +227,21 @@ public class DemoDialogActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent != null) {
+            final String targetUrl = intent.getStringExtra("target_url");
+            if (targetUrl != null && !targetUrl.isEmpty()) {
+                mTargetUrl = targetUrl;
+                if (mWebView != null) {
+                    mWebView.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            Log.i(TAG, "onNewIntent navigating to: " + targetUrl);
+                            mWebView.loadUrl(targetUrl);
+                        }
+                    });
+                }
+                return;
+            }
+
             String sid = intent.getStringExtra("session_id");
             if (sid == null || sid.isEmpty()) {
                 sid = intent.getStringExtra("session");
@@ -345,6 +362,9 @@ public class DemoDialogActivity extends Activity {
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
         ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            ws.setMediaPlaybackRequiresUserGesture(false);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
@@ -457,16 +477,34 @@ public class DemoDialogActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                // Ensure auth cookie is injected before navigation
-                setupAuthCookie();
+                final String cookie = getDshAuthCookie();
 
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
                         if (mWebView != null) {
-                            String url = DSH_WEB_URL;
-                            if (mTargetSessionId != null && !mTargetSessionId.isEmpty()) {
-                                url = DSH_WEB_URL + "&session=" + mTargetSessionId;
+                            String url;
+                            if (mTargetUrl != null && !mTargetUrl.isEmpty()) {
+                                url = mTargetUrl;
+                            } else {
+                                url = DSH_WEB_URL;
+                                if (mTargetSessionId != null && !mTargetSessionId.isEmpty()) {
+                                    url = DSH_WEB_URL + "&session=" + mTargetSessionId;
+                                }
+                            }
+                            if (cookie != null && !cookie.isEmpty() && url.contains("3080")) {
+                                try {
+                                    CookieManager cm = CookieManager.getInstance();
+                                    cm.setAcceptCookie(true);
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        cm.setAcceptThirdPartyCookies(mWebView, true);
+                                    }
+                                    cm.setCookie("http://127.0.0.1:3080/", cookie + "; Path=/; Max-Age=2505600");
+                                    cm.flush();
+                                    Log.i(TAG, "DSH auth cookie injected successfully into WebView");
+                                } catch (Throwable t) {
+                                    Log.e(TAG, "Failed to setup auth cookie: " + t.getMessage(), t);
+                                }
                             }
                             Log.i(TAG, "Navigating WebView to: " + url);
                             mWebView.loadUrl(url);
@@ -475,24 +513,6 @@ public class DemoDialogActivity extends Activity {
                 });
             }
         }).start();
-    }
-
-    private void setupAuthCookie() {
-        try {
-            String cookie = getDshAuthCookie();
-            if (cookie != null && !cookie.isEmpty()) {
-                CookieManager cm = CookieManager.getInstance();
-                cm.setAcceptCookie(true);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    cm.setAcceptThirdPartyCookies(mWebView, true);
-                }
-                cm.setCookie("http://127.0.0.1:3080/", cookie + "; Path=/; Max-Age=2505600");
-                cm.flush();
-                Log.i(TAG, "DSH auth cookie injected successfully into WebView");
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "Failed to setup auth cookie: " + t.getMessage(), t);
-        }
     }
 
     public static String getDshAuthCookie() {
