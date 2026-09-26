@@ -186,7 +186,6 @@ public class DemoDialogActivity extends Activity {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
 
