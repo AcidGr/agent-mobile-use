@@ -117,7 +117,7 @@ public class GlowService extends Service {
     }
 
     /**
-     * Create crisp vector-drawn Cyber Terminal (>_) in vivid cyber green/cyan (#00FF9D) with 100% transparent background.
+     * Create crisp vector-drawn Cyber Terminal (>_) in vivid cyber cyan/blue (#00D2FF) with 100% transparent background.
      */
     public static Bitmap createCyberTerminalBitmap(int size) {
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
@@ -126,11 +126,11 @@ public class GlowService extends Service {
         float cx = size / 2.0f;
         float cy = size / 2.0f;
 
-        // Vivid Cyber Mint / Cyan-Green (#00FF9D)
-        int cyberGreen = 0xFF00FF9D;
+        // Vivid Cyber Cyan / Blue (#00D2FF) - matches takeover eye icon
+        int cyberCyan = 0xFF00D2FF;
 
         Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        strokePaint.setColor(cyberGreen);
+        strokePaint.setColor(cyberCyan);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(size * 0.08f);
         strokePaint.setStrokeCap(Paint.Cap.ROUND);
