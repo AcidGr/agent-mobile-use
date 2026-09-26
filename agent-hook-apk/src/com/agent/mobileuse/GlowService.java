@@ -194,24 +194,24 @@ public class GlowService extends Service {
             // Compact Capsule Right Ear (3~4 chars): "前台接管", "后台接管", "运行中"
             String capsuleTitle = "运行中";
             String cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在运行中";
-            String bigText = "Agent 正在处理当前会话任务，可在控制台实时查看交互过程。";
+            String bigText = "点击进入会话。";
             Bitmap iconBitmap = null;
 
             if ("FOREGROUND".equals(mode)) {
                 capsuleTitle = "前台接管";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在前台接管";
-                bigText = "点击此卡片可立即将当前任务无感切回后台虚拟副屏。\n屏幕边缘赛博呼吸光效已激活。";
+                bigText = "点击切换为后台接管。";
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else if ("BACKGROUND".equals(mode)) {
                 capsuleTitle = "后台接管";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在后台副屏运行";
-                bigText = "任务正在独立虚拟副屏静默执行，不干扰主屏物理操作。\n点击此卡片可随时呼出副屏实时画面与控制。";
+                bigText = "点击打开副屏监控。";
                 iconBitmap = createSingleBlueEyeBitmap(192);
             } else {
                 // RUNNING
                 capsuleTitle = "运行中";
                 cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在运行中";
-                bigText = "Agent 正在处理当前会话任务，可点击呼出控制台查看实时详情。";
+                bigText = "点击进入会话。";
                 iconBitmap = createCyberTerminalBitmap(192);
             }
 
