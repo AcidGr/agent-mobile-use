@@ -286,7 +286,7 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
             Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
-            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (sessionId != null && !sessionId.isEmpty()) {
                 overlayIntent.putExtra("session_id", sessionId);
             }
@@ -352,7 +352,7 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity
             Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
-            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (sessionId != null && !sessionId.isEmpty()) {
                 overlayIntent.putExtra("session_id", sessionId);
             }

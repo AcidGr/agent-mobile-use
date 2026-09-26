@@ -36,7 +36,8 @@
         <activity
             android:name=".DemoDialogActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
             android:taskAffinity="com.agent.mobileuse.overlay"
             android:excludeFromRecents="true"
             android:exported="true" />

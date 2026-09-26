@@ -227,39 +227,17 @@ public class DemoDialogActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent != null) {
-            final String targetUrl = intent.getStringExtra("target_url");
-            if (targetUrl != null && !targetUrl.isEmpty()) {
-                mTargetUrl = targetUrl;
-                if (mWebView != null) {
-                    mWebView.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Log.i(TAG, "onNewIntent navigating to: " + targetUrl);
-                            mWebView.loadUrl(targetUrl);
-                        }
-                    });
-                }
-                return;
-            }
-
+            mTargetUrl = intent.getStringExtra("target_url");
             String sid = intent.getStringExtra("session_id");
             if (sid == null || sid.isEmpty()) {
                 sid = intent.getStringExtra("session");
             }
-            if (sid != null && !sid.isEmpty()) {
-                final String targetSid = sid;
-                mTargetSessionId = targetSid;
-                if (mWebView != null) {
-                    mWebView.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Log.i(TAG, "onNewIntent switching session to: " + targetSid);
-                            mWebView.evaluateJavascript("window.DSH_SWITCH_SESSION && window.DSH_SWITCH_SESSION('" + targetSid + "');", null);
-                        }
-                    });
-                }
-            }
+            mTargetSessionId = sid;
+        } else {
+            mTargetUrl = null;
+            mTargetSessionId = null;
         }
+        loadWebConsole();
     }
 
     private int dpToPx(int dp) {
@@ -379,6 +357,7 @@ public class DemoDialogActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                view.clearHistory();
                 String js = "(function() {" +
                     "  if (window.__DSH_SESSION_OBSERVER_INSTALLED__) return;" +
                     "  window.__DSH_SESSION_OBSERVER_INSTALLED__ = true;" +
@@ -616,13 +595,9 @@ public class DemoDialogActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (mWebView != null && mWebView.canGoBack()) {
-            mWebView.goBack();
-        } else {
-            hideSoftInput();
-            moveTaskToBack(true);
-            overridePendingTransition(0, 0);
-        }
+        hideSoftInput();
+        moveTaskToBack(true);
+        overridePendingTransition(0, 0);
     }
 
     @Override
