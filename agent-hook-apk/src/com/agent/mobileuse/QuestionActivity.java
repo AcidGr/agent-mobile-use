@@ -12,6 +12,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -796,14 +797,22 @@ public class QuestionActivity extends Activity {
             }
 
             builder.setContentTitle("有问题");
-            builder.setSmallIcon(R.drawable.dsh_whale_icon);
 
             try {
-                Bitmap questionIcon = createWhiteBlackQuestionBitmap(192);
-                if (questionIcon != null) {
+                Bitmap questionIcon = createCyberQuestionBitmap(192);
+                if (questionIcon != null && Build.VERSION.SDK_INT >= 23) {
+                    Icon icon = Icon.createWithBitmap(questionIcon);
+                    builder.setSmallIcon(icon);
                     builder.setLargeIcon(questionIcon);
+                    Bundle extras = new Bundle();
+                    extras.putParcelable("oplus_small_icon", icon);
+                    builder.addExtras(extras);
+                } else {
+                    builder.setSmallIcon(R.drawable.dsh_whale_icon);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+                builder.setSmallIcon(R.drawable.dsh_whale_icon);
+            }
 
             Notification.BigTextStyle bigStyle = new Notification.BigTextStyle();
             bigStyle.setBigContentTitle(header);
@@ -836,21 +845,18 @@ public class QuestionActivity extends Activity {
         }
     }
 
-    private static Bitmap createWhiteBlackQuestionBitmap(int size) {
+    /**
+     * Create crisp vector-drawn Question Mark (?) in vivid warning amber/orange (#FFA726) with 100% transparent background.
+     */
+    private static Bitmap createCyberQuestionBitmap(int size) {
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
 
         float center = size / 2.0f;
-        float radius = center - 4.0f;
-
-        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        bgPaint.setColor(0xFFFFFFFF);
-        bgPaint.setStyle(android.graphics.Paint.Style.FILL);
-        canvas.drawCircle(center, center, radius, bgPaint);
 
         android.graphics.Paint textPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        textPaint.setColor(0xFF1E2024);
-        textPaint.setTextSize(size * 0.65f);
+        textPaint.setColor(0xFFFFA726); // Vivid Amber Orange
+        textPaint.setTextSize(size * 0.82f);
         textPaint.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
         textPaint.setTextAlign(android.graphics.Paint.Align.CENTER);
 

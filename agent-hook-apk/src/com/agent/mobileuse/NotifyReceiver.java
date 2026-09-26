@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -178,36 +179,26 @@ public class NotifyReceiver extends BroadcastReceiver {
     }
 
     /**
-     * Create a crisp vector-drawn LargeIcon: Pure white circle background with a vibrant emerald green checkmark.
+     * Create crisp vector-drawn Checkmark in vivid cyber green (#00FF9D) with 100% transparent background.
      */
-    private static Bitmap createWhiteGreenCheckBitmap(int size) {
+    public static Bitmap createCyberCheckmarkBitmap(int size) {
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
 
-        float center = size / 2.0f;
-        float radius = center - 4.0f;
-
-        // 1. Draw smooth white circular background
-        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        bgPaint.setColor(0xFFFFFFFF);
-        bgPaint.setStyle(android.graphics.Paint.Style.FILL);
-        canvas.drawCircle(center, center, radius, bgPaint);
-
-        // 2. Draw vibrant emerald green checkmark
         android.graphics.Paint checkPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        checkPaint.setColor(0xFF10B981); // Emerald / Material Green
+        checkPaint.setColor(0xFF00FF9D); // Vivid Cyber Green / Mint (matches terminal icon)
         checkPaint.setStyle(android.graphics.Paint.Style.STROKE);
-        checkPaint.setStrokeWidth(size * 0.11f);
+        checkPaint.setStrokeWidth(size * 0.13f);
         checkPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
         checkPaint.setStrokeJoin(android.graphics.Paint.Join.ROUND);
 
         android.graphics.Path path = new android.graphics.Path();
-        float p1X = size * 0.28f;
+        float p1X = size * 0.20f;
         float p1Y = size * 0.52f;
-        float p2X = size * 0.44f;
-        float p2Y = size * 0.68f;
-        float p3X = size * 0.74f;
-        float p3Y = size * 0.36f;
+        float p2X = size * 0.42f;
+        float p2Y = size * 0.74f;
+        float p3X = size * 0.80f;
+        float p3Y = size * 0.26f;
 
         path.moveTo(p1X, p1Y);
         path.lineTo(p2X, p2Y);
@@ -262,17 +253,21 @@ public class NotifyReceiver extends BroadcastReceiver {
             bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 
-            // Set SmallIcon
-            builder.setSmallIcon(R.drawable.dsh_whale_icon);
-
-            // Set LargeIcon: Crisp White Circle with vibrant Green Checkmark
+            // Set SmallIcon and LargeIcon to transparent vector Cyber Checkmark
             try {
-                Bitmap checkIcon = createWhiteGreenCheckBitmap(192);
-                if (checkIcon != null) {
+                Bitmap checkIcon = createCyberCheckmarkBitmap(192);
+                if (checkIcon != null && Build.VERSION.SDK_INT >= 23) {
+                    Icon icon = Icon.createWithBitmap(checkIcon);
+                    builder.setSmallIcon(icon);
                     builder.setLargeIcon(checkIcon);
+                    android.os.Bundle extras = new android.os.Bundle();
+                    extras.putParcelable("oplus_small_icon", icon);
+                    builder.addExtras(extras);
+                } else {
+                    builder.setSmallIcon(R.drawable.dsh_whale_icon);
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "createWhiteGreenCheckBitmap warning: " + t.getMessage());
+                builder.setSmallIcon(R.drawable.dsh_whale_icon);
             }
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
