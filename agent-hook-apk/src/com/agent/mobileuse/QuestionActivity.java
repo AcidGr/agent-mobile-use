@@ -134,19 +134,7 @@ public class QuestionActivity extends Activity {
                 String title = intent.getStringExtra("session_title");
                 if (title != null) sIntent.putExtra("session_title", title);
                 if ("STOP".equals(capsuleAction)) {
-                    try {
-                        stopService(sIntent);
-                    } catch (Throwable ignored) {}
-                    try {
-                        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                        if (nm != null) {
-                            nm.cancel(10086);
-                        }
-                    } catch (Throwable ignored) {}
-                    try {
-                        android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
-                        sp.edit().clear().apply();
-                    } catch (Throwable ignored) {}
+                    dismissCapsule((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE));
                 } else {
                     boolean started = false;
                     if (Build.VERSION.SDK_INT >= 26) {
@@ -193,40 +181,27 @@ public class QuestionActivity extends Activity {
             return true;
         }
 
-        // 3. Task Notifications (Completed / In-progress)
-        boolean hasCompleted = intent.hasExtra("is_completed");
-        boolean onlyNotify = intent.getBooleanExtra("only_notify", false);
-        if (hasCompleted || (onlyNotify && intent.hasExtra("content"))) {
-            boolean isCompleted = intent.getBooleanExtra("is_completed", false);
+        // 3. Task Completion Notification
+        if (intent.getBooleanExtra("is_completed", false)) {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                 if (nm != null) {
                     String title = intent.getStringExtra("title");
-                    String subtext = intent.getStringExtra("subtext");
+                    String sessionTitle = intent.getStringExtra("session_title");
+                    if (sessionTitle == null || sessionTitle.isEmpty()) {
+                        sessionTitle = intent.getStringExtra("subtext");
+                    }
                     String content = intent.getStringExtra("content");
                     String tag = intent.getStringExtra("tag");
                     if (tag == null || tag.isEmpty()) tag = NotifyReceiver.DEFAULT_TAG;
                     int id = intent.getIntExtra("id", NotifyReceiver.DEFAULT_ID);
-                    int total = intent.getIntExtra("total", 0);
-                    int completed = intent.getIntExtra("completed", 0);
                     String sessionId = intent.getStringExtra("session_id");
                     if (sessionId == null || sessionId.isEmpty()) {
                         sessionId = intent.getStringExtra("session");
                     }
-                    if (isCompleted) {
-                        try {
-                            Intent sIntent = new Intent(this, GlowService.class);
-                            stopService(sIntent);
-                        } catch (Throwable ignored) {}
-                        try {
-                            nm.cancel(10086);
-                        } catch (Throwable ignored) {}
-                        try {
-                            android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
-                            sp.edit().clear().apply();
-                        } catch (Throwable ignored) {}
-                        NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, subtext, content, total, completed, sessionId);
-                    }
+
+                    dismissCapsule(nm);
+                    NotifyReceiver.postCompletedNotification(this, nm, tag, id, title, sessionTitle, content, sessionId);
                 }
             } catch (Throwable t) {
                 Log.e(TAG, "postNotification failed: " + t.getMessage(), t);
@@ -237,6 +212,7 @@ public class QuestionActivity extends Activity {
         }
 
         // 4. Question Notification (only_notify=true)
+        boolean onlyNotify = intent.getBooleanExtra("only_notify", false);
         mRequestId = intent.getStringExtra("request_id");
         mDataJson = intent.getStringExtra("data");
         if (onlyNotify && mRequestId != null && mDataJson != null) {
@@ -261,6 +237,20 @@ public class QuestionActivity extends Activity {
         }
 
         return false;
+    }
+
+    private void dismissCapsule(NotificationManager nm) {
+        try {
+            stopService(new Intent(this, GlowService.class));
+        } catch (Throwable ignored) {}
+        try {
+            if (nm != null) {
+                nm.cancel(10086);
+            }
+        } catch (Throwable ignored) {}
+        try {
+            getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE).edit().clear().apply();
+        } catch (Throwable ignored) {}
     }
 
     private int dpToPx(int dp) {

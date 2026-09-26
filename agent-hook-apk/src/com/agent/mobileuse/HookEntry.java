@@ -143,7 +143,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             if (id == null || id == 0) return false;
 
             // Only whitelist our designated Fluid Cloud notification IDs:
-            // 10086: GlowService (Capsule: "运行中", "后台接管", "接管中")
+            // 10086: GlowService (Capsule: "运行中", "后台接管", "前台接管")
             // 2020:  NotifyReceiver (Task completed card)
             // 20086: QuestionReceiver (Interactive question card)
             if (id != 10086 && id != 2020 && id != 20086) return false;

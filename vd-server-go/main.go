@@ -310,6 +310,9 @@ var (
 
 	lastAppliedCapsuleAction   string
 	lastAppliedCapsuleActionMu sync.Mutex
+
+	lastCompletedSessionID   string
+	lastCompletedSessionIDMu sync.Mutex
 )
 
 func setSessionActive(active bool, sid string, title string) {
@@ -327,6 +330,14 @@ func setSessionActive(active bool, sid string, title string) {
 	if active {
 		if sid != "" {
 			activeSessionID = sid
+			lastCompletedSessionIDMu.Lock()
+			if lastCompletedSessionID != "" && (lastCompletedSessionID == sid || strings.Contains(sid, lastCompletedSessionID) || strings.Contains(lastCompletedSessionID, sid)) {
+				lastCompletedSessionID = ""
+				lastCompletedSessionIDMu.Unlock()
+				go clearCompletedOnDevice()
+			} else {
+				lastCompletedSessionIDMu.Unlock()
+			}
 		}
 		// Priority 1: Authoritative disk resolution of genuine session title
 		resolved := ""
@@ -443,6 +454,11 @@ func updateCapsuleState() {
 func cancelQuestionOnDevice(reqID string) {
 	thawAppProcess()
 	exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez cancel_question true --es request_id "`+reqID+`" 2>/dev/null`).Run()
+}
+
+func clearCompletedOnDevice() {
+	thawAppProcess()
+	exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez clear_completed true 2>/dev/null`).Run()
 }
 
 func broadcastTouch(touchType int, x, y, x1, y1, x2, y2, duration int) {
@@ -1637,6 +1653,11 @@ func main() {
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
 			isCompletedStr = "true"
 			setSessionActive(false, sid, p.Subtext)
+			if sid != "" {
+				lastCompletedSessionIDMu.Lock()
+				lastCompletedSessionID = sid
+				lastCompletedSessionIDMu.Unlock()
+			}
 			if p.Title == "" || strings.Contains(p.Title, "完成") {
 				p.Title = "已完成"
 			}
@@ -1665,16 +1686,14 @@ func main() {
 
 		// Direct Activity wake-up trampoline: am start -f 0x18000000
 		// Immediately unfreezes process in 0ms, posts notification, and finishes cleanly without delay
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed "$NOTIFY_IS_COMPLETED" --es title "$NOTIFY_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es url "$NOTIFY_URL" --es session_id "$NOTIFY_SESSION_ID" --ei total "$NOTIFY_TOTAL" --ei completed "$NOTIFY_COMPLETED" 2>/dev/null`)
+		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed "$NOTIFY_IS_COMPLETED" --es title "$NOTIFY_TITLE" --es session_title "$NOTIFY_SESSION_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es session_id "$NOTIFY_SESSION_ID" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
+			"NOTIFY_SESSION_TITLE="+p.Subtext,
 			"NOTIFY_SUBTEXT="+p.Subtext,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
-			"NOTIFY_URL="+p.URL,
 			"NOTIFY_SESSION_ID="+sid,
-			fmt.Sprintf("NOTIFY_TOTAL=%d", p.Total),
-			fmt.Sprintf("NOTIFY_COMPLETED=%d", p.Completed),
 			"NOTIFY_IS_COMPLETED="+isCompletedStr,
 		)
 		out, err := cmd.CombinedOutput()

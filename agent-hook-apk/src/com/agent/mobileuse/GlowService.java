@@ -172,6 +172,19 @@ public class GlowService extends Service {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
 
+            // Dismiss completed notification if the same session resumes running / takeover
+            if (sid != null && !sid.isEmpty()) {
+                try {
+                    android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                    String lastCompletedSid = sp.getString("last_completed_sid", "");
+                    if (sid.equals(lastCompletedSid)) {
+                        nm.cancel(NotifyReceiver.DEFAULT_TAG, NotifyReceiver.DEFAULT_ID);
+                        sp.edit().remove("last_completed_sid").apply();
+                        android.util.Log.i("AgentGlowService", "Auto-dismissed completed notification for resumed session: " + sid);
+                    }
+                } catch (Throwable ignored) {}
+            }
+
             if (Build.VERSION.SDK_INT >= 26) {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 java.lang.reflect.Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
@@ -192,10 +205,10 @@ public class GlowService extends Service {
             String displayTitle = (sessionTitle != null && !sessionTitle.trim().isEmpty()) ? sessionTitle.trim() : null;
 
             // Compact Capsule Right Ear (3~4 chars): "前台接管", "后台接管", "运行中"
-            String capsuleTitle = "运行中";
-            String cardHeader = (displayTitle != null) ? displayTitle : "Agent 正在运行中";
-            String bigText = "点击进入会话。";
-            Bitmap iconBitmap = null;
+            String capsuleTitle;
+            String cardHeader;
+            String bigText;
+            Bitmap iconBitmap;
 
             if ("FOREGROUND".equals(mode)) {
                 capsuleTitle = "前台接管";

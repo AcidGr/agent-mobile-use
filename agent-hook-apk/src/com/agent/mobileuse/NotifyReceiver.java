@@ -7,7 +7,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
@@ -81,7 +80,10 @@ public class NotifyReceiver extends BroadcastReceiver {
 
         if (ACTION_NOTIFY.equals(action)) {
             String title = intent.getStringExtra("title");
-            String subtext = intent.getStringExtra("subtext");
+            String sessionTitle = intent.getStringExtra("session_title");
+            if (sessionTitle == null || sessionTitle.isEmpty()) {
+                sessionTitle = intent.getStringExtra("subtext");
+            }
             String content = intent.getStringExtra("content");
             String sessionId = intent.getStringExtra("session_id");
             if (sessionId == null || sessionId.isEmpty()) {
@@ -91,14 +93,14 @@ public class NotifyReceiver extends BroadcastReceiver {
             int completed = intent.getIntExtra("completed", 0);
             boolean isCompleted = intent.getBooleanExtra("is_completed", false) || (total > 0 && completed >= total);
 
-            Log.i(TAG, "Received notification signal: title=" + title + " subtext=" + subtext + " (" + completed + "/" + total + ") isCompleted=" + isCompleted + " sessionId=" + sessionId);
+            Log.i(TAG, "Received notification signal: title=" + title + " sessionTitle=" + sessionTitle + " (" + completed + "/" + total + ") isCompleted=" + isCompleted + " sessionId=" + sessionId);
 
             // Cancel any previous notification to keep notification drawer clean
             nm.cancel(tag, id);
 
             // Trigger high-priority heads-up notification when task completion signal is given
             if (isCompleted) {
-                postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed, sessionId);
+                postCompletedNotification(context, nm, tag, id, title, sessionTitle, content, sessionId);
             }
         }
     }
@@ -172,12 +174,6 @@ public class NotifyReceiver extends BroadcastReceiver {
         }
     }
 
-    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
-                                                 String title, String content,
-                                                 int total, int completed) {
-        postCompletedNotification(context, nm, tag, id, title, null, content, total, completed);
-    }
-
     /**
      * Create crisp vector-drawn Checkmark in vivid cyber green (#00FF9D) with 100% transparent background.
      */
@@ -209,16 +205,18 @@ public class NotifyReceiver extends BroadcastReceiver {
     }
 
     public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
-                                                 String title, String subtext, String content,
-                                                 int total, int completed) {
-        postCompletedNotification(context, nm, tag, id, title, subtext, content, total, completed, null);
-    }
-
-    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
-                                                 String title, String subtext, String content,
-                                                 int total, int completed, String sessionId) {
+                                                 String title, String sessionTitle, String content,
+                                                 String sessionId) {
         try {
             ensureChannel(nm);
+
+            // Record completed session ID so running state of same session can auto-dismiss it
+            if (sessionId != null && !sessionId.isEmpty()) {
+                try {
+                    context.getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE)
+                           .edit().putString("last_completed_sid", sessionId).apply();
+                } catch (Throwable ignored) {}
+            }
 
             Notification.Builder builder = new Notification.Builder(context);
             if (Build.VERSION.SDK_INT >= 26) {
@@ -244,7 +242,7 @@ public class NotifyReceiver extends BroadcastReceiver {
             }
 
             // Card Header: Use genuine session title if provided
-            String cleanSubtext = cleanEmoji(subtext);
+            String cleanSubtext = cleanEmoji(sessionTitle);
             String cardHeaderTitle = !cleanSubtext.isEmpty() ? cleanSubtext : "任务已全部完成";
 
             // BigTextStyle for rich clean view without emoji
@@ -295,5 +293,11 @@ public class NotifyReceiver extends BroadcastReceiver {
         } catch (Throwable t) {
             Log.e(TAG, "postCompletedNotification failed: " + t.getMessage(), t);
         }
+    }
+
+    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
+                                                 String title, String subtext, String content,
+                                                 int total, int completed, String sessionId) {
+        postCompletedNotification(context, nm, tag, id, title, subtext, content, sessionId);
     }
 }
