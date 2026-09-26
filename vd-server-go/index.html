@@ -170,15 +170,16 @@
             try {
                 const res = await fetch('/api/status');
                 const data = await res.json();
+                const modeText = data.mode === 'foreground' ? '前台' : (data.mode === 'background' ? '后台' : '待机');
                 if (data.status === 'running') {
                     const did = data.display_id !== undefined ? data.display_id : data.displayId;
                     if (!isStreaming) {
-                        statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ')';
+                        statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ') · ' + modeText;
                         statusEl.style.color = '#7ee787';
                     }
                     screenState = 'running';
                 } else {
-                    statusEl.innerText = '屏幕状态: 已休眠';
+                    statusEl.innerText = '屏幕状态: 已休眠 · ' + modeText;
                     statusEl.style.color = '#f85149';
                     canvasEl.style.display = 'none';
                     tipEl.style.display = 'block';

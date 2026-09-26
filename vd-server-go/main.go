@@ -541,23 +541,17 @@ func getTopAppStackOnDisplay(displayId int) (StackInfo, bool) {
 	return StackInfo{}, false
 }
 
-func handoffToBackground() map[string]interface{} {
-	st := getStatus()
-	vdDid := st.DisplayID
-	if vdDid <= 0 {
-		st = startVirtualDisplay()
-		vdDid = st.DisplayID
+func migrateTopStack(fromDisplayId int, toDisplayId int) (string, int) {
+	if fromDisplayId < 0 || toDisplayId < 0 || fromDisplayId == toDisplayId {
+		return "", 0
 	}
-
 	migratedComponent := ""
 	migratedTaskId := 0
 
-	// 1. Try finding top app stack via getTopAppStackOnDisplay
-	if topStack, ok := getTopAppStackOnDisplay(0); ok {
+	if topStack, ok := getTopAppStackOnDisplay(fromDisplayId); ok {
 		migratedComponent = topStack.TopAct
 		migratedTaskId = topStack.StackID
-	} else {
-		// Fallback: check topResumedActivity in dumpsys activity activities
+	} else if fromDisplayId == 0 {
 		out, _ := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep -A 8 "Display #0" | grep "topResumedActivity"`).Output()
 		re := regexp.MustCompile(`topResumedActivity=ActivityRecord\{[0-9a-fA-F]+\s+u0\s+([a-zA-Z0-9._]+/[a-zA-Z0-9._]+)\s+t(\d+)`)
 		if m := re.FindStringSubmatch(string(out)); len(m) > 2 {
@@ -569,47 +563,92 @@ func handoffToBackground() map[string]interface{} {
 		}
 	}
 
-	// 2. Perform clean stack migration if we found a valid user app on Display 0
-	if migratedTaskId > 0 && vdDid > 0 {
-		cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(migratedTaskId), strconv.Itoa(vdDid))
+	if migratedTaskId > 0 {
+		cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(migratedTaskId), strconv.Itoa(toDisplayId))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			fmt.Printf("[handoff] move-stack %d to %d error: %v, out: %s\n", migratedTaskId, vdDid, err, string(out))
+			fmt.Printf("[migrate] move-stack %d from %d to %d error: %v, out: %s\n", migratedTaskId, fromDisplayId, toDisplayId, err, string(out))
 		} else {
-			fmt.Printf("[handoff] Successfully moved stack %d (%s) to display %d\n", migratedTaskId, migratedComponent, vdDid)
+			fmt.Printf("[migrate] Successfully moved stack %d (%s) from display %d to %d\n", migratedTaskId, migratedComponent, fromDisplayId, toDisplayId)
+		}
+	}
+	return migratedComponent, migratedTaskId
+}
+
+func switchModeWithMigration(target string) map[string]interface{} {
+	oldMode := getCurrentMode()
+	lower := strings.ToLower(strings.TrimSpace(target))
+	var newMode string
+	if lower == "foreground" || lower == "fg" || lower == "0" {
+		newMode = "foreground"
+	} else if lower == "idle" || lower == "standby" || lower == "none" || lower == "-1" {
+		newMode = "idle"
+	} else {
+		newMode = "background"
+	}
+
+	st := getStatus()
+	vdDid := st.DisplayID
+
+	// If switching to background from any mode, ensure virtual display is running
+	if newMode == "background" {
+		if st.Status != "running" || vdDid <= 0 {
+			st = startVirtualDisplay()
+			vdDid = st.DisplayID
 		}
 	}
 
-	// 3. 模式设置为 background，并熄灭光效与胶囊
-	setCurrentMode("background")
+	migratedComp := ""
+	migratedTaskId := 0
 
-	// 4. 设置一次性消费通知给 LLM，告知后台接力成功且无需中断
-	setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display by user. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
+	// Migrate app stack ONLY between 0 (foreground) and vd (background); -1 (idle) never migrates
+	if oldMode == "foreground" && newMode == "background" && vdDid > 0 {
+		migratedComp, migratedTaskId = migrateTopStack(0, vdDid)
+		setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
+	} else if oldMode == "background" && newMode == "foreground" && vdDid > 0 {
+		migratedComp, migratedTaskId = migrateTopStack(vdDid, 0)
+		setPendingHandoffNotice("[System Notice: The task was brought to the foreground physical display 0. The active app has migrated and resumed on screen.]")
+	}
+
+	setCurrentMode(newMode)
+	st = getStatus()
+	targetDid := getTargetDisplayID(st)
+
+	msg := fmt.Sprintf("Current mode is %s (Target Display %d)", newMode, targetDid)
+	if newMode == "idle" {
+		msg = "Current mode is idle (No focused display, Display -1)"
+	}
 
 	return map[string]interface{}{
 		"success":            true,
-		"mode":               "background",
-		"target_display_id":  vdDid,
-		"migrated_component": migratedComponent,
+		"mode":               newMode,
+		"target_display_id":  targetDid,
+		"migrated_component": migratedComp,
 		"migrated_task_id":   migratedTaskId,
-		"message":            "Successfully handed off to background",
+		"message":            msg,
 	}
 }
 
+func handoffToBackground() map[string]interface{} {
+	return switchModeWithMigration("background")
+}
+
 func ensureTargetReady() (StatusResp, int, error) {
-	st := getStatus()
-	targetDid := getTargetDisplayID(st)
+	mode := getCurrentMode()
 	go updateCapsuleState()
 
-	if targetDid == 0 {
-		return st, 0, nil
+	if mode == "idle" {
+		return getStatus(), -1, fmt.Errorf("Agent is currently in idle mode (no focused display, display -1). Please switch mode to 'foreground' or 'background' first")
 	}
-	if targetDid < 0 {
-		return st, -1, fmt.Errorf("Agent is currently in idle mode (no focused display, display -1). Please switch mode to 'foreground' or 'background' first")
+	if mode == "foreground" {
+		return getStatus(), 0, nil
 	}
-	if st.Status != "running" {
+
+	// mode is background
+	st := getStatus()
+	if st.Status != "running" || st.DisplayID <= 0 {
 		st = startVirtualDisplay()
-		if st.Status != "running" {
+		if st.Status != "running" || st.DisplayID <= 0 {
 			return st, -1, fmt.Errorf("Virtual display not running")
 		}
 	}
@@ -1077,7 +1116,9 @@ func main() {
 				Mode string `json:"mode"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&p); err == nil && p.Mode != "" {
-				setCurrentMode(p.Mode)
+				res := switchModeWithMigration(p.Mode)
+				json.NewEncoder(w).Encode(res)
+				return
 			}
 		}
 		st := getStatus()
