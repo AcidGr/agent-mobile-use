@@ -246,8 +246,8 @@ public class DaemonMain {
             codec = MediaCodec.createEncoderByType("video/avc");
             MediaFormat format = MediaFormat.createVideoFormat("video/avc", sWidth, sHeight);
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 4000000); // 4 Mbps
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 6000000); // 6 Mbps
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 60);
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1); // 1s keyframe interval
             try {
                 format.setLong("repeat-previous-frame-after", 100000L); // 100ms
