@@ -1117,6 +1117,34 @@ func observationStatus(env map[string]any) string {
 	return fmt.Sprintf("tree %v nodes, %v/%v actionable", env["returned"], env["act_sent"], env["act_total"])
 }
 
+var userFlagRe = regexp.MustCompile(`(?i)(?:--user\s+|user\s*[:=]\s*|\|\s*user\s*=\s*)(\d+)`)
+
+func normalizeLaunchTarget(pkg, act string, user *int) (string, string, int) {
+	pkg = strings.TrimSpace(pkg)
+	act = strings.TrimSpace(act)
+	userId := 0
+	if user != nil {
+		userId = *user
+	}
+
+	if m := userFlagRe.FindStringSubmatch(pkg); len(m) > 1 {
+		if user == nil {
+			if u, err := strconv.Atoi(m[1]); err == nil {
+				userId = u
+			}
+		}
+		pkg = strings.TrimSpace(strings.ReplaceAll(pkg, m[0], ""))
+		pkg = strings.TrimRight(pkg, "| ")
+	}
+
+	if act == "" && strings.Contains(pkg, "/") {
+		parts := strings.SplitN(pkg, "/", 2)
+		pkg = strings.TrimSpace(parts[0])
+		act = strings.TrimSpace(parts[1])
+	}
+	return pkg, act, userId
+}
+
 func main() {
 	thawAppProcess()
 	startCapsuleWatchdog()
@@ -1344,6 +1372,11 @@ func main() {
 			env["width"] = dw
 			env["height"] = dh
 		}
+		if r.URL.Query().Get("raw") == "1" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte(observationText(env, rows)))
+			return
+		}
 		json.NewEncoder(w).Encode(ActionResponse{
 			Success: true,
 			Message: observationStatus(env),
@@ -1382,6 +1415,12 @@ func main() {
 				Success: false,
 				Message: fmt.Sprintf("Failed to list apps: %v", err),
 			})
+			return
+		}
+
+		if r.URL.Query().Get("raw") == "1" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte(trimmed))
 			return
 		}
 
@@ -1563,10 +1602,14 @@ func main() {
 			return
 		}
 
-		userId := 0
-		if p.User != nil {
-			userId = *p.User
+		pkg, act, userId := normalizeLaunchTarget(p.Package, p.Activity, p.User)
+		if pkg == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Missing package name"})
+			return
 		}
+		p.Package = pkg
+		p.Activity = act
 
 		// 1. Check if the requested app is already running in an activity stack for target userId
 		if existingStack, found := findStackForPackageAndActivity(p.Package, p.Activity, userId); found {
