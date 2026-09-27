@@ -2,133 +2,25 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>虚拟副屏实时监控</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        html { height: 100%; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #0f1117;
-            color: #e6edf3;
-            height: 100vh;
+        html, body {
+            width: 100%;
+            height: 100%;
             height: 100dvh;
+            background: #000000;
             overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 12px;
-        }
-        .header {
-            flex: 0 0 auto;
-            width: 100%;
-            max-width: 360px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        .status-text {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: #58a6ff;
-        }
-        .controls {
-            flex: 0 0 auto;
-            width: 100%;
-            max-width: 360px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 24px;
-            margin-bottom: 14px;
-        }
-        .btn-icon {
-            width: 52px;
-            height: 52px;
-            border-radius: 50%;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            border: 1.5px solid transparent;
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-            outline: none;
-            -webkit-tap-highlight-color: transparent;
-        }
-        .btn-icon svg {
-            width: 24px;
-            height: 24px;
-            transition: transform 0.2s ease;
-        }
-        .btn-icon:hover:not(:disabled) {
-            transform: translateY(-2px) scale(1.06);
-        }
-        .btn-icon:active:not(:disabled) {
-            transform: translateY(0) scale(0.92);
-        }
-        .btn-icon:disabled {
-            opacity: 0.35;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none !important;
-        }
-
-        /* 暗着 (Off / Inactive) 统一暗黑极简质感 */
-        .btn-stream-off,
-        .btn-audio-off,
-        .btn-screen-off {
-            background: #161b22;
-            color: #6e7681;
-            border-color: #30363d;
-            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
-        }
-        .btn-stream-off:hover:not(:disabled),
-        .btn-audio-off:hover:not(:disabled),
-        .btn-screen-off:hover:not(:disabled) {
-            background: #21262d;
-            color: #c9d1d9;
-            border-color: #484f58;
-        }
-
-        /* 亮着 (On / Active) 鲜亮荧光与光晕 */
-        /* 1. 视频流胶卷按钮开启态: 炫彩紫蓝直通光效 */
-        .btn-stream-on {
-            background: linear-gradient(135deg, #1f6feb, #8957e5);
-            color: #ffffff;
-            border-color: #a371f7;
-            box-shadow: 0 0 18px rgba(137, 87, 229, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-        }
-
-        /* 2. 静音喇叭按钮开启态: 金黄守护警示光效 */
-        .btn-audio-on {
-            background: linear-gradient(135deg, #b08800, #d29922);
-            color: #ffffff;
-            border-color: #e3b341;
-            box-shadow: 0 0 18px rgba(210, 153, 34, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-        }
-        .btn-audio-on .icon-mute-x { display: inline; }
-        .btn-audio-on .icon-sound-waves { display: none; }
-        .btn-audio-off .icon-mute-x { display: none; }
-        .btn-audio-off .icon-sound-waves { display: inline; }
-
-        /* 3. 电源开关按钮开启态: 翡翠鲜活运行光效 */
-        .btn-screen-on {
-            background: linear-gradient(135deg, #238636, #2ea043);
-            color: #ffffff;
-            border-color: #3fb950;
-            box-shadow: 0 0 18px rgba(46, 160, 67, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+            position: relative;
         }
         .screen-box {
-            position: relative;
-            flex: 1 1 0;
-            min-height: 0;
-            width: min(90vw, 360px);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             background: #000000;
-            border: 2px solid #30363d;
-            border-radius: 12px;
-            overflow: hidden;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -143,32 +35,100 @@
             pointer-events: none;
         }
         #empty-tip {
-            color: #8b949e;
-            font-size: 0.9rem;
+            color: #484f58;
+            font-size: 0.95rem;
             text-align: center;
-            line-height: 1.6;
+            letter-spacing: 0.5px;
         }
-        .footer-note {
-            flex: 0 0 auto;
-            margin-top: 10px;
-            font-size: 0.75rem;
-            color: #8b949e;
-            text-align: center;
+        .controls {
+            position: fixed;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 32px;
+            pointer-events: auto;
         }
-        @media (max-height: 520px) {
-            body { height: auto; min-height: 100vh; overflow: auto; }
-            .screen-box { flex: 0 0 auto; min-height: 240px; }
+        .btn-icon {
+            width: 44px;
+            height: 44px;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            background: transparent !important;
+            border: none !important;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .btn-icon svg {
+            width: 26px;
+            height: 26px;
+            transition: transform 0.2s ease, filter 0.25s ease, color 0.25s ease;
+        }
+        .btn-icon:hover:not(:disabled) svg {
+            transform: scale(1.15);
+        }
+        .btn-icon:active:not(:disabled) svg {
+            transform: scale(0.9);
+        }
+        .btn-icon:disabled {
+            opacity: 0.25;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        /* 暗着 (Off / Inactive) 极简低调暗色 */
+        .btn-stream-off,
+        .btn-audio-off,
+        .btn-screen-off {
+            color: rgba(255, 255, 255, 0.28);
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+        }
+        .btn-stream-off:hover:not(:disabled),
+        .btn-audio-off:hover:not(:disabled),
+        .btn-screen-off:hover:not(:disabled) {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        /* 亮着 (On / Active) 鲜亮发光效果 */
+        /* 1. 视频流胶卷按钮开启态: 极光紫蓝荧光 */
+        .btn-stream-on {
+            color: #a371f7;
+            filter: drop-shadow(0 0 10px rgba(163, 113, 247, 0.9)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+        }
+
+        /* 2. 静音喇叭按钮开启态: 暖金警示荧光 */
+        .btn-audio-on {
+            color: #e3b341;
+            filter: drop-shadow(0 0 10px rgba(227, 179, 65, 0.9)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+        }
+        .btn-audio-on .icon-mute-x { display: inline; }
+        .btn-audio-on .icon-sound-waves { display: none; }
+        .btn-audio-off .icon-mute-x { display: none; }
+        .btn-audio-off .icon-sound-waves { display: inline; }
+
+        /* 3. 电源开关按钮开启态: 翡翠鲜活荧光 */
+        .btn-screen-on {
+            color: #3fb950;
+            filter: drop-shadow(0 0 10px rgba(63, 185, 80, 0.95)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div id="status-display" class="status-text">检测状态中...</div>
+    <div class="screen-box">
+        <canvas id="stream-canvas"></canvas>
+        <div id="empty-tip">副屏未启动</div>
     </div>
 
     <div class="controls">
         <button id="btn-stream" class="btn-icon btn-stream-off" onclick="toggleStream()" title="开启/暂停视频流">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
                 <rect x="2" y="3.5" width="20" height="17" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
                 <line x1="2" y1="7.5" x2="22" y2="7.5" stroke="currentColor" stroke-width="1.4"/>
                 <line x1="2" y1="16.5" x2="22" y2="16.5" stroke="currentColor" stroke-width="1.4"/>
@@ -184,7 +144,7 @@
             </svg>
         </button>
         <button id="btn-audio" class="btn-icon btn-audio-on" onclick="toggleAudioMute()" title="副屏静音: 开 (点击切换 / 双击一键全解)">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="currentColor"/>
                 <g class="icon-mute-x">
                     <line x1="21" y1="10" x2="16" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -197,22 +157,14 @@
             </svg>
         </button>
         <button id="btn-toggle" class="btn-icon btn-screen-on" onclick="toggleScreen()" title="开启/关闭副屏">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
                 <path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
                 <line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
             </svg>
         </button>
     </div>
 
-    <div class="screen-box">
-        <canvas id="stream-canvas"></canvas>
-        <div id="empty-tip">副屏未启动</div>
-    </div>
-
-    <div class="footer-note">H.264 硬件直通 / WebCodecs 原生硬解 / 零多余常驻功耗</div>
-
     <script>
-        const statusEl = document.getElementById('status-display');
         const canvasEl = document.getElementById('stream-canvas');
         const ctx = canvasEl.getContext('2d');
         const tipEl = document.getElementById('empty-tip');
@@ -297,17 +249,9 @@
             try {
                 const res = await fetch('/api/status');
                 const data = await res.json();
-                const modeText = data.mode === 'foreground' ? '前台' : (data.mode === 'background' ? '后台' : '待机');
                 if (data.status === 'running') {
-                    const did = data.display_id !== undefined ? data.display_id : data.displayId;
-                    if (!isStreaming) {
-                        statusEl.innerText = '屏幕状态: 运行中 (Display ' + did + ') · ' + modeText;
-                        statusEl.style.color = '#7ee787';
-                    }
                     screenState = 'running';
                 } else {
-                    statusEl.innerText = '屏幕状态: 已休眠 · ' + modeText;
-                    statusEl.style.color = '#f85149';
                     canvasEl.style.display = 'none';
                     tipEl.style.display = 'block';
                     tipEl.innerText = '副屏未启动';
@@ -315,8 +259,8 @@
                     stopStream();
                 }
             } catch (e) {
-                statusEl.innerText = '无法连接服务';
-                statusEl.style.color = '#f85149';
+                tipEl.style.display = 'block';
+                tipEl.innerText = '无法连接服务';
                 screenState = 'unreachable';
                 stopStream();
             }
@@ -369,8 +313,6 @@
                 isStreaming = true;
                 streamBtn.className = 'btn-icon btn-stream-on';
                 streamBtn.title = '视频流运行中 (点击暂停)';
-                statusEl.innerText = '视频流运行中 (H.264 硬件直通)';
-                statusEl.style.color = '#a371f7';
             };
 
             ws.onmessage = (event) => {
@@ -409,10 +351,6 @@
             isStreaming = false;
             streamBtn.className = 'btn-icon btn-stream-off';
             streamBtn.title = '视频流已暂停 (点击开启)';
-            if (screenState === 'running') {
-                statusEl.innerText = '视频流已暂停';
-                statusEl.style.color = '#7ee787';
-            }
         }
 
         function toggleStream() {
