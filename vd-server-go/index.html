@@ -38,50 +38,87 @@
             width: 100%;
             max-width: 360px;
             display: flex;
-            gap: 10px;
-            margin-bottom: 12px;
+            justify-content: center;
+            align-items: center;
+            gap: 24px;
+            margin-bottom: 14px;
         }
-        button {
-            flex: 1;
-            padding: 10px 0;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            font-weight: 500;
+        .btn-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             cursor: pointer;
-            border: 1px solid transparent;
-            transition: opacity 0.2s;
+            border: 1.5px solid transparent;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
         }
-        button:active { opacity: 0.75; }
-        button:disabled { opacity: 0.5; cursor: default; }
-        .btn-stream {
-            background: #1f6feb;
-            color: #ffffff;
-            border-color: #388bfd;
+        .btn-icon svg {
+            width: 24px;
+            height: 24px;
+            transition: transform 0.2s ease;
         }
-        .btn-stream-active {
-            background: #8957e5;
+        .btn-icon:hover:not(:disabled) {
+            transform: translateY(-2px) scale(1.06);
+        }
+        .btn-icon:active:not(:disabled) {
+            transform: translateY(0) scale(0.92);
+        }
+        .btn-icon:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none !important;
+        }
+
+        /* 暗着 (Off / Inactive) 统一暗黑极简质感 */
+        .btn-stream-off,
+        .btn-audio-off,
+        .btn-screen-off {
+            background: #161b22;
+            color: #6e7681;
+            border-color: #30363d;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+        }
+        .btn-stream-off:hover:not(:disabled),
+        .btn-audio-off:hover:not(:disabled),
+        .btn-screen-off:hover:not(:disabled) {
+            background: #21262d;
+            color: #c9d1d9;
+            border-color: #484f58;
+        }
+
+        /* 亮着 (On / Active) 鲜亮荧光与光晕 */
+        /* 1. 视频流胶卷按钮开启态: 炫彩紫蓝直通光效 */
+        .btn-stream-on {
+            background: linear-gradient(135deg, #1f6feb, #8957e5);
             color: #ffffff;
             border-color: #a371f7;
+            box-shadow: 0 0 18px rgba(137, 87, 229, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
         }
+
+        /* 2. 静音喇叭按钮开启态: 金黄守护警示光效 */
         .btn-audio-on {
-            background: #238636;
+            background: linear-gradient(135deg, #b08800, #d29922);
             color: #ffffff;
-            border-color: #2ea043;
+            border-color: #e3b341;
+            box-shadow: 0 0 18px rgba(210, 153, 34, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
         }
-        .btn-audio-off {
-            background: #21262d;
-            color: #8b949e;
-            border-color: #30363d;
-        }
-        .btn-stop {
-            background: #b62324;
+        .btn-audio-on .icon-mute-x { display: inline; }
+        .btn-audio-on .icon-sound-waves { display: none; }
+        .btn-audio-off .icon-mute-x { display: none; }
+        .btn-audio-off .icon-sound-waves { display: inline; }
+
+        /* 3. 电源开关按钮开启态: 翡翠鲜活运行光效 */
+        .btn-screen-on {
+            background: linear-gradient(135deg, #238636, #2ea043);
             color: #ffffff;
-            border-color: #da3633;
-        }
-        .btn-start {
-            background: #238636;
-            color: #ffffff;
-            border-color: #2ea043;
+            border-color: #3fb950;
+            box-shadow: 0 0 18px rgba(46, 160, 67, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
         }
         .screen-box {
             position: relative;
@@ -130,9 +167,41 @@
     </div>
 
     <div class="controls">
-        <button id="btn-stream" class="btn-stream" onclick="toggleStream()">开启视频流</button>
-        <button id="btn-audio" class="btn-audio-on" onclick="toggleAudioMute()">副屏静音: 开</button>
-        <button id="btn-toggle" class="btn-stop" onclick="toggleScreen()">关闭副屏</button>
+        <button id="btn-stream" class="btn-icon btn-stream-off" onclick="toggleStream()" title="开启/暂停视频流">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                <rect x="2" y="3.5" width="20" height="17" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+                <line x1="2" y1="7.5" x2="22" y2="7.5" stroke="currentColor" stroke-width="1.4"/>
+                <line x1="2" y1="16.5" x2="22" y2="16.5" stroke="currentColor" stroke-width="1.4"/>
+                <rect x="4.2" y="4.8" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="8.9" y="4.8" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="13.6" y="4.8" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="18.3" y="4.8" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="4.2" y="17.7" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="8.9" y="17.7" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="13.6" y="17.7" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <rect x="18.3" y="17.7" width="2.2" height="1.5" rx="0.4" fill="currentColor"/>
+                <polygon points="10.5,9.8 15.5,12 10.5,14.2" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <button id="btn-audio" class="btn-icon btn-audio-on" onclick="toggleAudioMute()" title="副屏静音: 开 (点击切换 / 双击一键全解)">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="currentColor"/>
+                <g class="icon-mute-x">
+                    <line x1="21" y1="10" x2="16" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <line x1="16" y1="10" x2="21" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </g>
+                <g class="icon-sound-waves">
+                    <path d="M15.5 9a4.5 4.5 0 0 1 0 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M18.8 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </g>
+            </svg>
+        </button>
+        <button id="btn-toggle" class="btn-icon btn-screen-on" onclick="toggleScreen()" title="开启/关闭副屏">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                <line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+            </svg>
+        </button>
     </div>
 
     <div class="screen-box">
@@ -172,13 +241,11 @@
         function updateAudioBtn() {
             if (!audioBtn) return;
             if (audioMuteEnabled) {
-                audioBtn.className = 'btn-audio-on';
-                audioBtn.innerText = '副屏静音: 开';
-                audioBtn.title = '副屏程序自动静音已启用 (双击一键全解)';
+                audioBtn.className = 'btn-icon btn-audio-on';
+                audioBtn.title = '副屏静音: 开 (点击切换 / 双击一键全解)';
             } else {
-                audioBtn.className = 'btn-audio-off';
-                audioBtn.innerText = '副屏静音: 关';
-                audioBtn.title = '副屏程序静音已关闭 (双击一键全解)';
+                audioBtn.className = 'btn-icon btn-audio-off';
+                audioBtn.title = '副屏静音: 关 (点击切换 / 双击一键全解)';
             }
         }
 
@@ -207,19 +274,19 @@
 
         function renderToggle() {
             if (screenState === 'running') {
-                toggleEl.className = 'btn-stop';
-                toggleEl.innerText = '关闭副屏';
+                toggleEl.className = 'btn-icon btn-screen-on';
+                toggleEl.title = '副屏运行中 (点击关闭)';
                 toggleEl.disabled = false;
                 streamBtn.disabled = false;
             } else if (screenState === 'stopped') {
-                toggleEl.className = 'btn-start';
-                toggleEl.innerText = '开启副屏';
+                toggleEl.className = 'btn-icon btn-screen-off';
+                toggleEl.title = '副屏已休眠 (点击开启)';
                 toggleEl.disabled = false;
                 streamBtn.disabled = true;
                 stopStream();
             } else {
-                toggleEl.className = 'btn-start';
-                toggleEl.innerText = '服务未连接';
+                toggleEl.className = 'btn-icon btn-screen-off';
+                toggleEl.title = '服务未连接';
                 toggleEl.disabled = true;
                 streamBtn.disabled = true;
                 stopStream();
@@ -300,8 +367,8 @@
 
             ws.onopen = () => {
                 isStreaming = true;
-                streamBtn.innerText = '暂停视频流';
-                streamBtn.className = 'btn-stream-active';
+                streamBtn.className = 'btn-icon btn-stream-on';
+                streamBtn.title = '视频流运行中 (点击暂停)';
                 statusEl.innerText = '视频流运行中 (H.264 硬件直通)';
                 statusEl.style.color = '#a371f7';
             };
@@ -340,8 +407,8 @@
                 decoder = null;
             }
             isStreaming = false;
-            streamBtn.innerText = '开启视频流';
-            streamBtn.className = 'btn-stream';
+            streamBtn.className = 'btn-icon btn-stream-off';
+            streamBtn.title = '视频流已暂停 (点击开启)';
             if (screenState === 'running') {
                 statusEl.innerText = '视频流已暂停';
                 statusEl.style.color = '#7ee787';
@@ -362,7 +429,7 @@
             toggleEl.disabled = true;
 
             const wasRunning = screenState === 'running';
-            toggleEl.innerText = wasRunning ? '正在关闭...' : '正在开启...';
+            toggleEl.title = wasRunning ? '正在关闭副屏...' : '正在开启副屏...';
             try {
                 await fetch(wasRunning ? '/api/stop' : '/api/start', { method: 'POST' });
             } catch (e) {}
