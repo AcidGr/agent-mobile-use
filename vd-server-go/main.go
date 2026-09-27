@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
@@ -333,6 +334,7 @@ func setSessionActive(active bool, sid string, title string) {
 		modeMu.Lock()
 		currentMode = "idle"
 		modeMu.Unlock()
+		syncA11yWithTargetDisplay(-1)
 	}
 
 	sessionMetaMu.Lock()
@@ -681,6 +683,7 @@ func switchModeWithMigration(target string) map[string]interface{} {
 	setCurrentMode(newMode)
 	st = getStatus()
 	targetDid := getTargetDisplayID(st)
+	syncA11yWithTargetDisplay(targetDid)
 
 	if newMode == "background" && vdDid > 0 {
 		reconcileVdAudio(vdDid)
@@ -816,6 +819,7 @@ func startVirtualDisplay() StatusResp {
 		time.Sleep(100 * time.Millisecond)
 		st = getStatus()
 		if st.Status == "running" {
+			syncA11yWithTargetDisplay(getTargetDisplayID(st))
 			return st
 		}
 	}
@@ -828,6 +832,7 @@ func stopVirtualDisplay() StatusResp {
 		time.Sleep(100 * time.Millisecond)
 		st := getStatus()
 		if st.Status == "stopped" {
+			syncA11yWithTargetDisplay(getTargetDisplayID(st))
 			return st
 		}
 	}
@@ -839,18 +844,25 @@ func stopVirtualDisplay() StatusResp {
 		}
 	}
 	_ = os.WriteFile(statusFile, []byte(`{"status":"stopped","display_id":-1}`), 0644)
+	syncA11yWithTargetDisplay(getTargetDisplayID(getStatus()))
 	return getStatus()
 }
 
-// ── Accessibility service wrapper ──
+// ── Accessibility service lifecycle guard ──
 // Certain apps (e.g. WeChat) only expose their accessibility node tree while a real
-// service is bound. We temporarily append SelectToSpeakService during tree reads.
-const a11yService = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+// service is bound. We attach SelectToSpeakService when mode is active (targetDid >= 0)
+// and cleanly detach it when entering idle mode (targetDid < 0) or shutting down,
+// preserving any other user-enabled accessibility services.
+const (
+	a11yService    = "com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+	a11yKey        = "enabled_accessibility_services"
+	a11yMarkerFile = "/data/local/tmp/vd_a11y_attached"
+)
 
-const a11yKey = "enabled_accessibility_services"
-
-// Serialises the toggle so two concurrent tool calls cannot interleave their save/restore.
-var a11yToggleMu sync.Mutex
+var (
+	a11yAttachedByUs bool
+	a11yMu           sync.Mutex
+)
 
 func readSecure(key string) string {
 	out, err := exec.Command("/system/bin/settings", "get", "secure", key).Output()
@@ -872,55 +884,60 @@ func deleteSecure(key string) {
 	_ = exec.Command("/system/bin/settings", "delete", "secure", key).Run()
 }
 
-// toolReadsTree reports whether a tool command reads the accessibility tree.
-func toolReadsTree(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	switch args[0] {
-	case "tree", "dump", "type":
-		return true
-	}
-	return false
-}
-
-// withA11yService binds the accessibility service around fn and then restores the
-// device's setting exactly as it was.
-func withA11yService(fn func() (string, error)) (string, error) {
-	a11yToggleMu.Lock()
-	defer a11yToggleMu.Unlock()
+func ensureA11yServiceAttached() {
+	a11yMu.Lock()
+	defer a11yMu.Unlock()
 
 	orig := readSecure(a11yKey)
-	if strings.Contains(orig, a11yService) {
-		// Already there — either the user enabled it, or it is left over from an
-		// interrupted call. Either way it is not ours to remove.
-		return fn()
+	parts := strings.Split(orig, ":")
+	for _, p := range parts {
+		if strings.TrimSpace(p) == a11yService {
+			return
+		}
 	}
-
 	merged := a11yService
 	if orig != "" {
 		merged = orig + ":" + a11yService
 	}
 	writeSecure(a11yKey, merged)
+	a11yAttachedByUs = true
+	_ = os.WriteFile(a11yMarkerFile, []byte("1"), 0644)
+}
 
-	out, err := fn()
+func ensureA11yServiceDetached() {
+	a11yMu.Lock()
+	defer a11yMu.Unlock()
 
-	if orig == "" {
+	if _, err := os.Stat(a11yMarkerFile); !a11yAttachedByUs && err != nil {
+		return
+	}
+	orig := readSecure(a11yKey)
+	parts := strings.Split(orig, ":")
+	var remaining []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" && trimmed != a11yService {
+			remaining = append(remaining, trimmed)
+		}
+	}
+	if len(remaining) == 0 {
 		deleteSecure(a11yKey)
 	} else {
-		writeSecure(a11yKey, orig)
+		writeSecure(a11yKey, strings.Join(remaining, ":"))
 	}
-	return out, err
+	a11yAttachedByUs = false
+	_ = os.Remove(a11yMarkerFile)
+}
+
+func syncA11yWithTargetDisplay(targetDid int) {
+	if targetDid >= 0 {
+		ensureA11yServiceAttached()
+	} else {
+		ensureA11yServiceDetached()
+	}
 }
 
 func runTool(args ...string) (string, error) {
-	if toolReadsTree(args) {
-		return withA11yService(func() (string, error) { return runToolRaw(args...) })
-	}
-	return runToolRaw(args...)
-}
-
-func runToolRaw(args ...string) (string, error) {
 	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
 	if _, err := os.Stat(dexPath); err != nil {
 		dexPath = "/data/local/tmp/agent_tools.dex"
@@ -1104,6 +1121,20 @@ func main() {
 	thawAppProcess()
 	startCapsuleWatchdog()
 	initAudioGuard()
+
+	// Initial sync of a11y service state with target display
+	st := getStatus()
+	syncA11yWithTargetDisplay(getTargetDisplayID(st))
+
+	// Clean up a11y service on graceful termination
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		ensureA11yServiceDetached()
+		os.Exit(0)
+	}()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
