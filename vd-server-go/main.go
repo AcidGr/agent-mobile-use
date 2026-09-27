@@ -674,10 +674,9 @@ func switchModeWithMigration(target string) map[string]interface{} {
 	// Migrate app stack ONLY between 0 (foreground) and vd (background); -1 (idle) never migrates
 	if oldMode == "foreground" && newMode == "background" && vdDid > 0 {
 		migratedComp, migratedTaskId = migrateTopStack(0, vdDid)
-		setPendingHandoffNotice("[System Notice: The task was smoothly handed off to the virtual background display. The active app has migrated and resumed. No special action required; continue your next step as planned.]")
+		setPendingHandoffNotice("[System Notice: Mode was set to background by user. Keep running silently in the background; do not change display mode.]")
 	} else if oldMode == "background" && newMode == "foreground" && vdDid > 0 {
 		migratedComp, migratedTaskId = migrateTopStack(vdDid, 0)
-		setPendingHandoffNotice("[System Notice: The task was brought to the foreground physical display 0. The active app has migrated and resumed on screen.]")
 	}
 
 	setCurrentMode(newMode)
