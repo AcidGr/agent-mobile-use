@@ -689,6 +689,12 @@ func switchModeWithMigration(target string) map[string]interface{} {
 	st = getStatus()
 	targetDid := getTargetDisplayID(st)
 
+	if newMode == "background" && vdDid > 0 {
+		reconcileVdAudio(vdDid)
+	} else if newMode == "foreground" || newMode == "idle" {
+		unmuteAllAudio()
+	}
+
 	msg := fmt.Sprintf("Current mode is %s (Target Display %d)", newMode, targetDid)
 	if newMode == "idle" {
 		msg = "Current mode is idle (No focused display, Display -1)"
@@ -1170,6 +1176,7 @@ func resolveSessionTitle(sessionID string) string {
 func main() {
 	thawAppProcess()
 	startCapsuleWatchdog()
+	initAudioGuard()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -1608,6 +1615,11 @@ func main() {
 				cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(existingStack.StackID), strconv.Itoa(targetDid))
 				out, err := cmd.CombinedOutput()
 				if err == nil {
+					if targetDid > 0 && isAudioMuteEnabled() {
+						setPackageMuted(p.Package, userId, true)
+					} else if targetDid == 0 {
+						setPackageMuted(p.Package, userId, false)
+					}
 					userDesc := ""
 					if userId != 0 {
 						userDesc = fmt.Sprintf(" (user %d)", userId)
@@ -1662,6 +1674,11 @@ func main() {
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out), Notice: popPendingHandoffNotice()})
 			return
+		}
+		if targetDid > 0 && isAudioMuteEnabled() {
+			setPackageMuted(p.Package, userId, true)
+		} else if targetDid == 0 {
+			setPackageMuted(p.Package, userId, false)
 		}
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out), Notice: popPendingHandoffNotice()})
 	})
@@ -1975,6 +1992,49 @@ func main() {
 			"output":    string(out),
 			"exit_code": exitCode,
 			"success":   exitCode == 0,
+		})
+	})
+
+	mux.HandleFunc("/api/audio/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		audioMu.Lock()
+		mutedList := make([]string, 0, len(mutedPackages))
+		for p := range mutedPackages {
+			mutedList = append(mutedList, p)
+		}
+		enabled := vdAudioMuteEnabled
+		audioMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{
+			"enabled": enabled,
+			"muted":   mutedList,
+		})
+	})
+
+	mux.HandleFunc("/api/audio/toggle", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		var p struct {
+			Enabled *bool `json:"enabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		target := !isAudioMuteEnabled()
+		if p.Enabled != nil {
+			target = *p.Enabled
+		}
+		setAudioMuteEnabled(target)
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":      true,
+			"enabled": target,
+		})
+	})
+
+	mux.HandleFunc("/api/audio/unmute-all", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		unmuteAllAudio()
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
 		})
 	})
 

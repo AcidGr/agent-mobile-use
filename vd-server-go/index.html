@@ -63,6 +63,16 @@
             color: #ffffff;
             border-color: #a371f7;
         }
+        .btn-audio-on {
+            background: #238636;
+            color: #ffffff;
+            border-color: #2ea043;
+        }
+        .btn-audio-off {
+            background: #21262d;
+            color: #8b949e;
+            border-color: #30363d;
+        }
         .btn-stop {
             background: #b62324;
             color: #ffffff;
@@ -121,6 +131,7 @@
 
     <div class="controls">
         <button id="btn-stream" class="btn-stream" onclick="toggleStream()">开启视频流</button>
+        <button id="btn-audio" class="btn-audio-on" onclick="toggleAudioMute()">副屏静音: 开</button>
         <button id="btn-toggle" class="btn-stop" onclick="toggleScreen()">关闭副屏</button>
     </div>
 
@@ -138,12 +149,61 @@
         const tipEl = document.getElementById('empty-tip');
         const toggleEl = document.getElementById('btn-toggle');
         const streamBtn = document.getElementById('btn-stream');
+        const audioBtn = document.getElementById('btn-audio');
 
         let screenState = 'unreachable';
         let toggling = false;
         let isStreaming = false;
+        let audioMuteEnabled = true;
         let ws = null;
         let decoder = null;
+
+        async function fetchAudioStatus() {
+            try {
+                const res = await fetch('/api/audio/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    audioMuteEnabled = data.enabled;
+                    updateAudioBtn();
+                }
+            } catch (e) {}
+        }
+
+        function updateAudioBtn() {
+            if (!audioBtn) return;
+            if (audioMuteEnabled) {
+                audioBtn.className = 'btn-audio-on';
+                audioBtn.innerText = '副屏静音: 开';
+                audioBtn.title = '副屏程序自动静音已启用 (双击一键全解)';
+            } else {
+                audioBtn.className = 'btn-audio-off';
+                audioBtn.innerText = '副屏静音: 关';
+                audioBtn.title = '副屏程序静音已关闭 (双击一键全解)';
+            }
+        }
+
+        async function toggleAudioMute() {
+            try {
+                const res = await fetch('/api/audio/toggle', { method: 'POST', body: JSON.stringify({ enabled: !audioMuteEnabled }) });
+                if (res.ok) {
+                    const data = await res.json();
+                    audioMuteEnabled = data.enabled;
+                    updateAudioBtn();
+                }
+            } catch (e) {}
+        }
+
+        if (audioBtn) {
+            audioBtn.addEventListener('dblclick', async (e) => {
+                e.preventDefault();
+                try {
+                    await fetch('/api/audio/unmute-all', { method: 'POST' });
+                    audioMuteEnabled = false;
+                    updateAudioBtn();
+                    alert('已强制恢复所有应用声音');
+                } catch (e) {}
+            });
+        }
 
         function renderToggle() {
             if (screenState === 'running') {
@@ -194,6 +254,7 @@
                 stopStream();
             }
             renderToggle();
+            fetchAudioStatus();
             return screenState;
         }
 

@@ -13,6 +13,6 @@ echo "[build] Testing vd_server..."
 go test ./...
 
 echo "[build] Statically compiling vd_server (ARM64)..."
-CGO_ENABLED=0 go build -ldflags="-s -w -extldflags '-static'" -o vd_server main.go
+CGO_ENABLED=0 go build -ldflags="-s -w -extldflags '-static'" -o vd_server .
 echo "[build] Done: vd_server binary ready."
 ls -lh vd_server
