@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -241,6 +242,13 @@ func popPendingHandoffNotice() string {
 	return n
 }
 
+func injectNoticeHeader(w http.ResponseWriter) {
+	if n := popPendingHandoffNotice(); n != "" {
+		w.Header().Set("X-Agent-Notice", url.QueryEscape(n))
+		w.Header().Set("Access-Control-Expose-Headers", "X-Agent-Notice")
+	}
+}
+
 func getCurrentMode() string {
 	modeMu.Lock()
 	defer modeMu.Unlock()
@@ -287,13 +295,14 @@ func getAppUID() string {
 			}
 		}
 	}
-	return "10044"
+	return ""
 }
 
 func thawAppProcess() {
-	uid := getAppUID()
 	_ = exec.Command("/system/bin/cmd", "activity", "unfreeze", "--sticky", "com.agent.mobileuse").Run()
-	_ = exec.Command("/system/bin/sh", "-c", fmt.Sprintf("echo 0 > /sys/fs/cgroup/apps/uid_%s/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_%s/cgroup.freeze 2>/dev/null", uid, uid)).Run()
+	if uid := getAppUID(); uid != "" {
+		_ = exec.Command("/system/bin/sh", "-c", fmt.Sprintf("echo 0 > /sys/fs/cgroup/apps/uid_%s/cgroup.freeze 2>/dev/null; echo 0 > /sys/fs/cgroup/uid_%s/cgroup.freeze 2>/dev/null", uid, uid)).Run()
+	}
 }
 
 var (
@@ -339,14 +348,7 @@ func setSessionActive(active bool, sid string, title string) {
 				lastCompletedSessionIDMu.Unlock()
 			}
 		}
-		// Priority 1: Authoritative disk resolution of genuine session title
-		resolved := ""
-		if activeSessionID != "" {
-			resolved = resolveSessionTitle(activeSessionID)
-		}
-		if resolved != "" {
-			activeSessionTitle = resolved
-		} else if title != "" && title != "移动端任务" && title != "闲聊" {
+		if title != "" && title != "移动端任务" && title != "闲聊" {
 			activeSessionTitle = title
 		} else if activeSessionTitle == "" {
 			activeSessionTitle = "移动端任务"
@@ -417,15 +419,6 @@ func updateCapsuleState() {
 	curPID := getGlowPID()
 
 	sid, title := getSessionMeta()
-	// Re-verify from disk if active to catch async title summarization
-	if action != "STOP" && sid != "" {
-		if resolved := resolveSessionTitle(sid); resolved != "" {
-			title = resolved
-			sessionMetaMu.Lock()
-			activeSessionTitle = resolved
-			sessionMetaMu.Unlock()
-		}
-	}
 
 	if action == "STOP" {
 		if !isGlowServiceAlive() && lastAppliedCapsuleAction == "STOP" {
@@ -976,7 +969,6 @@ type ActionResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
 	Data    any    `json:"data,omitempty"`
-	Notice  string `json:"notice,omitempty"`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1108,67 +1100,6 @@ func observationStatus(env map[string]any) string {
 	return fmt.Sprintf("tree %v nodes, %v/%v actionable", env["returned"], env["act_sent"], env["act_total"])
 }
 
-func resolveSessionTitle(sessionID string) string {
-	if sessionID == "" {
-		return ""
-	}
-	// Try loading from session_projcache
-	candidatePaths := []string{
-		fmt.Sprintf("/data/local/ubuntu/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID),
-		fmt.Sprintf("/root/.dsh/storages/session_projcache/sessions/%s.json", sessionID),
-	}
-	for _, sessionPath := range candidatePaths {
-		data, err := os.ReadFile(sessionPath)
-		if err == nil {
-			var root struct {
-				Record struct {
-					Rows struct {
-						Title struct {
-							Val string `json:"val"`
-						} `json:"title"`
-					} `json:"rows"`
-				} `json:"record"`
-			}
-			if json.Unmarshal(data, &root) == nil {
-				title := strings.TrimSpace(root.Record.Rows.Title.Val)
-				if title != "" {
-					return title
-				}
-			}
-		}
-	}
-
-	// Fallback: check workspace.json
-	wsPaths := []string{
-		"/data/local/ubuntu/root/.dsh/storages/workspace.json",
-		"/root/.dsh/storages/workspace.json",
-	}
-	for _, wsPath := range wsPaths {
-		wsData, err := os.ReadFile(wsPath)
-		if err == nil {
-			var wsRoot map[string]any
-			if json.Unmarshal(wsData, &wsRoot) == nil {
-				if wsList, ok := wsRoot["workspaces"].(map[string]any); ok {
-					for _, v := range wsList {
-						if wsMap, ok := v.(map[string]any); ok {
-							if sIds, ok := wsMap["sessionIds"].([]any); ok {
-								for _, s := range sIds {
-									if sStr, ok := s.(string); ok && sStr == sessionID {
-										if t, ok := wsMap["title"].(string); ok && strings.TrimSpace(t) != "" {
-											return strings.TrimSpace(t)
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 func main() {
 	thawAppProcess()
 	startCapsuleWatchdog()
@@ -1284,6 +1215,7 @@ func main() {
 
 	mux.HandleFunc("/api/screenshot", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
@@ -1334,6 +1266,7 @@ func main() {
 	mux.HandleFunc("/api/dump_ui", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		st, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1349,13 +1282,11 @@ func main() {
 		}
 		out, err := runTool(treeArgs...)
 		trimmed := strings.TrimSpace(out)
-		notice := popPendingHandoffNotice()
 		if err != nil || trimmed == "" {
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: false,
 				Message: "UI dump failed: the accessibility tree could not be read for this display",
 				Data:    trimmed,
-				Notice:  notice,
 			})
 			return
 		}
@@ -1368,7 +1299,6 @@ func main() {
 				Success: false,
 				Message: "UI dump did not start with a readable status header",
 				Data:    trimmed,
-				Notice:  notice,
 			})
 			return
 		}
@@ -1387,13 +1317,13 @@ func main() {
 			Success: true,
 			Message: observationStatus(env),
 			Data:    observationText(env, rows),
-			Notice:  notice,
 		})
 	})
 
 	mux.HandleFunc("/api/apps", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 
 		query := r.URL.Query().Get("query")
 		if query == "" {
@@ -1431,8 +1361,10 @@ func main() {
 		})
 	})
 
-	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1465,15 +1397,16 @@ func main() {
 			cmd = exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
 		}
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true})
 	})
 
 	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1502,15 +1435,16 @@ func main() {
 		cmd := exec.Command("/system/bin/input", "-d", did, "swipe",
 			strconv.Itoa(p.X1), strconv.Itoa(p.Y1), strconv.Itoa(p.X2), strconv.Itoa(p.Y2), strconv.Itoa(p.Duration))
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true})
 	})
 
 	mux.HandleFunc("/api/type", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1543,15 +1477,16 @@ func main() {
 
 		out, err := runTool("type", did, targetStr, p.Text)
 		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out, Notice: popPendingHandoffNotice()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out, Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out})
 	})
 
 	mux.HandleFunc("/api/key", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1570,15 +1505,16 @@ func main() {
 		kc := parseKeycode(p.Key)
 		cmd := exec.Command("/system/bin/input", "-d", did, "keyevent", kc)
 		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Notice: popPendingHandoffNotice()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true})
 	})
 
 	mux.HandleFunc("/api/launch", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		injectNoticeHeader(w)
 		_, targetDid, err := ensureTargetReady()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -1621,7 +1557,6 @@ func main() {
 						Success: true,
 						Message: fmt.Sprintf("Smoothly moved existing stack %d of %s%s to display %d", existingStack.StackID, p.Package, userDesc, targetDid),
 						Data:    string(out),
-						Notice:  popPendingHandoffNotice(),
 					})
 					return
 				}
@@ -1636,7 +1571,6 @@ func main() {
 					json.NewEncoder(w).Encode(ActionResponse{
 						Success: true,
 						Message: fmt.Sprintf("App %s%s is already active on display %d", p.Package, userDesc, targetDid),
-						Notice:  popPendingHandoffNotice(),
 					})
 					return
 				}
@@ -1665,7 +1599,7 @@ func main() {
 		cmd := exec.Command("/system/bin/am", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out), Notice: popPendingHandoffNotice()})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
 			return
 		}
 		if targetDid > 0 && isAudioMuteEnabled() {
@@ -1673,7 +1607,7 @@ func main() {
 		} else if targetDid == 0 {
 			setPackageMuted(p.Package, userId, false)
 		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out), Notice: popPendingHandoffNotice()})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
 	})
 
 	mux.HandleFunc("/api/notify", func(w http.ResponseWriter, r *http.Request) {
@@ -1711,9 +1645,13 @@ func main() {
 		}
 
 		// Ensure subtext is always the genuine session title, never raw user prompt strings
-		resolvedTitle := resolveSessionTitle(sid)
-		if resolvedTitle != "" {
-			p.Subtext = resolvedTitle
+		if p.Subtext == "" {
+			_, title := getSessionMeta()
+			if title != "" {
+				p.Subtext = title
+			} else {
+				p.Subtext = "移动端任务"
+			}
 		} else if len(p.Subtext) > 15 || strings.Contains(p.Subtext, "？") || strings.Contains(p.Subtext, "?") || strings.Contains(p.Subtext, "吗") {
 			p.Subtext = "移动端任务"
 		}
