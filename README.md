@@ -95,15 +95,13 @@
 - `GET http://127.0.0.1:3070/api/status`：获取副屏 JSON 状态（含状态、物理/副屏宽高、DPI、当前主/副屏操作模式）。
 - `GET http://127.0.0.1:3070/api/screenshot`：获取副屏当前画面。副屏运行时**默认直接返回守护进程缓存的 JPEG**（全分辨率 1272×2800，仅约 270 KB，端到端延迟低至 ~60ms）；物理主屏或守护进程未启动时自动回退为 `screencap -p` PNG 路径。
 - `GET|POST http://127.0.0.1:3070/api/start` · `POST http://127.0.0.1:3070/api/stop`：远程拉起/注销副屏。
-- `GET|POST http://127.0.0.1:3070/api/mode`：前后台操作模式查询与切换（`foreground` 驱动主屏并亮起边缘光效；`background` 静默驱动虚拟副屏）。
-- `GET http://127.0.0.1:3070/api/handoff`：平滑跨屏任务接力（将主屏活动栈迁移至副屏无缝继续运行）。
+- `GET|POST http://127.0.0.1:3070/api/mode`：前后台操作模式查询与切换（`foreground` 驱动主屏并亮起边缘光效；`background` 静默驱动虚拟副屏；`idle` 待机解脱控制）。支持 `?mode=...` 参数快速切换。
 - `GET /api/dump_ui`：平铺式无障碍树观测（状态行 + 列头 + 一行一元素），支持 `?no_system_ui=1` 过滤状态栏等系统外壳干扰。
 - `POST /api/type`：确定性文字注入（仅接收数字节点 ID `target` 或聚焦模式，单次 `ACTION_SET_TEXT` + 回读校验）。
 - `POST /api/click` · `POST /api/swipe` · `POST /api/key` · `POST /api/launch`：坐标点击、手势滑动、系统按键、定向启动应用。
 - `GET|POST /api/apps`：查询本机桌面应用列表。
 - `POST /api/notify`：投递系统横幅通知与任务完成状态，支持会话深链接绑定。
 - `POST /api/question` · `POST /api/answer` · `POST /api/question/cancel`：交互式提问（BottomSheet 浮层卡片）双向调度通道。
-- `POST /api/shell`：设备 Root Shell 直通执行。
 
 ---
 
@@ -203,15 +201,13 @@ The whole drawing process took place entirely in the background virtual display 
    - `GET /api/status`: JSON display status.
    - `GET /api/screenshot`: Current frame of the display (serves daemon's cached JPEG for sub-60ms reads).
    - `GET|POST /api/start` · `POST /api/stop`: Bring display up/down.
-   - `GET|POST /api/mode`: Query or switch between `foreground` and `background`.
-   - `GET /api/handoff`: Smooth multi-display task reparenting from physical screen to virtual display.
+   - `GET|POST /api/mode`: Query or switch between `foreground`, `background`, and `idle` (supports `?mode=...`).
    - `GET /api/dump_ui`: Flat accessibility observation (supports `?no_system_ui=1`).
    - `POST /api/type`: Deterministic dual-track text injection.
    - `POST /api/click` · `POST /api/swipe` · `POST /api/key` · `POST /api/launch`: Direct touch, gestures, physical keys, and app launching.
    - `GET|POST /api/apps`: Query installed launcher applications.
    - `POST /api/notify`: Post notifications with session deep-linking.
    - `POST /api/question` · `POST /api/answer`: Interactive confirmation channels.
-   - `POST /api/shell`: Device Root Shell passthrough.
 
 ---
 

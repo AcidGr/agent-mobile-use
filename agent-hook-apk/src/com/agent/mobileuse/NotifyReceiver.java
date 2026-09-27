@@ -59,18 +59,18 @@ public class NotifyReceiver extends BroadcastReceiver {
                 @Override
                 public void run() {
                     try {
-                        java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/handoff");
+                        java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/mode?mode=background");
                         java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("GET");
                         conn.setConnectTimeout(1500);
                         conn.setReadTimeout(1500);
                         int code = conn.getResponseCode();
-                        Log.i(TAG, "Handoff finished, response code: " + code);
+                        Log.i(TAG, "Mode switch (background) finished, response code: " + code);
                         conn.disconnect();
                     } catch (Throwable t) {
-                        Log.w(TAG, "HTTP handoff error, trying curl fallback: " + t.getMessage());
+                        Log.w(TAG, "HTTP mode switch error, trying curl fallback: " + t.getMessage());
                         try {
-                            Runtime.getRuntime().exec(new String[]{"/system/bin/sh", "-c", "curl -s http://127.0.0.1:3070/api/handoff"}).waitFor();
+                            Runtime.getRuntime().exec(new String[]{"/system/bin/sh", "-c", "curl -s 'http://127.0.0.1:3070/api/mode?mode=background'"}).waitFor();
                         } catch (Throwable ignored) {}
                     }
                 }

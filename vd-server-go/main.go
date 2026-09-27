@@ -710,10 +710,6 @@ func switchModeWithMigration(target string) map[string]interface{} {
 	}
 }
 
-func handoffToBackground() map[string]interface{} {
-	return switchModeWithMigration("background")
-}
-
 func ensureTargetReady() (StatusResp, int, error) {
 	mode := getCurrentMode()
 	go updateCapsuleState()
@@ -1205,15 +1201,19 @@ func main() {
 	mux.HandleFunc("/api/mode", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == http.MethodPost {
+		targetMode := r.URL.Query().Get("mode")
+		if r.Method == http.MethodPost && targetMode == "" {
 			var p struct {
 				Mode string `json:"mode"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&p); err == nil && p.Mode != "" {
-				res := switchModeWithMigration(p.Mode)
-				json.NewEncoder(w).Encode(res)
-				return
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
+				targetMode = p.Mode
 			}
+		}
+		if targetMode != "" {
+			res := switchModeWithMigration(targetMode)
+			json.NewEncoder(w).Encode(res)
+			return
 		}
 		st := getStatus()
 		targetDid := getTargetDisplayID(st)
@@ -1228,13 +1228,6 @@ func main() {
 			"target_display_id": targetDid,
 			"message":           msg,
 		})
-	})
-
-	mux.HandleFunc("/api/handoff", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		res := handoffToBackground()
-		json.NewEncoder(w).Encode(res)
 	})
 
 	mux.HandleFunc("/api/stream/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -1965,34 +1958,6 @@ func main() {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
-	})
-
-	mux.HandleFunc("/api/shell", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		var p struct {
-			Command string `json:"command"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-		cmd := exec.Command("/system/bin/sh", "-c", p.Command)
-		out, err := cmd.CombinedOutput()
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = 1
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"output":    string(out),
-			"exit_code": exitCode,
-			"success":   exitCode == 0,
-		})
 	})
 
 	mux.HandleFunc("/api/audio/status", func(w http.ResponseWriter, r *http.Request) {
