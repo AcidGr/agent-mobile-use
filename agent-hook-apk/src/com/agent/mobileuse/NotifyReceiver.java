@@ -230,7 +230,7 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // Crisp pure title without emoji or count numbers
             String cleanTitle = cleanEmoji(title);
-            if (cleanTitle.isEmpty() || cleanTitle.contains("完成")) {
+            if (cleanTitle.isEmpty()) {
                 cleanTitle = "已完成";
             }
             builder.setContentTitle(cleanTitle);
@@ -293,11 +293,5 @@ public class NotifyReceiver extends BroadcastReceiver {
         } catch (Throwable t) {
             Log.e(TAG, "postCompletedNotification failed: " + t.getMessage(), t);
         }
-    }
-
-    public static void postCompletedNotification(Context context, NotificationManager nm, String tag, int id,
-                                                 String title, String subtext, String content,
-                                                 int total, int completed, String sessionId) {
-        postCompletedNotification(context, nm, tag, id, title, subtext, content, sessionId);
     }
 }

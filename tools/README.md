@@ -1,27 +1,6 @@
 # Dump-quality measurement harness
 
-Tooling that answers one question honestly: **did the dump capture everything on screen?**
-
-`check-completeness.py` is the one that matters — it reports `act_sent`/`act_total`, the
-number of controls actually delivered versus present. `measure-payload.py` reports the
-response size in code points against the pruner limit. `dump-matrix.sh` is the older
-device-side version, kept for a quick look without a host. `uncapped_field_test.py` is
-the stress test behind the per-field cap: it lifts the cap, dumps rich-text screens,
-and reports the longest field and the heaviest payload (see the field-cap section below).
-
-Run from the host (talks to `vd_server` on `127.0.0.1:3070`):
-
-```sh
-python3 tools/check-completeness.py
-python3 tools/measure-payload.py
-```
-
-Both drive the system browser (`com.heytap.browser`) for the WebView rows, and both
-force-stop it before opening a web target. `check-completeness.py` also closes it before
-the native-app run: otherwise a leftover browser tab sits on top and the "app launches"
-land inside a WebView instead of the app under test.
-
-Never use `mark.via` for this: it is the user's own browser.
+Historical measurement tools (`check-completeness.py`, `measure-payload.py`, `uncapped_field_test.py`) that relied on the deprecated `/api/shell` endpoint have been archived/removed in accordance with security convergence.
 
 ## What the pruner actually does (correcting an earlier claim here)
 

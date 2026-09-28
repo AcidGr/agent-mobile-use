@@ -1402,7 +1402,6 @@ func isTransientTorn(treeText string, targetDid int, dispW int) bool {
 	if strings.Contains(lower, "tree_blocked=1") ||
 		strings.Contains(lower, "no_windows=1") ||
 		strings.Contains(lower, "total=0") ||
-		strings.Contains(lower, "app_nodes=0") ||
 		strings.Contains(lower, "tree 0 nodes") {
 		return true
 	}
@@ -1797,11 +1796,12 @@ func main() {
 		case "click":
 			var x, y int
 			var targetDesc string
-			if len(p.Coordinate) >= 2 {
+			hasCoord := len(p.Coordinate) >= 2
+			if hasCoord {
 				x = p.Coordinate[0]
 				y = p.Coordinate[1]
 			}
-			if x == 0 && y == 0 && targetStr != "" {
+			if !hasCoord && targetStr != "" {
 				tx, ty, err := resolveTarget(targetDid, targetStr)
 				if err != nil {
 					json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Target '%s' not found: %v", targetStr, err)})
@@ -1811,7 +1811,7 @@ func main() {
 				y = ty
 				targetDesc = fmt.Sprintf("target %s at ", targetStr)
 			}
-			if x == 0 && y == 0 && targetStr == "" {
+			if !hasCoord && targetStr == "" {
 				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'click' requires coordinates or target"})
 				return
 			}
@@ -1850,38 +1850,52 @@ func main() {
 				targetSpec = targetStr
 			}
 			b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
-			out, _ := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
-			actionDesc := fmt.Sprintf("OK: Injected text: \"%s\"", p.Text)
+			out, reqErr := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
+			if reqErr != nil {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Type request failed: %v", reqErr)})
+				return
+			}
 			var tp struct {
 				OK           bool   `json:"ok"`
 				CostMs       int    `json:"cost_ms"`
 				Error        string `json:"error"`
+				Reason       string `json:"reason"`
 				VerifiedText string `json:"verified_text"`
 			}
-			if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &tp); err == nil {
-				if tp.OK {
-					actionDesc = fmt.Sprintf("OK: Text injected [cost=%dms]", tp.CostMs)
-					if tp.VerifiedText != "" {
-						actionDesc += fmt.Sprintf(" | after=\"%s\"", tp.VerifiedText)
-					}
-				} else if tp.Error != "" {
-					actionDesc = fmt.Sprintf("Type failed: %s", tp.Error)
-				}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &tp); err != nil {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Invalid type response: %v", err)})
+				return
 			}
+			if !tp.OK {
+				errMsg := tp.Error
+				if tp.Reason != "" {
+					errMsg = fmt.Sprintf("%s (%s)", tp.Error, tp.Reason)
+				}
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Type failed: %s", errMsg)})
+				return
+			}
+
+			actionDesc := fmt.Sprintf("OK: Text injected [cost=%dms]", tp.CostMs)
+			if tp.VerifiedText != "" {
+				actionDesc += fmt.Sprintf(" | after=\"%s\"", tp.VerifiedText)
+			}
+
 			// Restore text input settling buffer (350ms) + 2x 200ms backoff retry
 			time.Sleep(350 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("%s, but UI dump failed: %v", actionDesc, err)})
+				return
+			}
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
 
 		case "swipe":
-			x1, y1 := 0, 0
-			x2, y2 := 0, 0
-			if len(p.Coordinate) >= 2 {
-				x1, y1 = p.Coordinate[0], p.Coordinate[1]
+			if len(p.Coordinate) < 2 || len(p.EndCoordinate) < 2 {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'swipe' requires both start 'coordinate' [x1, y1] and 'end_coordinate' [x2, y2]"})
+				return
 			}
-			if len(p.EndCoordinate) >= 2 {
-				x2, y2 = p.EndCoordinate[0], p.EndCoordinate[1]
-			}
+			x1, y1 := p.Coordinate[0], p.Coordinate[1]
+			x2, y2 := p.EndCoordinate[0], p.EndCoordinate[1]
 			dur := p.DurationMs
 			if dur <= 0 {
 				dur = 250
@@ -1891,7 +1905,11 @@ func main() {
 
 			// Restore inertia settling buffer (350ms) + 2x 200ms backoff retry
 			time.Sleep(350 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Swiped (%d, %d) -> (%d, %d), but UI dump failed: %v", x1, y1, x2, y2, err)})
+				return
+			}
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Swiped (%d, %d) -> (%d, %d) in %dms", x1, y1, x2, y2, dur),
@@ -1903,12 +1921,20 @@ func main() {
 			if keyName == "" {
 				keyName = p.Text
 			}
+			if strings.TrimSpace(keyName) == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'key' requires a valid key name or keycode"})
+				return
+			}
 			kc := parseKeycode(keyName)
 			exec.Command("/system/bin/input", "-d", did, "keyevent", kc).Run()
 
 			// Restore keybuffer (350ms) + 2x 200ms backoff retry
 			time.Sleep(350 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Pressed key '%s', but UI dump failed: %v", keyName, err)})
+				return
+			}
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Pressed key '%s'", keyName),
@@ -1920,15 +1946,27 @@ func main() {
 			if rawPkg == "" {
 				rawPkg = p.Text
 			}
-			_, err := executeLaunch(targetDid, rawPkg, p.Activity, p.User)
+			if strings.TrimSpace(rawPkg) == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'launch_app' requires a package name"})
+				return
+			}
+			out, err := executeLaunch(targetDid, rawPkg, p.Activity, p.User)
 			if err != nil {
 				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Launch failed: %v", err)})
+				return
+			}
+			if strings.Contains(out, "Error:") {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Launch error: %s", strings.TrimSpace(out))})
 				return
 			}
 
 			// Restore app cold-start buffer (2000ms) + 2x 600ms backoff retry
 			time.Sleep(2000 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Launched app %s, but UI dump failed: %v", rawPkg, err)})
+				return
+			}
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Launched app %s", rawPkg),
@@ -1944,7 +1982,11 @@ func main() {
 				ms = 10000
 			}
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Waited for %dms, but UI dump failed: %v", ms, err)})
+				return
+			}
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Waited for %dms", ms),
@@ -2086,7 +2128,7 @@ func main() {
 				lastCompletedSessionID = sid
 				lastCompletedSessionIDMu.Unlock()
 			}
-			if p.Title == "" || strings.Contains(p.Title, "完成") {
+			if p.Title == "" {
 				p.Title = "已完成"
 			}
 
