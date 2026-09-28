@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // These tests guard the one seam where the Java tool's text and the daemon's JSON
 // envelope meet. Both sides were changed together on 2026-09-20 (the observation
@@ -87,5 +92,24 @@ func TestCountersStayNumeric(t *testing.T) {
 		if _, isInt := env[key].(int); !isInt {
 			t.Fatalf("%s must decode as an int, got %T (%v)", key, env[key], env[key])
 		}
+	}
+}
+
+func TestTypeBase64EncodingForMultilineCode(t *testing.T) {
+	multilineCode := "def hello():\n    # Indented code block\n    print(\"Hello world!\")\n    return 42\n"
+	b64 := base64.StdEncoding.EncodeToString([]byte(multilineCode))
+	cmd := fmt.Sprintf("type_b64 %d %s %s", 0, "focused", b64)
+
+	// Guard against the line-delimiter break bug: daemon command MUST be exactly one line
+	if strings.Contains(cmd, "\n") || strings.Contains(cmd, "\r") {
+		t.Fatalf("type_b64 command contains unexpected line break: %q", cmd)
+	}
+
+	decodedBytes, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("failed to decode base64: %v", err)
+	}
+	if string(decodedBytes) != multilineCode {
+		t.Fatalf("decoded code mismatch:\ngot:\n%s\nwant:\n%s", string(decodedBytes), multilineCode)
 	}
 }

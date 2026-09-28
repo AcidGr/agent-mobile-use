@@ -431,19 +431,30 @@ public class ToolMain {
                 if ("--no-system-ui".equals(args[ai])) dropSystemUi = true;
             }
             if (!dumpTree(displayId, budgetOverride, dropSystemUi)) exitNow(1);
-        } else if ("type".equals(cmd)) {
+        } else if ("type".equals(cmd) || "type_b64".equals(cmd)) {
             if (args.length < 3) {
-                System.err.println("Usage: type <displayId> [targetSpec] <text>");
+                System.err.println("Usage: " + cmd + " <displayId> [targetSpec] <text>");
                 exitNow(2);
             }
             int displayId = Integer.parseInt(args[1]);
+            String targetSpec = "focused";
+            String rawText = "";
             if (args.length == 3) {
                 // type <displayId> <text>
-                smartType(displayId, "focused", args[2]);
+                rawText = args[2];
             } else {
                 // type <displayId> <targetSpec> <text>
-                smartType(displayId, args[2], args[3]);
+                targetSpec = args[2];
+                rawText = args[3];
             }
+            String text = rawText;
+            if ("type_b64".equals(cmd)) {
+                try {
+                    byte[] decoded = android.util.Base64.decode(rawText, android.util.Base64.DEFAULT);
+                    text = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
+                } catch (Exception ignored) {}
+            }
+            smartType(displayId, targetSpec, text);
         } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
             String query = args.length > 1 ? args[1] : "";
             listApps(query);
@@ -658,18 +669,29 @@ public class ToolMain {
                             if ("--no-system-ui".equals(tokens[ai])) dropSystemUi = true;
                         }
                         dumpTreeWithUi(uiAutomation, uiClass, displayId, budgetOverride, dropSystemUi);
-                    } else if ("type".equals(action)) {
+                    } else if ("type".equals(action) || "type_b64".equals(action)) {
                         if (tokens.length >= 3) {
                             int displayId = Integer.parseInt(tokens[1]);
                             String targetSpec = tokens[2];
                             String text = "";
-                            int textIdx = line.indexOf(targetSpec);
-                            if (textIdx >= 0) {
-                                text = line.substring(textIdx + targetSpec.length()).trim();
+                            if ("type_b64".equals(action)) {
+                                if (tokens.length >= 4) {
+                                    try {
+                                        byte[] decoded = android.util.Base64.decode(tokens[3], android.util.Base64.DEFAULT);
+                                        text = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
+                                    } catch (Throwable b64Err) {
+                                        text = "";
+                                    }
+                                }
+                            } else {
+                                int textIdx = line.indexOf(targetSpec);
+                                if (textIdx >= 0) {
+                                    text = line.substring(textIdx + targetSpec.length()).trim();
+                                }
                             }
                             smartTypeWithUi(uiAutomation, uiClass, displayId, targetSpec, text);
                         } else {
-                            System.out.print("fail error=\"Invalid type command in daemon\"");
+                            System.out.print("fail error=\"Invalid " + action + " command in daemon\"");
                         }
                     } else if ("resolve".equals(action)) {
                         if (tokens.length >= 3) {

@@ -1875,7 +1875,11 @@ func main() {
 			if targetStr != "" {
 				targetSpec = targetStr
 			}
-			out, _ := globalDumpDaemon.Request(fmt.Sprintf("type %d %s %s", targetDid, targetSpec, p.Text))
+			b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
+			out, err := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
+			if err != nil || strings.TrimSpace(out) == "" {
+				out, _ = runTool("type_b64", did, targetSpec, b64)
+			}
 			actionDesc := fmt.Sprintf("OK: Injected text: \"%s\"", p.Text)
 			var tp struct {
 				OK           bool   `json:"ok"`
@@ -2177,10 +2181,11 @@ func main() {
 			}
 		}
 
-		typeCmd := fmt.Sprintf("type %s %s %s", did, targetStr, p.Text)
+		b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
+		typeCmd := fmt.Sprintf("type_b64 %s %s %s", did, targetStr, b64)
 		out, err := globalDumpDaemon.Request(typeCmd)
 		if err != nil || strings.TrimSpace(out) == "" {
-			out, err = runTool("type", did, targetStr, p.Text)
+			out, err = runTool("type_b64", did, targetStr, b64)
 		}
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
