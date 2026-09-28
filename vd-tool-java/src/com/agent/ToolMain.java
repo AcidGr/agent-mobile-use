@@ -368,6 +368,21 @@ public class ToolMain {
      */
     private static final int WEBVIEW_WAKE_SLEEP_MS = 600;
 
+    /** In-memory cache of target coordinates from the most recent tree dump (ID -> [x, y]). */
+    private static final java.util.Map<String, int[]> sLastTargetCoords =
+            new java.util.concurrent.ConcurrentHashMap<String, int[]>();
+
+    private static void updateTargetCoords(List<NodeItem> list) {
+        if (list == null) return;
+        sLastTargetCoords.clear();
+        for (int i = 0; i < list.size(); i++) {
+            NodeItem n = list.get(i);
+            int x = (n.targetId > 0 && n.targetId != n.id) ? n.targetCenterX : (n.left + n.right) / 2;
+            int y = (n.targetId > 0 && n.targetId != n.id) ? n.targetCenterY : (n.top + n.bottom) / 2;
+            sLastTargetCoords.put(String.valueOf(n.id), new int[] { x, y });
+        }
+    }
+
     public static void main(String[] args) {
         try {
             run(args);
@@ -656,6 +671,23 @@ public class ToolMain {
                         } else {
                             System.out.print("fail error=\"Invalid type command in daemon\"");
                         }
+                    } else if ("resolve".equals(action)) {
+                        if (tokens.length >= 3) {
+                            int displayId = Integer.parseInt(tokens[1]);
+                            String targetId = tokens[2].replaceFirst("^(?i)node:", "").trim();
+                            int[] pt = sLastTargetCoords.get(targetId);
+                            if (pt == null) {
+                                dumpTreeWithUi(uiAutomation, uiClass, displayId, 0, false, false);
+                                pt = sLastTargetCoords.get(targetId);
+                            }
+                            if (pt != null) {
+                                System.out.print("{\"ok\":true,\"x\":" + pt[0] + ",\"y\":" + pt[1] + ",\"id\":\"" + targetId + "\"}");
+                            } else {
+                                System.out.print("{\"ok\":false,\"error\":\"target_not_found\",\"id\":\"" + targetId + "\"}");
+                            }
+                        } else {
+                            System.out.print("{\"ok\":false,\"error\":\"missing_target_argument\"}");
+                        }
                     } else {
                         System.out.print("fail error=\"Unknown command: " + oneLine(line) + "\"");
                     }
@@ -741,6 +773,12 @@ public class ToolMain {
     private static boolean dumpTreeWithUi(Object uiAutomation, Class<?> uiClass,
                                            int targetDisplayId, int budgetOverride,
                                            boolean dropSystemUi) {
+        return dumpTreeWithUi(uiAutomation, uiClass, targetDisplayId, budgetOverride, dropSystemUi, true);
+    }
+
+    private static boolean dumpTreeWithUi(Object uiAutomation, Class<?> uiClass,
+                                           int targetDisplayId, int budgetOverride,
+                                           boolean dropSystemUi, boolean emitOutput) {
         try {
             // Display geometry: an observation without it leaves the model unable to judge
             // whether a coordinate is even inside the screen.
@@ -900,10 +938,14 @@ public class ToolMain {
 
             rankForBudget(list);
 
-            emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
-                    droppedDup, scanAttempts, recovered, budgetOverride, lastAppSize,
-                    droppedSystemUi);
-            System.out.flush();
+            if (emitOutput) {
+                emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
+                        droppedDup, scanAttempts, recovered, budgetOverride, lastAppSize,
+                        droppedSystemUi);
+                System.out.flush();
+            } else {
+                updateTargetCoords(list);
+            }
             list.clear();
             return true;
         } catch (Throwable t) {
@@ -1232,6 +1274,7 @@ public class ToolMain {
                                      int droppedDup,
                                      int scanAttempts, boolean recovered, int budgetOverride,
                                      int appNodeCount, int droppedSystemUi) {
+        updateTargetCoords(list);
         int total = list.size();
         StringBuilder nodes = new StringBuilder();
         int emitted = 0;

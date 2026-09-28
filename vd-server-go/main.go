@@ -1389,6 +1389,169 @@ func normalizeLaunchTarget(pkg, act string, user *int) (string, string, int) {
 	return pkg, act, userId
 }
 
+func performDumpInternal(targetDid int, st StatusResp, noSystemUi bool) (string, string, error) {
+	did := strconv.Itoa(targetDid)
+	treeArgs := []string{"tree", did}
+	if noSystemUi {
+		treeArgs = append(treeArgs, "0", "--no-system-ui")
+	}
+	out, err := globalDumpDaemon.Request(strings.Join(treeArgs, " "))
+	if err != nil || strings.TrimSpace(out) == "" {
+		out, err = runTool(treeArgs...)
+	}
+	trimmed := strings.TrimSpace(out)
+	if err != nil || trimmed == "" {
+		return "", "", fmt.Errorf("the accessibility tree could not be read for this display")
+	}
+
+	env, rows, ok := splitObservation(trimmed)
+	if !ok {
+		return "", "", fmt.Errorf("UI dump did not start with a readable status header")
+	}
+
+	env["mode"] = getCurrentMode()
+	env["target_display_id"] = targetDid
+	if wv, okW := env["width"].(int); !okW || wv <= 0 {
+		dw, dh := displaySize(targetDid, st)
+		env["width"] = dw
+		env["height"] = dh
+	}
+
+	return observationStatus(env), observationText(env, rows), nil
+}
+
+func isTransientTorn(treeText string, targetDid int) bool {
+	if treeText == "" {
+		return true
+	}
+	if strings.Contains(treeText, "tree_blocked=1") ||
+		strings.Contains(treeText, "no_windows=1") ||
+		strings.Contains(treeText, "total=0") ||
+		strings.Contains(treeText, "app_nodes=0") {
+		return true
+	}
+	if targetDid == 0 {
+		for _, s := range []string{"act_sent=0", "act_sent=1", "act_sent=2"} {
+			if strings.Contains(treeText, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolveTarget(targetDid int, targetSpec string) (int, int, error) {
+	clean := strings.TrimSpace(targetSpec)
+	clean = strings.TrimPrefix(clean, "node:")
+	clean = strings.TrimPrefix(clean, "NODE:")
+	clean = strings.TrimSpace(clean)
+	if clean == "" {
+		return 0, 0, fmt.Errorf("empty target specifier")
+	}
+
+	req := fmt.Sprintf("resolve %d %s", targetDid, clean)
+	out, err := globalDumpDaemon.Request(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("daemon resolve failed: %w", err)
+	}
+
+	var res struct {
+		OK    bool   `json:"ok"`
+		X     int    `json:"x"`
+		Y     int    `json:"y"`
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	trimmed := strings.TrimSpace(out)
+	if err := json.Unmarshal([]byte(trimmed), &res); err != nil {
+		return 0, 0, fmt.Errorf("invalid resolve response: %s", trimmed)
+	}
+	if !res.OK {
+		return 0, 0, fmt.Errorf("target '%s' not found: %s", clean, res.Error)
+	}
+	return res.X, res.Y, nil
+}
+
+func executeLaunch(targetDid int, rawPackage, activity string, user *int) (string, error) {
+	pkg, act, userId := normalizeLaunchTarget(rawPackage, activity, user)
+	if pkg == "" {
+		return "", fmt.Errorf("missing package name")
+	}
+
+	// 1. Check existing stack
+	if existingStack, found := findStackForPackageAndActivity(pkg, act, userId); found {
+		if existingStack.DisplayID != targetDid {
+			cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(existingStack.StackID), strconv.Itoa(targetDid))
+			_, err := cmd.CombinedOutput()
+			if err == nil {
+				if targetDid > 0 && isAudioMuteEnabled() {
+					setPackageMuted(pkg, userId, true)
+				} else if targetDid == 0 {
+					setPackageMuted(pkg, userId, false)
+				}
+				userDesc := ""
+				if userId != 0 {
+					userDesc = fmt.Sprintf(" (user %d)", userId)
+				}
+				return fmt.Sprintf("Smoothly moved existing stack %d of %s%s to display %d", existingStack.StackID, pkg, userDesc, targetDid), nil
+			}
+		} else {
+			if existingStack.Visible && act == "" {
+				userDesc := ""
+				if userId != 0 {
+					userDesc = fmt.Sprintf(" (user %d)", userId)
+				}
+				return fmt.Sprintf("App %s%s is already active on display %d", pkg, userDesc, targetDid), nil
+			}
+		}
+	}
+
+	// 2. Cold start fallback
+	did := strconv.Itoa(targetDid)
+	uStr := strconv.Itoa(userId)
+	args := []string{"start", "--display", did, "--user", uStr}
+	if act != "" {
+		args = append(args, "-n", pkg+"/"+act)
+	} else {
+		actBytes, _ := exec.Command("/system/bin/cmd", "package", "resolve-activity", "--brief", "--user", uStr, pkg).Output()
+		actLines := strings.Split(strings.TrimSpace(string(actBytes)), "\n")
+		targetAct := ""
+		if len(actLines) > 0 && !strings.Contains(actLines[len(actLines)-1], "No activity found") {
+			targetAct = actLines[len(actLines)-1]
+		}
+		if targetAct != "" {
+			args = append(args, "-n", targetAct)
+		} else {
+			args = append(args, pkg)
+		}
+	}
+	cmd := exec.Command("/system/bin/am", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w", string(out), err)
+	}
+	if targetDid > 0 && isAudioMuteEnabled() {
+		setPackageMuted(pkg, userId, true)
+	} else if targetDid == 0 {
+		setPackageMuted(pkg, userId, false)
+	}
+	return string(out), nil
+}
+
+type CompositeActionRequest struct {
+	Action        string `json:"action"`
+	Coordinate    []int  `json:"coordinate"`
+	EndCoordinate []int  `json:"end_coordinate"`
+	Target        any    `json:"target"`
+	DurationMs    int    `json:"duration_ms"`
+	Text          string `json:"text"`
+	Key           string `json:"key"`
+	Package       string `json:"package"`
+	Activity      string `json:"activity"`
+	User          *int   `json:"user"`
+	NoSystemUI    bool   `json:"no_system_ui"`
+}
+
 func main() {
 	thawAppProcess()
 	startCapsuleWatchdog()
@@ -1567,6 +1730,235 @@ func main() {
 		}
 	})
 
+	mux.HandleFunc("/api/action", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		injectNoticeHeader(w)
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Method not allowed"})
+			return
+		}
+
+		st, targetDid, err := ensureTargetReady()
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+			return
+		}
+
+		var p CompositeActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
+			return
+		}
+
+		targetStr := ""
+		if p.Target != nil {
+			targetStr = strings.TrimSpace(fmt.Sprintf("%v", p.Target))
+		}
+		if targetStr == "<nil>" {
+			targetStr = ""
+		}
+
+		action := strings.ToLower(strings.TrimSpace(p.Action))
+		did := strconv.Itoa(targetDid)
+
+		switch action {
+		case "observe":
+			statusStr, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
+			if err != nil {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: statusStr, Data: textStr})
+
+		case "click":
+			var x, y int
+			var targetDesc string
+			if len(p.Coordinate) >= 2 {
+				x = p.Coordinate[0]
+				y = p.Coordinate[1]
+			}
+			if x == 0 && y == 0 && targetStr != "" {
+				tx, ty, err := resolveTarget(targetDid, targetStr)
+				if err != nil {
+					json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Target '%s' not found: %v", targetStr, err)})
+					return
+				}
+				x = tx
+				y = ty
+				targetDesc = fmt.Sprintf("target %s at ", targetStr)
+			}
+			if x == 0 && y == 0 && targetStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'click' requires coordinates or target"})
+				return
+			}
+
+			if targetDid == 0 {
+				if p.DurationMs > 0 {
+					broadcastTouch(2, 0, 0, x, y, x, y, p.DurationMs)
+				} else {
+					broadcastTouch(1, x, y, 0, 0, 0, 0, 0)
+				}
+			}
+			if p.DurationMs > 0 {
+				exec.Command("/system/bin/input", "-d", did, "swipe",
+					strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(p.DurationMs)).Run()
+			} else {
+				exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(x), strconv.Itoa(y)).Run()
+			}
+
+			actionDesc := fmt.Sprintf("OK: Tapped %s(%d, %d)", targetDesc, x, y)
+			if p.DurationMs > 0 {
+				actionDesc = fmt.Sprintf("OK: Long-pressed %s(%d, %d) for %dms", targetDesc, x, y, p.DurationMs)
+			}
+
+			time.Sleep(25 * time.Millisecond)
+			_, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
+			if err != nil || isTransientTorn(textStr, targetDid) {
+				deadline := time.Now().Add(350 * time.Millisecond)
+				for time.Now().Before(deadline) {
+					time.Sleep(25 * time.Millisecond)
+					_, t, e := performDumpInternal(targetDid, st, p.NoSystemUI)
+					if e == nil && !isTransientTorn(t, targetDid) {
+						textStr = t
+						break
+					}
+				}
+			}
+			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
+
+		case "type":
+			targetSpec := "focused"
+			if targetStr != "" {
+				targetSpec = targetStr
+			}
+			out, _ := globalDumpDaemon.Request(fmt.Sprintf("type %d %s %s", targetDid, targetSpec, p.Text))
+			actionDesc := fmt.Sprintf("OK: Injected text: \"%s\"", p.Text)
+			var tp struct {
+				OK           bool   `json:"ok"`
+				CostMs       int    `json:"cost_ms"`
+				Error        string `json:"error"`
+				VerifiedText string `json:"verified_text"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &tp); err == nil {
+				if tp.OK {
+					actionDesc = fmt.Sprintf("OK: Text injected [cost=%dms]", tp.CostMs)
+					if tp.VerifiedText != "" {
+						actionDesc += fmt.Sprintf(" | after=\"%s\"", tp.VerifiedText)
+					}
+				} else if tp.Error != "" {
+					actionDesc = fmt.Sprintf("Type failed: %s", tp.Error)
+				}
+			}
+			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
+
+		case "swipe":
+			x1, y1 := 0, 0
+			x2, y2 := 0, 0
+			if len(p.Coordinate) >= 2 {
+				x1, y1 = p.Coordinate[0], p.Coordinate[1]
+			}
+			if len(p.EndCoordinate) >= 2 {
+				x2, y2 = p.EndCoordinate[0], p.EndCoordinate[1]
+			}
+			dur := p.DurationMs
+			if dur <= 0 {
+				dur = 250
+			}
+			exec.Command("/system/bin/input", "-d", did, "swipe",
+				strconv.Itoa(x1), strconv.Itoa(y1), strconv.Itoa(x2), strconv.Itoa(y2), strconv.Itoa(dur)).Run()
+
+			time.Sleep(120 * time.Millisecond)
+			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: true,
+				Message: fmt.Sprintf("OK: Swiped (%d, %d) -> (%d, %d) in %dms", x1, y1, x2, y2, dur),
+				Data:    textStr,
+			})
+
+		case "key":
+			keyName := p.Key
+			if keyName == "" {
+				keyName = p.Text
+			}
+			kc := parseKeycode(keyName)
+			exec.Command("/system/bin/input", "-d", did, "keyevent", kc).Run()
+
+			isNav := strings.EqualFold(keyName, "BACK") || strings.EqualFold(keyName, "HOME")
+			if isNav {
+				time.Sleep(250 * time.Millisecond)
+			} else {
+				time.Sleep(25 * time.Millisecond)
+			}
+			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: true,
+				Message: fmt.Sprintf("OK: Pressed key '%s'", keyName),
+				Data:    textStr,
+			})
+
+		case "launch_app":
+			rawPkg := p.Package
+			if rawPkg == "" {
+				rawPkg = p.Text
+			}
+			_, err := executeLaunch(targetDid, rawPkg, p.Activity, p.User)
+			if err != nil {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Launch failed: %v", err)})
+				return
+			}
+
+			time.Sleep(50 * time.Millisecond)
+			_, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
+			if err != nil || isTransientTorn(textStr, targetDid) {
+				deadline := time.Now().Add(2000 * time.Millisecond)
+				for time.Now().Before(deadline) {
+					time.Sleep(30 * time.Millisecond)
+					_, t, e := performDumpInternal(targetDid, st, p.NoSystemUI)
+					if e == nil && !isTransientTorn(t, targetDid) {
+						textStr = t
+						break
+					}
+				}
+			}
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: true,
+				Message: fmt.Sprintf("OK: Launched app %s", rawPkg),
+				Data:    textStr,
+			})
+
+		case "wait":
+			ms := p.DurationMs
+			if ms <= 0 {
+				ms = 1000
+			}
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: true,
+				Message: fmt.Sprintf("OK: Waited for %dms", ms),
+				Data:    textStr,
+			})
+
+		default:
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: false,
+				Message: fmt.Sprintf("Unknown action '%s'", p.Action),
+			})
+		}
+	})
+
 	mux.HandleFunc("/api/dump_ui", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -1577,58 +1969,20 @@ func main() {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
 		}
-		did := strconv.Itoa(targetDid)
-		// Opt-in: ?no_system_ui=1 drops system-chrome windows (status bar, nav bar,
-		// smart sidebar) so physical and virtual displays yield the same tree.
-		treeArgs := []string{"tree", did}
-		if v := r.URL.Query().Get("no_system_ui"); v == "1" || v == "true" {
-			treeArgs = append(treeArgs, "0", "--no-system-ui")
-		}
-		out, err := globalDumpDaemon.Request(strings.Join(treeArgs, " "))
-		if err != nil || strings.TrimSpace(out) == "" {
-			out, err = runTool(treeArgs...)
-		}
-		trimmed := strings.TrimSpace(out)
-		if err != nil || trimmed == "" {
-			json.NewEncoder(w).Encode(ActionResponse{
-				Success: false,
-				Message: "UI dump failed: the accessibility tree could not be read for this display",
-				Data:    trimmed,
-			})
+		statusStr, textStr, err := performDumpInternal(targetDid, st, r.URL.Query().Get("no_system_ui") == "1")
+		if err != nil {
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 			return
-		}
-
-		// ToolMain emits a flat observation: a machine-readable header line, a column
-		// line, then one line per element. Decode header and decorate with daemon info.
-		env, rows, ok := splitObservation(trimmed)
-		if !ok {
-			json.NewEncoder(w).Encode(ActionResponse{
-				Success: false,
-				Message: "UI dump did not start with a readable status header",
-				Data:    trimmed,
-			})
-			return
-		}
-
-		env["mode"] = getCurrentMode()
-		env["target_display_id"] = targetDid
-		// The daemon is the only party that knows the real display geometry: the tool
-		// asks DisplayManager for it and can come back with 0x0 on a fresh virtual
-		// display. Without this the model is handed coordinates in an unknown space.
-		if wv, okW := env["width"].(int); !okW || wv <= 0 {
-			dw, dh := displaySize(targetDid, st)
-			env["width"] = dw
-			env["height"] = dh
 		}
 		if r.URL.Query().Get("raw") == "1" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Write([]byte(observationText(env, rows)))
+			w.Write([]byte(textStr))
 			return
 		}
 		json.NewEncoder(w).Encode(ActionResponse{
 			Success: true,
-			Message: observationStatus(env),
-			Data:    observationText(env, rows),
+			Message: statusStr,
+			Data:    textStr,
 		})
 	})
 
@@ -1854,86 +2208,12 @@ func main() {
 			return
 		}
 
-		pkg, act, userId := normalizeLaunchTarget(p.Package, p.Activity, p.User)
-		if pkg == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Missing package name"})
-			return
-		}
-		p.Package = pkg
-		p.Activity = act
-
-		// 1. Check if the requested app is already running in an activity stack for target userId
-		if existingStack, found := findStackForPackageAndActivity(p.Package, p.Activity, userId); found {
-			if existingStack.DisplayID != targetDid {
-				// App is running on another display (e.g. Display 0) -> Smoothly reparent to targetDid!
-				cmd := exec.Command("/system/bin/cmd", "activity", "display", "move-stack", strconv.Itoa(existingStack.StackID), strconv.Itoa(targetDid))
-				out, err := cmd.CombinedOutput()
-				if err == nil {
-					if targetDid > 0 && isAudioMuteEnabled() {
-						setPackageMuted(p.Package, userId, true)
-					} else if targetDid == 0 {
-						setPackageMuted(p.Package, userId, false)
-					}
-					userDesc := ""
-					if userId != 0 {
-						userDesc = fmt.Sprintf(" (user %d)", userId)
-					}
-					json.NewEncoder(w).Encode(ActionResponse{
-						Success: true,
-						Message: fmt.Sprintf("Smoothly moved existing stack %d of %s%s to display %d", existingStack.StackID, p.Package, userDesc, targetDid),
-						Data:    string(out),
-					})
-					return
-				}
-				// If move-stack somehow failed, fall through to am start
-			} else {
-				// App is already on target display
-				if existingStack.Visible && p.Activity == "" {
-					userDesc := ""
-					if userId != 0 {
-						userDesc = fmt.Sprintf(" (user %d)", userId)
-					}
-					json.NewEncoder(w).Encode(ActionResponse{
-						Success: true,
-						Message: fmt.Sprintf("App %s%s is already active on display %d", p.Package, userDesc, targetDid),
-					})
-					return
-				}
-			}
-		}
-
-		// 2. Cold start fallback: launch via am start --display <did> --user <userId>
-		did := strconv.Itoa(targetDid)
-		uStr := strconv.Itoa(userId)
-		args := []string{"start", "--display", did, "--user", uStr}
-		if p.Activity != "" {
-			args = append(args, "-n", p.Package+"/"+p.Activity)
-		} else {
-			actBytes, _ := exec.Command("/system/bin/cmd", "package", "resolve-activity", "--brief", "--user", uStr, p.Package).Output()
-			actLines := strings.Split(strings.TrimSpace(string(actBytes)), "\n")
-			targetAct := ""
-			if len(actLines) > 0 && !strings.Contains(actLines[len(actLines)-1], "No activity found") {
-				targetAct = actLines[len(actLines)-1]
-			}
-			if targetAct != "" {
-				args = append(args, "-n", targetAct)
-			} else {
-				args = append(args, p.Package)
-			}
-		}
-		cmd := exec.Command("/system/bin/am", args...)
-		out, err := cmd.CombinedOutput()
+		out, err := executeLaunch(targetDid, p.Package, p.Activity, p.User)
 		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
 			return
 		}
-		if targetDid > 0 && isAudioMuteEnabled() {
-			setPackageMuted(p.Package, userId, true)
-		} else if targetDid == 0 {
-			setPackageMuted(p.Package, userId, false)
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out})
 	})
 
 	mux.HandleFunc("/api/notify", func(w http.ResponseWriter, r *http.Request) {
