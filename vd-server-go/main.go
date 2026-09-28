@@ -1979,11 +1979,6 @@ func main() {
 				Message: fmt.Sprintf("OK: Waited for %dms", ms),
 				Data:    textStr,
 			})
-			json.NewEncoder(w).Encode(ActionResponse{
-				Success: true,
-				Message: fmt.Sprintf("OK: Waited for %dms", ms),
-				Data:    textStr,
-			})
 
 		default:
 			json.NewEncoder(w).Encode(ActionResponse{
