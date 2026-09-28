@@ -920,10 +920,7 @@ public class ToolMain {
         if (root != null) {
             try {
                 CharSequence pkg = root.getPackageName();
-                if (pkg != null) {
-                    String p = pkg.toString().toLowerCase();
-                    if (p.contains("systemui") || p.equals("android")) return true;
-                }
+                if (pkg != null && isSystemUiPackage(pkg.toString())) return true;
             } catch (Throwable ignored) {}
         }
         return false;

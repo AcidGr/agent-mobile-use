@@ -53,15 +53,7 @@ var (
 
 	noticeMu             sync.Mutex
 	pendingHandoffNotice string
-
-	questionMu      sync.Mutex
-	activeQuestions = make(map[string]chan *QuestionAnswerPayload)
 )
-
-type QuestionAnswerPayload struct {
-	RequestID string `json:"request_id"`
-	Answers   []any  `json:"answers"`
-}
 
 func writeWSBinaryFrame(w io.Writer, payload []byte) error {
 	n := len(payload)
@@ -387,7 +379,7 @@ func setSessionActive(active bool, sid string, title string) {
 		activeSessionTitle = latestTitle
 		if latestSid != "" {
 			lastCompletedSessionIDMu.Lock()
-			if lastCompletedSessionID != "" && (lastCompletedSessionID == latestSid || strings.Contains(latestSid, lastCompletedSessionID) || strings.Contains(lastCompletedSessionID, latestSid)) {
+			if lastCompletedSessionID != "" && lastCompletedSessionID == latestSid {
 				lastCompletedSessionID = ""
 				lastCompletedSessionIDMu.Unlock()
 				go clearCompletedOnDevice()
@@ -2140,7 +2132,7 @@ func main() {
 			viewing := currentViewingSessionID
 			viewStateMu.Unlock()
 
-			if fg && viewing != "" && sid != "" && (viewing == sid || strings.Contains(viewing, sid) || strings.Contains(sid, viewing)) {
+			if fg && viewing != "" && sid != "" && viewing == sid {
 				// Double-check with dumpsys that DemoDialogActivity is truly resumed
 				out, err := exec.Command("/system/bin/sh", "-c", `dumpsys activity activities | grep "topResumedActivity" | head -1`).Output()
 				if err == nil && strings.Contains(string(out), "DemoDialogActivity") {
@@ -2206,8 +2198,8 @@ func main() {
 		}
 		var p struct {
 			RequestID string `json:"request_id"`
+			SessionID string `json:"session_id"`
 			Questions []any  `json:"questions"`
-			TimeoutMs int    `json:"timeout_ms"`
 		}
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -2221,83 +2213,30 @@ func main() {
 			return
 		}
 
-		ch := make(chan *QuestionAnswerPayload, 1)
-		questionMu.Lock()
-		activeQuestions[p.RequestID] = ch
-		questionMu.Unlock()
-
-		defer func() {
-			questionMu.Lock()
-			delete(activeQuestions, p.RequestID)
-			questionMu.Unlock()
-		}()
-
-		// Wake up process and trigger notification banner via Activity launch
 		thawAppProcess()
 		st := getStatus()
-		onlyNotifyStr := "true"
+		sid := p.SessionID
+		if sid == "" {
+			_, sid = getSessionMeta()
+		}
+
 		if st.Mode == "foreground" {
-			onlyNotifyStr = "false"
+			// In foreground mode: immediately launch DemoDialogActivity to present the question card to the user on screen
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -n com.agent.mobileuse/.DemoDialogActivity --es session_id "$TARGET_SID" 2>/dev/null`)
+			cmd.Env = append(os.Environ(), "TARGET_SID="+sid)
+			_ = cmd.Run()
+		} else {
+			// In background / idle mode: post notification with direct action to open DemoDialogActivity
+			cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --es request_id "$REQ_ID" --es session_id "$REQ_SID" --es data "$REQ_DATA" 2>/dev/null`)
+			cmd.Env = append(os.Environ(),
+				"REQ_ID="+p.RequestID,
+				"REQ_SID="+sid,
+				"REQ_DATA="+string(bodyBytes),
+			)
+			_ = cmd.Run()
 		}
 
-		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify "$ONLY_NOTIFY" --es request_id "$REQ_ID" --es data "$REQ_DATA" 2>/dev/null`)
-		cmd.Env = append(os.Environ(),
-			"ONLY_NOTIFY="+onlyNotifyStr,
-			"REQ_ID="+p.RequestID,
-			"REQ_DATA="+string(bodyBytes),
-		)
-		cmd.Run()
-
-		timeout := 10 * time.Minute
-		if p.TimeoutMs > 0 {
-			timeout = time.Duration(p.TimeoutMs) * time.Millisecond
-		}
-
-		select {
-		case ans := <-ch:
-			json.NewEncoder(w).Encode(map[string]any{
-				"success":    true,
-				"request_id": ans.RequestID,
-				"answers":    ans.Answers,
-			})
-		case <-r.Context().Done():
-			cancelQuestionOnDevice(p.RequestID)
-		case <-time.After(timeout):
-			cancelQuestionOnDevice(p.RequestID)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Timeout waiting for answer"})
-		}
-	})
-
-	mux.HandleFunc("/api/answer", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			return
-		}
-		var p QuestionAnswerPayload
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil || p.RequestID == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-
-		questionMu.Lock()
-		ch, ok := activeQuestions[p.RequestID]
-		questionMu.Unlock()
-
-		if !ok {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "No active question found for request_id or already expired"})
-			return
-		}
-
-		cancelQuestionOnDevice(p.RequestID)
-
-		select {
-		case ch <- &p:
-			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Answer delivered"})
-		default:
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Answer already queued"})
-		}
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question presented on device"})
 	})
 
 	mux.HandleFunc("/api/question/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -2309,12 +2248,9 @@ func main() {
 		var p struct {
 			RequestID string `json:"request_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil || p.RequestID == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
+		if err := json.NewDecoder(r.Body).Decode(&p); err == nil && p.RequestID != "" {
+			cancelQuestionOnDevice(p.RequestID)
 		}
-		cancelQuestionOnDevice(p.RequestID)
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
 	})
 
