@@ -1420,7 +1420,7 @@ func performDumpInternal(targetDid int, st StatusResp, noSystemUi bool) (string,
 	return observationStatus(env), observationText(env, rows), nil
 }
 
-func isTransientTorn(treeText string, targetDid int) bool {
+func isTransientTorn(treeText string, targetDid int, dispW int) bool {
 	if strings.TrimSpace(treeText) == "" {
 		return true
 	}
@@ -1439,15 +1439,37 @@ func isTransientTorn(treeText string, targetDid int) bool {
 			}
 		}
 	}
+	// Check if transition animation is still sliding across display bounds
+	if idx := strings.Index(treeText, "x_extent="); idx != -1 {
+		rest := treeText[idx+len("x_extent="):]
+		end := strings.IndexAny(rest, " \n\r\t")
+		if end != -1 {
+			rest = rest[:end]
+		}
+		parts := strings.Split(rest, ",")
+		if len(parts) == 2 {
+			minX, err1 := strconv.Atoi(parts[0])
+			maxX, err2 := strconv.Atoi(parts[1])
+			if err1 == nil && err2 == nil {
+				if minX > 50 && (dispW <= 0 || maxX > dispW) {
+					return true // still sliding in from right
+				}
+				if maxX < 0 || (minX < -50 && maxX < dispW) {
+					return true // still sliding out to left
+				}
+			}
+		}
+	}
 	return false
 }
 
 func captureUiDumpWithRetry(targetDid int, st StatusResp, noSystemUi bool, maxRetries int, delayMs int) (string, string, error) {
 	var lastStatus, lastText string
 	var lastErr error
+	dispW, _ := displaySize(targetDid, st)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lastStatus, lastText, lastErr = performDumpInternal(targetDid, st, noSystemUi)
-		if lastErr == nil && !isTransientTorn(lastText, targetDid) {
+		if lastErr == nil && !isTransientTorn(lastText, targetDid, dispW) {
 			return lastStatus, lastText, nil
 		}
 		if attempt < maxRetries {
@@ -1839,9 +1861,9 @@ func main() {
 				actionDesc = fmt.Sprintf("OK: Long-pressed %s(%d, %d) for %dms", targetDesc, x, y, p.DurationMs)
 			}
 
-			// Restore physical transition buffer (350ms) + 2x 600ms backoff retry
+			// Restore physical transition buffer (350ms) + 2x 200ms backoff retry
 			time.Sleep(350 * time.Millisecond)
-			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
 			if err != nil && textStr == "" {
 				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("%s, but UI dump failed: %v", actionDesc, err)})
 				return
@@ -1871,9 +1893,9 @@ func main() {
 					actionDesc = fmt.Sprintf("Type failed: %s", tp.Error)
 				}
 			}
-			// Restore text input settling buffer (200ms) + 2x 600ms backoff retry
-			time.Sleep(200 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			// Restore text input settling buffer (350ms) + 2x 200ms backoff retry
+			time.Sleep(350 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
 
 		case "swipe":
@@ -1892,9 +1914,9 @@ func main() {
 			exec.Command("/system/bin/input", "-d", did, "swipe",
 				strconv.Itoa(x1), strconv.Itoa(y1), strconv.Itoa(x2), strconv.Itoa(y2), strconv.Itoa(dur)).Run()
 
-			// Restore inertia settling buffer (200ms) + 2x 600ms backoff retry
-			time.Sleep(200 * time.Millisecond)
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			// Restore inertia settling buffer (350ms) + 2x 200ms backoff retry
+			time.Sleep(350 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Swiped (%d, %d) -> (%d, %d) in %dms", x1, y1, x2, y2, dur),
@@ -1909,14 +1931,9 @@ func main() {
 			kc := parseKeycode(keyName)
 			exec.Command("/system/bin/input", "-d", did, "keyevent", kc).Run()
 
-			// Restore nav key buffer (350ms) vs normal key (200ms) + 2x 600ms backoff retry
-			isNav := strings.EqualFold(keyName, "BACK") || strings.EqualFold(keyName, "HOME")
-			if isNav {
-				time.Sleep(350 * time.Millisecond)
-			} else {
-				time.Sleep(200 * time.Millisecond)
-			}
-			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			// Restore keybuffer (350ms) + 2x 200ms backoff retry
+			time.Sleep(350 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Pressed key '%s'", keyName),

@@ -676,6 +676,11 @@ public class ToolMain {
                             int displayId = Integer.parseInt(tokens[1]);
                             String targetId = tokens[2].replaceFirst("^(?i)node:", "").trim();
                             int[] pt = sLastTargetCoords.get(targetId);
+                            int[] size = queryDisplaySize(displayId);
+                            int dispW = size[0], dispH = size[1];
+                            if (pt != null && (pt[0] < 0 || (dispW > 0 && pt[0] > dispW) || pt[1] < 0 || (dispH > 0 && pt[1] > dispH))) {
+                                pt = null;
+                            }
                             if (pt == null) {
                                 dumpTreeWithUi(uiAutomation, uiClass, displayId, 0, false, false);
                                 pt = sLastTargetCoords.get(targetId);
