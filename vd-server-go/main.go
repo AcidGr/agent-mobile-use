@@ -339,11 +339,9 @@ func setSessionActive(active bool, sid string, title string) {
 	activeSessionsMu.Lock()
 	if active {
 		if sid != "" {
-			if title == "" || title == "移动端任务" || title == "闲聊" {
+			if title == "" {
 				if existing, ok := activeSessions[sid]; ok && existing.Title != "" {
 					title = existing.Title
-				} else {
-					title = "移动端任务"
 				}
 			}
 			activeSessions[sid] = SessionMeta{ID: sid, Title: title}
@@ -2039,16 +2037,17 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		var p struct {
-			Title       string `json:"title"`
-			Subtext     string `json:"subtext"`
-			Content     string `json:"content"`
-			Tag         string `json:"tag"`
-			URL         string `json:"url"`
-			SessionID   string `json:"session_id"`
-			Session     string `json:"session"`
-			Total       int    `json:"total"`
-			Completed   int    `json:"completed"`
-			IsCompleted bool   `json:"is_completed"`
+			Title        string `json:"title"`
+			SessionTitle string `json:"session_title"`
+			Subtext      string `json:"subtext"`
+			Content      string `json:"content"`
+			Tag          string `json:"tag"`
+			URL          string `json:"url"`
+			SessionID    string `json:"session_id"`
+			Session      string `json:"session"`
+			Total        int    `json:"total"`
+			Completed    int    `json:"completed"`
+			IsCompleted  bool   `json:"is_completed"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2069,22 +2068,19 @@ func main() {
 			sid = p.Session
 		}
 
-		// Ensure subtext is always the genuine session title, never raw user prompt strings
-		if p.Subtext == "" {
+		sessionTitle := p.SessionTitle
+		if sessionTitle == "" {
+			sessionTitle = p.Subtext
+		}
+		if sessionTitle == "" {
 			_, title := getSessionMeta()
-			if title != "" {
-				p.Subtext = title
-			} else {
-				p.Subtext = "移动端任务"
-			}
-		} else if len(p.Subtext) > 15 || strings.Contains(p.Subtext, "？") || strings.Contains(p.Subtext, "?") || strings.Contains(p.Subtext, "吗") {
-			p.Subtext = "移动端任务"
+			sessionTitle = title
 		}
 
 		isCompletedStr := "false"
 		if p.IsCompleted || (p.Total > 0 && p.Completed >= p.Total) {
 			isCompletedStr = "true"
-			setSessionActive(false, sid, p.Subtext)
+			setSessionActive(false, sid, sessionTitle)
 			if sid != "" {
 				lastCompletedSessionIDMu.Lock()
 				lastCompletedSessionID = sid
@@ -2121,8 +2117,8 @@ func main() {
 		cmd := exec.Command("/system/bin/sh", "-c", `/system/bin/am start -f 0x18000000 -n com.agent.mobileuse/.QuestionActivity --ez only_notify true --ez is_completed "$NOTIFY_IS_COMPLETED" --es title "$NOTIFY_TITLE" --es session_title "$NOTIFY_SESSION_TITLE" --es subtext "$NOTIFY_SUBTEXT" --es tag "$NOTIFY_TAG" --es content "$NOTIFY_CONTENT" --es session_id "$NOTIFY_SESSION_ID" 2>/dev/null`)
 		cmd.Env = append(os.Environ(),
 			"NOTIFY_TITLE="+p.Title,
-			"NOTIFY_SESSION_TITLE="+p.Subtext,
-			"NOTIFY_SUBTEXT="+p.Subtext,
+			"NOTIFY_SESSION_TITLE="+sessionTitle,
+			"NOTIFY_SUBTEXT="+sessionTitle,
 			"NOTIFY_TAG="+p.Tag,
 			"NOTIFY_CONTENT="+p.Content,
 			"NOTIFY_SESSION_ID="+sid,
