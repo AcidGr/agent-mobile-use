@@ -47,7 +47,7 @@ case "$1" in
     launch)
         ensure_server
         shift
-        curl -s -X POST "$BASE_URL/api/launch" -H "Content-Type: application/json" -d "{\"package\": \"$*\"}"
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"launch_app\", \"package\": \"$*\"}"
         echo ""
         ;;
     tree|dump)
@@ -56,26 +56,26 @@ case "$1" in
         ;;
     tap)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/click" -H "Content-Type: application/json" -d "{\"x\": $2, \"y\": $3}"
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"click\", \"coordinate\": [$2, $3]}"
         echo ""
         ;;
     swipe)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/swipe" -H "Content-Type: application/json" -d "{\"x1\": $2, \"y1\": $3, \"x2\": $4, \"y2\": $5, \"duration\": ${6:-300}}"
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"swipe\", \"coordinate\": [$2, $3], \"end_coordinate\": [$4, $5], \"duration_ms\": ${6:-300}}"
         echo ""
         ;;
     type)
         ensure_server
         if [ "$#" -ge 3 ]; then
-            curl -s -X POST "$BASE_URL/api/type" -H "Content-Type: application/json" -d "{\"target\": \"$2\", \"text\": \"$3\"}"
+            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"target\": \"$2\", \"text\": \"$3\"}"
         else
-            curl -s -X POST "$BASE_URL/api/type" -H "Content-Type: application/json" -d "{\"text\": \"$2\"}"
+            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"text\": \"$2\"}"
         fi
         echo ""
         ;;
     key)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/key" -H "Content-Type: application/json" -d "{\"key\": \"$2\"}"
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"key\", \"key\": \"$2\"}"
         echo ""
         ;;
     screenshot)

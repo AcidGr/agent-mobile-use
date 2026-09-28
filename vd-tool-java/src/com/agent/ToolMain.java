@@ -353,15 +353,6 @@ public class ToolMain {
     private static final int DUMP_RETRY_SLEEP_MS = 350;
 
     /**
-     * Wait after UiAutomation.connect() to allow system_server service bindings to settle.
-     * Empirically 50ms-100ms achieves 100% window capture; 100ms provides full safety.
-     */
-    private static final int CONNECT_STABILIZE_SLEEP_MS = 100;
-
-    /** Readiness poll interval; the window list is cheap, so a tight probe is affordable. */
-    private static final int WINDOW_POLL_INTERVAL_MS = 15;
-
-    /**
      * Wait between the two passes. A WebView re-enables its renderer accessibility when it
      * is queried, but not synchronously, so reading twice in a row without a gap sees the
      * same disabled tree both times.
@@ -420,53 +411,18 @@ public class ToolMain {
             return;
         }
         String cmd = args[0];
-        if ("tree".equals(cmd) || "dump".equals(cmd)) {
-            int displayId = args.length > 1 ? Integer.parseInt(args[1]) : 0;
-            // Optional diagnostic budget override and system-chrome filter
-            int budgetOverride = args.length > 2 && args[2].length() > 0
-                    ? Integer.parseInt(args[2]) : 0;
-            // --no-system-ui drops status bar / navigation bar chrome to match virtual display
-            boolean dropSystemUi = false;
-            for (int ai = 3; ai < args.length; ai++) {
-                if ("--no-system-ui".equals(args[ai])) dropSystemUi = true;
-            }
-            if (!dumpTree(displayId, budgetOverride, dropSystemUi)) exitNow(1);
-        } else if ("type".equals(cmd) || "type_b64".equals(cmd)) {
-            if (args.length < 3) {
-                System.err.println("Usage: " + cmd + " <displayId> [targetSpec] <text>");
-                exitNow(2);
-            }
-            int displayId = Integer.parseInt(args[1]);
-            String targetSpec = "focused";
-            String rawText = "";
-            if (args.length == 3) {
-                // type <displayId> <text>
-                rawText = args[2];
-            } else {
-                // type <displayId> <targetSpec> <text>
-                targetSpec = args[2];
-                rawText = args[3];
-            }
-            String text = rawText;
-            if ("type_b64".equals(cmd)) {
-                try {
-                    byte[] decoded = android.util.Base64.decode(rawText, android.util.Base64.DEFAULT);
-                    text = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
-                } catch (Exception ignored) {}
-            }
-            smartType(displayId, targetSpec, text);
+        if ("daemon".equals(cmd)) {
+            runDaemon();
         } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
             String query = args.length > 1 ? args[1] : "";
             listApps(query);
-        } else if ("daemon".equals(cmd)) {
-            runDaemon();
         } else {
             printUsage();
         }
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|apps|daemon> [args...]");
+        System.out.println("Usage: ToolMain <daemon|apps> [args...]");
     }
 
     private static void listApps(String query) {
@@ -747,56 +703,6 @@ public class ToolMain {
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static boolean dumpTree(int targetDisplayId, int budgetOverride,
-                                     boolean dropSystemUi) {
-        HandlerThread ht = null;
-        Object uiAutomation = null;
-        Class<?> uiClass = null;
-        try {
-            ht = new HandlerThread("UiToolThread");
-            ht.start();
-
-            Class<?> uacClass = Class.forName("android.app.UiAutomationConnection");
-            Object uac = uacClass.getConstructor().newInstance();
-
-            uiClass = Class.forName("android.app.UiAutomation");
-            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
-            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
-                    .newInstance(ht.getLooper(), uac);
-
-            try {
-                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
-            } catch (NoSuchMethodException e) {
-                uiClass.getMethod("connect").invoke(uiAutomation);
-            }
-
-            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-            info.eventTypes = -1;
-            info.feedbackType = 16;
-            // 0x2 (INCLUDE_NOT_IMPORTANT) | 0x8 (WEB_ACCESSIBILITY) | 0x10 (VIEW_IDS) | 0x40 (RETRIEVE_INTERACTIVE_WINDOWS)
-            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
-            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
-
-            waitForWindow(uiClass, uiAutomation, targetDisplayId, CONNECT_STABILIZE_SLEEP_MS);
-
-            return dumpTreeWithUi(uiAutomation, uiClass, targetDisplayId, budgetOverride, dropSystemUi);
-        } catch (Throwable t) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("fail error=\"").append(oneLine(String.valueOf(t))).append("\"");
-            System.out.print(sb.toString());
-            return false;
-        } finally {
-            if (uiAutomation != null && uiClass != null) {
-                try {
-                    uiClass.getMethod("disconnect").invoke(uiAutomation);
-                } catch (Throwable ignored) {}
-            }
-            if (ht != null) {
-                ht.quit();
-            }
-        }
-    }
-
     private static boolean dumpTreeWithUi(Object uiAutomation, Class<?> uiClass,
                                            int targetDisplayId, int budgetOverride,
                                            boolean dropSystemUi) {
@@ -982,42 +888,6 @@ public class ToolMain {
             System.out.flush();
             return false;
         }
-    }
-
-    /**
-     * Poll {@code getWindowsOnAllDisplays} until the target display has a window, or the
-     * budget runs out. This replaces a blind fixed sleep: the window list is the cheapest
-     * readiness probe the engine offers, and it goes non-empty in ~10-20ms warm, so paying
-     * the full budget every time was pure latency. The budget is unchanged, so a cold
-     * engine still gets exactly the protection the fixed sleep used to give it.
-     */
-    private static void waitForWindow(Class<?> uiClass, Object uiAutomation,
-                                      int targetDisplayId, long budgetMs) {
-        long deadline = SystemClock.uptimeMillis() + budgetMs;
-        while (true) {
-            int wins = countTargetWindows(uiClass, uiAutomation, targetDisplayId);
-            if (wins > 0) return;
-            if (SystemClock.uptimeMillis() >= deadline) return;
-            try { Thread.sleep(WINDOW_POLL_INTERVAL_MS); } catch (InterruptedException ignored) {}
-        }
-    }
-
-    /** Windows on the target display only — the same slice the scan itself will walk. */
-    private static int countTargetWindows(Class<?> uiClass, Object uiAutomation, int targetDisplayId) {
-        try {
-            Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
-            if (displays == null) return 0;
-            Class<?> saClass = displays.getClass();
-            int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
-            Method keyAt = saClass.getMethod("keyAt", int.class);
-            Method valueAt = saClass.getMethod("valueAt", int.class);
-            for (int i = 0; i < sizeN; i++) {
-                if (!Integer.valueOf(targetDisplayId).equals(keyAt.invoke(displays, i))) continue;
-                List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                return wins == null ? 0 : wins.size();
-            }
-        } catch (Throwable ignored) {}
-        return 0;
     }
 
     /**
@@ -1988,45 +1858,6 @@ public class ToolMain {
      * 4. If submit is true AND the write succeeded, dispatch KEYCODE_ENTER.
      * 5. Return structured JSON with the classification and before/after evidence.
      */
-    private static void smartType(int targetDisplayId, String targetSpec, String text) {
-        HandlerThread ht = null;
-        Object uiAutomation = null;
-        Class<?> uiClass = null;
-        try {
-            ht = new HandlerThread("SmartTypeThread");
-            ht.start();
-            Object uac = Class.forName("android.app.UiAutomationConnection")
-                    .getConstructor().newInstance();
-            uiClass = Class.forName("android.app.UiAutomation");
-            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
-            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
-                    .newInstance(ht.getLooper(), uac);
-            try {
-                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
-            } catch (NoSuchMethodException e) {
-                uiClass.getMethod("connect").invoke(uiAutomation);
-            }
-            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-            info.eventTypes = -1;
-            info.feedbackType = 16;
-            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
-            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
-            Thread.sleep(200);
-
-            smartTypeWithUi(uiAutomation, uiClass, targetDisplayId, targetSpec, text);
-        } catch (Throwable t) {
-            System.out.print("{\"ok\":false,\"error\":\"init_failed\",\"exception\":\"" + escapeJson(String.valueOf(t)) + "\"}");
-            System.out.flush();
-        } finally {
-            if (uiAutomation != null && uiClass != null) {
-                try {
-                    uiClass.getMethod("disconnect").invoke(uiAutomation);
-                } catch (Throwable ignored) {}
-            }
-            if (ht != null) ht.quit();
-        }
-    }
-
     private static void smartTypeWithUi(Object uiAutomation, Class<?> uiClass, int targetDisplayId, String targetSpec, String text) {
         String err = null;
         String mode = "none";

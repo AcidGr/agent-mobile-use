@@ -1181,27 +1181,6 @@ func runTool(args ...string) (string, error) {
 	return string(out), err
 }
 
-func _old_runTool_unused(args ...string) (string, error) {
-	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
-	if _, err := os.Stat(dexPath); err != nil {
-		dexPath = "/data/local/tmp/agent_tools.dex"
-	}
-	cmdArgs := append([]string{"/system/bin", "com.agent.ToolMain"}, args...)
-	cmd := exec.Command("/system/bin/app_process", cmdArgs...)
-	cmd.Env = append(os.Environ(),
-		"ANDROID_ROOT=/system",
-		"ANDROID_DATA=/data",
-		"ANDROID_ART_ROOT=/apex/com.android.art",
-		"ANDROID_I18N_ROOT=/apex/com.android.i18n",
-		"ANDROID_TZDATA_ROOT=/apex/com.android.tzdata",
-		"BOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar:/apex/com.android.adservices/javalib/framework-adservices.jar:/apex/com.android.adservices/javalib/framework-sdksandbox.jar:/apex/com.android.appsearch/javalib/framework-appsearch.jar:/apex/com.android.configinfrastructure/javalib/framework-configinfrastructure.jar:/apex/com.android.conscrypt/javalib/conscrypt.jar:/apex/com.android.crashrecovery/javalib/framework-crashrecovery.jar:/apex/com.android.devicelock/javalib/framework-devicelock.jar:/apex/com.android.healthfitness/javalib/framework-healthfitness.jar:/apex/com.android.ipsec/javalib/android.net.ipsec.ike.jar:/apex/com.android.media/javalib/updatable-media.jar:/apex/com.android.mediaprovider/javalib/framework-mediaprovider.jar:/apex/com.android.mediaprovider/javalib/framework-pdf.jar:/apex/com.android.mediaprovider/javalib/framework-pdf-v.jar:/apex/com.android.mediaprovider/javalib/framework-photopicker.jar:/apex/com.android.ondevicepersonalization/javalib/framework-ondevicepersonalization.jar:/apex/com.android.os.statsd/javalib/framework-statsd.jar:/apex/com.android.permission/javalib/framework-permission.jar:/apex/com.android.permission/javalib/framework-permission-s.jar:/apex/com.android.profiling/javalib/framework-profiling.jar:/apex/com.android.scheduling/javalib/framework-scheduling.jar:/apex/com.android.sdkext/javalib/framework-sdkextensions.jar:/apex/com.android.tethering/javalib/framework-connectivity.jar:/apex/com.android.tethering/javalib/framework-connectivity-b.jar:/apex/com.android.tethering/javalib/framework-connectivity-t.jar:/apex/com.android.tethering/javalib/framework-tethering.jar:/apex/com.android.uwb/javalib/framework-ranging.jar:/apex/com.android.uwb/javalib/framework-uwb.jar:/apex/com.android.virt/javalib/framework-virtualization.jar:/apex/com.android.wifi/javalib/framework-wifi.jar",
-		"DEX2OATBOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar",
-		"CLASSPATH="+dexPath,
-	)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
 func parseKeycode(key string) string {
 	k := strings.ToUpper(strings.TrimSpace(key))
 	switch k {
@@ -1396,12 +1375,9 @@ func performDumpInternal(targetDid int, st StatusResp, noSystemUi bool) (string,
 		treeArgs = append(treeArgs, "0", "--no-system-ui")
 	}
 	out, err := globalDumpDaemon.Request(strings.Join(treeArgs, " "))
-	if err != nil || strings.TrimSpace(out) == "" {
-		out, err = runTool(treeArgs...)
-	}
 	trimmed := strings.TrimSpace(out)
 	if err != nil || trimmed == "" {
-		return "", "", fmt.Errorf("the accessibility tree could not be read for this display")
+		return "", "", fmt.Errorf("the accessibility tree could not be read for this display: %v", err)
 	}
 
 	env, rows, ok := splitObservation(trimmed)
@@ -1876,10 +1852,7 @@ func main() {
 				targetSpec = targetStr
 			}
 			b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
-			out, err := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
-			if err != nil || strings.TrimSpace(out) == "" {
-				out, _ = runTool("type_b64", did, targetSpec, b64)
-			}
+			out, _ := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
 			actionDesc := fmt.Sprintf("OK: Injected text: \"%s\"", p.Text)
 			var tp struct {
 				OK           bool   `json:"ok"`
@@ -2060,190 +2033,6 @@ func main() {
 			Message: "OK",
 			Data:    trimmed,
 		})
-	})
-
-	mux.HandleFunc("/api/click", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		injectNoticeHeader(w)
-		_, targetDid, err := ensureTargetReady()
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		var p struct {
-			X          int `json:"x"`
-			Y          int `json:"y"`
-			DurationMs int `json:"duration_ms"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-		did := strconv.Itoa(targetDid)
-		if targetDid == 0 {
-			if p.DurationMs > 0 {
-				broadcastTouch(2, 0, 0, p.X, p.Y, p.X, p.Y, p.DurationMs)
-			} else {
-				broadcastTouch(1, p.X, p.Y, 0, 0, 0, 0, 0)
-			}
-		}
-		var cmd *exec.Cmd
-		if p.DurationMs > 0 {
-			cmd = exec.Command("/system/bin/input", "-d", did, "swipe",
-				strconv.Itoa(p.X), strconv.Itoa(p.Y), strconv.Itoa(p.X), strconv.Itoa(p.Y), strconv.Itoa(p.DurationMs))
-		} else {
-			cmd = exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(p.X), strconv.Itoa(p.Y))
-		}
-		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
-	})
-
-	mux.HandleFunc("/api/swipe", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		injectNoticeHeader(w)
-		_, targetDid, err := ensureTargetReady()
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		var p struct {
-			X1       int `json:"x1"`
-			Y1       int `json:"y1"`
-			X2       int `json:"x2"`
-			Y2       int `json:"y2"`
-			Duration int `json:"duration"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-		if p.Duration <= 0 {
-			p.Duration = 300
-		}
-		did := strconv.Itoa(targetDid)
-		if targetDid == 0 {
-			broadcastTouch(2, 0, 0, p.X1, p.Y1, p.X2, p.Y2, p.Duration)
-		}
-		cmd := exec.Command("/system/bin/input", "-d", did, "swipe",
-			strconv.Itoa(p.X1), strconv.Itoa(p.Y1), strconv.Itoa(p.X2), strconv.Itoa(p.Y2), strconv.Itoa(p.Duration))
-		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
-	})
-
-	mux.HandleFunc("/api/type", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		injectNoticeHeader(w)
-		_, targetDid, err := ensureTargetReady()
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		var p struct {
-			Text   string      `json:"text"`
-			Target interface{} `json:"target"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-		did := strconv.Itoa(targetDid)
-		targetStr := "focused"
-		if p.Target != nil {
-			switch v := p.Target.(type) {
-			case string:
-				if v != "" {
-					targetStr = v
-				}
-			case float64:
-				targetStr = strconv.Itoa(int(v))
-			case int:
-				targetStr = strconv.Itoa(v)
-			}
-		}
-
-		b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
-		typeCmd := fmt.Sprintf("type_b64 %s %s %s", did, targetStr, b64)
-		out, err := globalDumpDaemon.Request(typeCmd)
-		if err != nil || strings.TrimSpace(out) == "" {
-			out, err = runTool("type_b64", did, targetStr, b64)
-		}
-		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out})
-	})
-
-	mux.HandleFunc("/api/key", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		injectNoticeHeader(w)
-		_, targetDid, err := ensureTargetReady()
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		var p struct {
-			Key string `json:"key"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-		did := strconv.Itoa(targetDid)
-		kc := parseKeycode(p.Key)
-		cmd := exec.Command("/system/bin/input", "-d", did, "keyevent", kc)
-		if err := cmd.Run(); err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true})
-	})
-
-	mux.HandleFunc("/api/launch", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		injectNoticeHeader(w)
-		_, targetDid, err := ensureTargetReady()
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
-			return
-		}
-		var p struct {
-			Package  string `json:"package"`
-			Activity string `json:"activity"`
-			User     *int   `json:"user"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Invalid parameters"})
-			return
-		}
-
-		out, err := executeLaunch(targetDid, p.Package, p.Activity, p.User)
-		if err != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: out, Data: out})
 	})
 
 	mux.HandleFunc("/api/notify", func(w http.ResponseWriter, r *http.Request) {
