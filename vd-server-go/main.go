@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha1"
 	_ "embed"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"image"
 	"image/jpeg"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -318,6 +320,9 @@ var (
 	activeSessionID    string
 	activeSessionTitle string
 
+	activeSessionsMu sync.Mutex
+	activeSessions   = make(map[string]SessionMeta)
+
 	lastAppliedCapsuleAction   string
 	lastAppliedCapsuleActionMu sync.Mutex
 
@@ -325,12 +330,53 @@ var (
 	lastCompletedSessionIDMu sync.Mutex
 )
 
+type SessionMeta struct {
+	ID    string
+	Title string
+}
+
 func setSessionActive(active bool, sid string, title string) {
+	activeSessionsMu.Lock()
+	if active {
+		if sid != "" {
+			if title == "" || title == "移动端任务" || title == "闲聊" {
+				if existing, ok := activeSessions[sid]; ok && existing.Title != "" {
+					title = existing.Title
+				} else {
+					title = "移动端任务"
+				}
+			}
+			activeSessions[sid] = SessionMeta{ID: sid, Title: title}
+		}
+	} else {
+		if sid != "" {
+			delete(activeSessions, sid)
+		} else {
+			activeSessions = make(map[string]SessionMeta)
+		}
+	}
+
+	remaining := len(activeSessions)
+	var latestSid, latestTitle string
+	if remaining > 0 {
+		if sid != "" && active {
+			latestSid = sid
+			latestTitle = title
+		} else {
+			for _, m := range activeSessions {
+				latestSid = m.ID
+				latestTitle = m.Title
+				break
+			}
+		}
+	}
+	activeSessionsMu.Unlock()
+
 	sessionActiveMu.Lock()
-	isSessionActive = active
+	isSessionActive = (remaining > 0)
 	sessionActiveMu.Unlock()
 
-	if !active {
+	if remaining == 0 {
 		modeMu.Lock()
 		currentMode = "idle"
 		modeMu.Unlock()
@@ -338,22 +384,18 @@ func setSessionActive(active bool, sid string, title string) {
 	}
 
 	sessionMetaMu.Lock()
-	if active {
-		if sid != "" {
-			activeSessionID = sid
+	if isSessionActive {
+		activeSessionID = latestSid
+		activeSessionTitle = latestTitle
+		if latestSid != "" {
 			lastCompletedSessionIDMu.Lock()
-			if lastCompletedSessionID != "" && (lastCompletedSessionID == sid || strings.Contains(sid, lastCompletedSessionID) || strings.Contains(lastCompletedSessionID, sid)) {
+			if lastCompletedSessionID != "" && (lastCompletedSessionID == latestSid || strings.Contains(latestSid, lastCompletedSessionID) || strings.Contains(lastCompletedSessionID, latestSid)) {
 				lastCompletedSessionID = ""
 				lastCompletedSessionIDMu.Unlock()
 				go clearCompletedOnDevice()
 			} else {
 				lastCompletedSessionIDMu.Unlock()
 			}
-		}
-		if title != "" && title != "移动端任务" && title != "闲聊" {
-			activeSessionTitle = title
-		} else if activeSessionTitle == "" {
-			activeSessionTitle = "移动端任务"
 		}
 	} else {
 		activeSessionID = ""
@@ -928,15 +970,218 @@ func ensureA11yServiceDetached() {
 	_ = os.Remove(a11yMarkerFile)
 }
 
+func getToolEnv(dexPath string) []string {
+	return append(os.Environ(),
+		"ANDROID_ROOT=/system",
+		"ANDROID_DATA=/data",
+		"ANDROID_ART_ROOT=/apex/com.android.art",
+		"ANDROID_I18N_ROOT=/apex/com.android.i18n",
+		"ANDROID_TZDATA_ROOT=/apex/com.android.tzdata",
+		"BOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar:/apex/com.android.adservices/javalib/framework-adservices.jar:/apex/com.android.adservices/javalib/framework-sdksandbox.jar:/apex/com.android.appsearch/javalib/framework-appsearch.jar:/apex/com.android.configinfrastructure/javalib/framework-configinfrastructure.jar:/apex/com.android.conscrypt/javalib/conscrypt.jar:/apex/com.android.crashrecovery/javalib/framework-crashrecovery.jar:/apex/com.android.devicelock/javalib/framework-devicelock.jar:/apex/com.android.healthfitness/javalib/framework-healthfitness.jar:/apex/com.android.ipsec/javalib/android.net.ipsec.ike.jar:/apex/com.android.media/javalib/updatable-media.jar:/apex/com.android.mediaprovider/javalib/framework-mediaprovider.jar:/apex/com.android.mediaprovider/javalib/framework-pdf.jar:/apex/com.android.mediaprovider/javalib/framework-pdf-v.jar:/apex/com.android.mediaprovider/javalib/framework-photopicker.jar:/apex/com.android.ondevicepersonalization/javalib/framework-ondevicepersonalization.jar:/apex/com.android.os.statsd/javalib/framework-statsd.jar:/apex/com.android.permission/javalib/framework-permission.jar:/apex/com.android.permission/javalib/framework-permission-s.jar:/apex/com.android.profiling/javalib/framework-profiling.jar:/apex/com.android.scheduling/javalib/framework-scheduling.jar:/apex/com.android.sdkext/javalib/framework-sdkextensions.jar:/apex/com.android.tethering/javalib/framework-connectivity.jar:/apex/com.android.tethering/javalib/framework-connectivity-b.jar:/apex/com.android.tethering/javalib/framework-connectivity-t.jar:/apex/com.android.tethering/javalib/framework-tethering.jar:/apex/com.android.uwb/javalib/framework-ranging.jar:/apex/com.android.uwb/javalib/framework-uwb.jar:/apex/com.android.virt/javalib/framework-virtualization.jar:/apex/com.android.wifi/javalib/framework-wifi.jar",
+		"DEX2OATBOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar",
+		"CLASSPATH="+dexPath,
+	)
+}
+
+type DumpDaemonManager struct {
+	mu     sync.Mutex
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	reader *bufio.Reader
+	ready  bool
+}
+
+var globalDumpDaemon = &DumpDaemonManager{}
+
+func (d *DumpDaemonManager) isRunningLocked() bool {
+	if d.cmd == nil || d.cmd.Process == nil || !d.ready {
+		return false
+	}
+	if err := d.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	return true
+}
+
+func (d *DumpDaemonManager) Start() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.startLocked()
+}
+
+func (d *DumpDaemonManager) startLocked() error {
+	if d.isRunningLocked() {
+		return nil
+	}
+	d.stopLocked()
+
+	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
+	if _, err := os.Stat(dexPath); err != nil {
+		dexPath = "/data/local/tmp/agent_tools.dex"
+	}
+
+	cmdArgs := []string{"/system/bin", "com.agent.ToolMain", "daemon"}
+	cmd := exec.Command("/system/bin/app_process", cmdArgs...)
+	cmd.Env = getToolEnv(dexPath)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("DumpDaemon StdinPipe: %v", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return fmt.Errorf("DumpDaemon StdoutPipe: %v", err)
+	}
+
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		return fmt.Errorf("DumpDaemon start: %v", err)
+	}
+
+	reader := bufio.NewReader(stdout)
+
+	readyCh := make(chan error, 1)
+	go func() {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			readyCh <- err
+			return
+		}
+		if strings.TrimSpace(line) != "READY" {
+			readyCh <- fmt.Errorf("unexpected handshake line: %q", line)
+			return
+		}
+		readyCh <- nil
+	}()
+
+	select {
+	case err := <-readyCh:
+		if err != nil {
+			_ = cmd.Process.Kill()
+			stdin.Close()
+			stdout.Close()
+			_ = cmd.Wait()
+			return fmt.Errorf("DumpDaemon handshake: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		stdin.Close()
+		stdout.Close()
+		_ = cmd.Wait()
+		return fmt.Errorf("DumpDaemon handshake timeout")
+	}
+
+	d.cmd = cmd
+	d.stdin = stdin
+	d.reader = reader
+	d.ready = true
+	log.Printf("[DumpDaemon] Started successfully (PID %d)", cmd.Process.Pid)
+	return nil
+}
+
+func (d *DumpDaemonManager) Stop() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stopLocked()
+}
+
+func (d *DumpDaemonManager) stopLocked() {
+	if d.cmd == nil || d.cmd.Process == nil {
+		d.ready = false
+		d.cmd = nil
+		d.stdin = nil
+		d.reader = nil
+		return
+	}
+
+	if d.stdin != nil {
+		_, _ = d.stdin.Write([]byte("quit\n"))
+		_ = d.stdin.Close()
+	}
+
+	done := make(chan error, 1)
+	go func(c *exec.Cmd) {
+		done <- c.Wait()
+	}(d.cmd)
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		_ = d.cmd.Process.Kill()
+		<-done
+	}
+
+	log.Printf("[DumpDaemon] Stopped.")
+	d.cmd = nil
+	d.stdin = nil
+	d.reader = nil
+	d.ready = false
+}
+
+func (d *DumpDaemonManager) Request(cmdLine string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if !d.isRunningLocked() {
+		if err := d.startLocked(); err != nil {
+			return "", err
+		}
+	}
+
+	if _, err := d.stdin.Write([]byte(cmdLine + "\n")); err != nil {
+		d.stopLocked()
+		return "", fmt.Errorf("write command failed: %v", err)
+	}
+
+	var sb strings.Builder
+	for {
+		line, err := d.reader.ReadString('\n')
+		if err != nil {
+			d.stopLocked()
+			return "", fmt.Errorf("read response failed: %v", err)
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "<<<END_OF_DUMP>>>" {
+			break
+		}
+		sb.WriteString(line)
+	}
+
+	return sb.String(), nil
+}
+
 func syncA11yWithTargetDisplay(targetDid int) {
 	if targetDid >= 0 {
 		ensureA11yServiceAttached()
+		go func() {
+			if err := globalDumpDaemon.Start(); err != nil {
+				log.Printf("[DumpDaemon] Background start error: %v", err)
+			}
+		}()
 	} else {
 		ensureA11yServiceDetached()
+		globalDumpDaemon.Stop()
 	}
 }
 
 func runTool(args ...string) (string, error) {
+	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
+	if _, err := os.Stat(dexPath); err != nil {
+		dexPath = "/data/local/tmp/agent_tools.dex"
+	}
+	cmdArgs := append([]string{"/system/bin", "com.agent.ToolMain"}, args...)
+	cmd := exec.Command("/system/bin/app_process", cmdArgs...)
+	cmd.Env = getToolEnv(dexPath)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func _old_runTool_unused(args ...string) (string, error) {
 	dexPath := "/data/adb/modules/agent_mobile_use/bin/agent_tools.dex"
 	if _, err := os.Stat(dexPath); err != nil {
 		dexPath = "/data/local/tmp/agent_tools.dex"
@@ -1159,6 +1404,7 @@ func main() {
 	go func() {
 		<-sigCh
 		ensureA11yServiceDetached()
+		globalDumpDaemon.Stop()
 		os.Exit(0)
 	}()
 
@@ -1338,7 +1584,10 @@ func main() {
 		if v := r.URL.Query().Get("no_system_ui"); v == "1" || v == "true" {
 			treeArgs = append(treeArgs, "0", "--no-system-ui")
 		}
-		out, err := runTool(treeArgs...)
+		out, err := globalDumpDaemon.Request(strings.Join(treeArgs, " "))
+		if err != nil || strings.TrimSpace(out) == "" {
+			out, err = runTool(treeArgs...)
+		}
 		trimmed := strings.TrimSpace(out)
 		if err != nil || trimmed == "" {
 			json.NewEncoder(w).Encode(ActionResponse{
@@ -1544,7 +1793,11 @@ func main() {
 			}
 		}
 
-		out, err := runTool("type", did, targetStr, p.Text)
+		typeCmd := fmt.Sprintf("type %s %s %s", did, targetStr, p.Text)
+		out, err := globalDumpDaemon.Request(typeCmd)
+		if err != nil || strings.TrimSpace(out) == "" {
+			out, err = runTool("type", did, targetStr, p.Text)
+		}
 		if err != nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: out})
 			return
@@ -1777,6 +2030,9 @@ func main() {
 			"NOTIFY_IS_COMPLETED="+isCompletedStr,
 		)
 		out, err := cmd.CombinedOutput()
+		if isCompletedStr == "true" && getSessionActive() {
+			go updateCapsuleState()
+		}
 		if err == nil {
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
 			return
@@ -1969,6 +2225,25 @@ func main() {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	mux.HandleFunc("/api/session/watch", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		sid := r.URL.Query().Get("session_id")
+		title := r.URL.Query().Get("session_title")
+		if sid == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		setSessionActive(true, sid, title)
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Block until client disconnects or process dies (Linux kernel sends TCP FIN on process termination)
+		<-r.Context().Done()
+		setSessionActive(false, sid, "")
 	})
 
 	mux.HandleFunc("/api/audio/status", func(w http.ResponseWriter, r *http.Request) {

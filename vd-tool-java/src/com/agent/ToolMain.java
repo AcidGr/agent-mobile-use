@@ -11,6 +11,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -190,7 +192,24 @@ public class ToolMain {
      *   Window #3 Window{607def5 u0 com.tencent.mm/com.tencent.mm.ui.LauncherUI}:
      *       ... package=com.tencent.mm ...
      */
-    private static java.util.Set<String> systemChromeTitles() {
+    private static long sChromeTitlesCacheTime = 0;
+    private static java.util.Set<String> sCachedChromeTitles = null;
+
+    private static synchronized java.util.Set<String> systemChromeTitles() {
+        long now = SystemClock.uptimeMillis();
+        if (sCachedChromeTitles != null && (now - sChromeTitlesCacheTime) < 30000) {
+            return sCachedChromeTitles;
+        }
+        java.util.Set<String> titles = querySystemChromeTitlesDirect();
+        if (titles != null && !titles.isEmpty()) {
+            sCachedChromeTitles = titles;
+            sChromeTitlesCacheTime = now;
+            return sCachedChromeTitles;
+        }
+        return titles != null ? titles : (sCachedChromeTitles != null ? sCachedChromeTitles : java.util.Collections.<String>emptySet());
+    }
+
+    private static java.util.Set<String> querySystemChromeTitlesDirect() {
         java.util.Set<String> titles = new java.util.HashSet<String>();
         try {
             Process p = Runtime.getRuntime().exec(
@@ -413,13 +432,15 @@ public class ToolMain {
         } else if ("apps".equals(cmd) || "list_apps".equals(cmd)) {
             String query = args.length > 1 ? args[1] : "";
             listApps(query);
+        } else if ("daemon".equals(cmd)) {
+            runDaemon();
         } else {
             printUsage();
         }
     }
 
     private static void printUsage() {
-        System.out.println("Usage: ToolMain <tree|type|apps> [args...]");
+        System.out.println("Usage: ToolMain <tree|type|apps|daemon> [args...]");
     }
 
     private static void listApps(String query) {
@@ -536,6 +557,134 @@ public class ToolMain {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Persistent Daemon Mode (zero ART cold-start overhead)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static void clearAicCache() {
+        try {
+            Class<?> aicClass = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
+            Method getInstance = aicClass.getMethod("getInstance");
+            Object aic = getInstance.invoke(null);
+            try {
+                Method clear = aicClass.getMethod("clearCache");
+                clear.invoke(aic);
+            } catch (NoSuchMethodException e) {
+                for (Method m : aicClass.getMethods()) {
+                    if ("clearCache".equals(m.getName())) {
+                        if (m.getParameterTypes().length == 0) {
+                            m.invoke(aic);
+                            break;
+                        } else if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0] == int.class) {
+                            m.invoke(aic, 0);
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void runDaemon() {
+        HandlerThread ht = null;
+        Object uiAutomation = null;
+        Class<?> uiClass = null;
+        try {
+            ht = new HandlerThread("UiToolDaemonThread");
+            ht.start();
+
+            Class<?> uacClass = Class.forName("android.app.UiAutomationConnection");
+            Object uac = uacClass.getConstructor().newInstance();
+
+            uiClass = Class.forName("android.app.UiAutomation");
+            Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
+            uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
+                    .newInstance(ht.getLooper(), uac);
+
+            try {
+                uiClass.getMethod("connect", int.class).invoke(uiAutomation, 0);
+            } catch (NoSuchMethodException e) {
+                uiClass.getMethod("connect").invoke(uiAutomation);
+            }
+
+            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+            info.eventTypes = -1;
+            info.feedbackType = 16;
+            // 0x2 (INCLUDE_NOT_IMPORTANT) | 0x8 (WEB_ACCESSIBILITY) | 0x10 (VIEW_IDS) | 0x40 (RETRIEVE_INTERACTIVE_WINDOWS)
+            info.flags = 0x2 | 0x8 | 0x10 | 0x40;
+            uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
+
+            // Signal to parent process that daemon is fully ready
+            System.out.println("READY");
+            System.out.flush();
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, "UTF-8"));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if ("quit".equals(line) || "exit".equals(line)) {
+                    break;
+                }
+                if ("ping".equals(line)) {
+                    System.out.println("pong");
+                    System.out.println("<<<END_OF_DUMP>>>");
+                    System.out.flush();
+                    continue;
+                }
+                try {
+                    String[] tokens = line.split("\\s+");
+                    String action = tokens[0];
+                    if ("tree".equals(action) || "dump".equals(action)) {
+                        int displayId = tokens.length > 1 ? Integer.parseInt(tokens[1]) : 0;
+                        int budgetOverride = tokens.length > 2 && tokens[2].length() > 0
+                                ? Integer.parseInt(tokens[2]) : 0;
+                        boolean dropSystemUi = false;
+                        for (int ai = 3; ai < tokens.length; ai++) {
+                            if ("--no-system-ui".equals(tokens[ai])) dropSystemUi = true;
+                        }
+                        dumpTreeWithUi(uiAutomation, uiClass, displayId, budgetOverride, dropSystemUi);
+                    } else if ("type".equals(action)) {
+                        if (tokens.length >= 3) {
+                            int displayId = Integer.parseInt(tokens[1]);
+                            String targetSpec = tokens[2];
+                            String text = "";
+                            int textIdx = line.indexOf(targetSpec);
+                            if (textIdx >= 0) {
+                                text = line.substring(textIdx + targetSpec.length()).trim();
+                            }
+                            smartTypeWithUi(uiAutomation, uiClass, displayId, targetSpec, text);
+                        } else {
+                            System.out.print("fail error=\"Invalid type command in daemon\"");
+                        }
+                    } else {
+                        System.out.print("fail error=\"Unknown command: " + oneLine(line) + "\"");
+                    }
+                } catch (Throwable cmdErr) {
+                    System.out.print("fail error=\"" + oneLine(String.valueOf(cmdErr)) + "\"");
+                } finally {
+                    System.out.println();
+                    System.out.println("<<<END_OF_DUMP>>>");
+                    System.out.flush();
+                    clearAicCache();
+                }
+            }
+        } catch (Throwable t) {
+            System.out.print("fail error=\"Daemon init error: " + oneLine(String.valueOf(t)) + "\"\n<<<END_OF_DUMP>>>\n");
+            System.out.flush();
+        } finally {
+            if (uiAutomation != null && uiClass != null) {
+                try {
+                    uiClass.getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) {
+                ht.quit();
+            }
+            exitNow(0);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Read-only dump
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -543,6 +692,7 @@ public class ToolMain {
                                      boolean dropSystemUi) {
         HandlerThread ht = null;
         Object uiAutomation = null;
+        Class<?> uiClass = null;
         try {
             ht = new HandlerThread("UiToolThread");
             ht.start();
@@ -550,7 +700,7 @@ public class ToolMain {
             Class<?> uacClass = Class.forName("android.app.UiAutomationConnection");
             Object uac = uacClass.getConstructor().newInstance();
 
-            Class<?> uiClass = Class.forName("android.app.UiAutomation");
+            uiClass = Class.forName("android.app.UiAutomation");
             Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
             uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
                     .newInstance(ht.getLooper(), uac);
@@ -570,6 +720,28 @@ public class ToolMain {
 
             waitForWindow(uiClass, uiAutomation, targetDisplayId, CONNECT_STABILIZE_SLEEP_MS);
 
+            return dumpTreeWithUi(uiAutomation, uiClass, targetDisplayId, budgetOverride, dropSystemUi);
+        } catch (Throwable t) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("fail error=\"").append(oneLine(String.valueOf(t))).append("\"");
+            System.out.print(sb.toString());
+            return false;
+        } finally {
+            if (uiAutomation != null && uiClass != null) {
+                try {
+                    uiClass.getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) {
+                ht.quit();
+            }
+        }
+    }
+
+    private static boolean dumpTreeWithUi(Object uiAutomation, Class<?> uiClass,
+                                           int targetDisplayId, int budgetOverride,
+                                           boolean dropSystemUi) {
+        try {
             // Display geometry: an observation without it leaves the model unable to judge
             // whether a coordinate is even inside the screen.
             int[] size = queryDisplaySize(targetDisplayId);
@@ -731,29 +903,16 @@ public class ToolMain {
             emitEnvelope(targetDisplayId, dispW, dispH, windowCount, list,
                     droppedDup, scanAttempts, recovered, budgetOverride, lastAppSize,
                     droppedSystemUi);
-
+            System.out.flush();
+            list.clear();
+            return true;
         } catch (Throwable t) {
-            // Never die silently. Emit the SAME shape as a success so "did this fail?"
-            // is answered by an explicit status on the header line rather than by the
-            // absence of one: success starts with `ok display=...`, failure starts with
-            // `fail error=...`, and an empty tree carries `ok` plus tree_blocked=1 on the
-            // header and no rows after the column line. A caller that only looks for the
-            // header token cannot misread a failure as an empty screen.
             StringBuilder sb = new StringBuilder();
             sb.append("fail error=\"").append(oneLine(String.valueOf(t))).append("\"");
             System.out.print(sb.toString());
+            System.out.flush();
             return false;
-        } finally {
-            if (uiAutomation != null) {
-                try {
-                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
-                } catch (Throwable ignored) {}
-            }
-            if (ht != null) {
-                ht.quit();
-            }
         }
-        return true;
     }
 
     /**
@@ -1762,25 +1921,13 @@ public class ToolMain {
     private static void smartType(int targetDisplayId, String targetSpec, String text) {
         HandlerThread ht = null;
         Object uiAutomation = null;
-        String err = null;
-        String mode = "none";
-        String error = null;
-        String reason = null;
-        String focusHint = null;
-        String boundsStr = null;
-        String beforeTxt = null;
-        String afterTxt = null;
-        String vid = null;
-        String cls = null;
-        boolean ok = false;
-        long start = System.currentTimeMillis();
-
+        Class<?> uiClass = null;
         try {
             ht = new HandlerThread("SmartTypeThread");
             ht.start();
             Object uac = Class.forName("android.app.UiAutomationConnection")
                     .getConstructor().newInstance();
-            Class<?> uiClass = Class.forName("android.app.UiAutomation");
+            uiClass = Class.forName("android.app.UiAutomation");
             Class<?> iuacClass = Class.forName("android.app.IUiAutomationConnection");
             uiAutomation = uiClass.getConstructor(Looper.class, iuacClass)
                     .newInstance(ht.getLooper(), uac);
@@ -1795,6 +1942,36 @@ public class ToolMain {
             info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
             Thread.sleep(200);
+
+            smartTypeWithUi(uiAutomation, uiClass, targetDisplayId, targetSpec, text);
+        } catch (Throwable t) {
+            System.out.print("{\"ok\":false,\"error\":\"init_failed\",\"exception\":\"" + escapeJson(String.valueOf(t)) + "\"}");
+            System.out.flush();
+        } finally {
+            if (uiAutomation != null && uiClass != null) {
+                try {
+                    uiClass.getMethod("disconnect").invoke(uiAutomation);
+                } catch (Throwable ignored) {}
+            }
+            if (ht != null) ht.quit();
+        }
+    }
+
+    private static void smartTypeWithUi(Object uiAutomation, Class<?> uiClass, int targetDisplayId, String targetSpec, String text) {
+        String err = null;
+        String mode = "none";
+        String error = null;
+        String reason = null;
+        String focusHint = null;
+        String boundsStr = null;
+        String beforeTxt = null;
+        String afterTxt = null;
+        String vid = null;
+        String cls = null;
+        boolean ok = false;
+        long start = System.currentTimeMillis();
+
+        try {
 
             List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
             List<NodeItem> nodeList = new ArrayList<NodeItem>();
@@ -1949,13 +2126,6 @@ public class ToolMain {
         } catch (Throwable t) {
             err = String.valueOf(t);
             error = "internal_error";
-        } finally {
-            if (uiAutomation != null) {
-                try {
-                    uiAutomation.getClass().getMethod("disconnect").invoke(uiAutomation);
-                } catch (Throwable ignored) {}
-            }
-            if (ht != null) ht.quit();
         }
 
         long costMs = System.currentTimeMillis() - start;
@@ -1976,6 +2146,7 @@ public class ToolMain {
         if (err != null) sb.append(",\"exception\":\"").append(escapeJson(err)).append("\"");
         sb.append("}");
         System.out.print(sb.toString());
+        System.out.flush();
     }
 
     private static AccessibilityNodeInfo findFirstEditable(AccessibilityNodeInfo root) {
