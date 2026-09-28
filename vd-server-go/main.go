@@ -124,72 +124,125 @@ func (h *StreamHub) unregister(conn net.Conn) {
 }
 
 func (h *StreamHub) broadcast(msg []byte) {
+	// Snapshot under lock, write outside it: a slow watcher (250ms deadline) must not
+	// block register/unregister or other clients.
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	targets := make([]net.Conn, 0, len(h.clients))
 	for c := range h.clients {
+		targets = append(targets, c)
+	}
+	h.mu.Unlock()
+
+	var dead []net.Conn
+	for _, c := range targets {
 		_ = c.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
 		if err := writeWSBinaryFrame(c, msg); err != nil {
-			_ = c.Close()
-			delete(h.clients, c)
+			dead = append(dead, c)
 		}
+	}
+	if len(dead) == 0 {
+		return
+	}
+
+	h.mu.Lock()
+	for _, c := range dead {
+		if _, ok := h.clients[c]; ok {
+			delete(h.clients, c)
+			_ = c.Close()
+		}
+	}
+	h.mu.Unlock()
+}
+
+func (h *StreamHub) watcherCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.clients)
+}
+
+// connectDaemonLoop keeps a live link to the hardware encoder for as long as at least one
+// watcher is connected. It used to give up after ~4.5s of failed dials and never retry,
+// which is exactly why the first page load (racing the daemon's 3071 bind) or any mid-stream
+// encoder restart left the console permanently black until a manual reload.
+func (h *StreamHub) connectDaemonLoop() {
+	backoff := 100 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+
+	for h.watcherCount() > 0 {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3071", 500*time.Millisecond)
+		if err != nil {
+			fmt.Printf("[StreamHub] Daemon stream not ready on 127.0.0.1:3071 (retrying in %v): %v\n", backoff, err)
+			select {
+			case <-time.After(backoff):
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		// Fresh link: reset backoff so a later drop after a long healthy session reconnects fast.
+		backoff = 100 * time.Millisecond
+
+		if !h.attachDaemonConn(conn) {
+			return
+		}
+
+		fmt.Printf("[StreamHub] Connected to hardware stream on 127.0.0.1:3071\n")
+		h.pumpDaemonFrames(conn)
+
+		fmt.Printf("[StreamHub] Hardware stream loop ended, will retry while watchers remain\n")
 	}
 }
 
-func (h *StreamHub) connectDaemonLoop() {
-	var conn net.Conn
-	var err error
-	for i := 0; i < 30; i++ {
-		h.mu.Lock()
-		clientCount := len(h.clients)
-		h.mu.Unlock()
-		if clientCount == 0 {
-			return
-		}
-		conn, err = net.DialTimeout("tcp", "127.0.0.1:3071", 300*time.Millisecond)
-		if err == nil {
-			break
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-
-	if conn == nil {
-		fmt.Printf("[StreamHub] Failed to connect to daemon stream on 127.0.0.1:3071: %v\n", err)
-		return
-	}
-
+func (h *StreamHub) attachDaemonConn(conn net.Conn) bool {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.clients) == 0 {
 		_ = conn.Close()
-		h.mu.Unlock()
-		return
+		return false
 	}
 	h.daemonConn = conn
-	h.mu.Unlock()
+	return true
+}
 
-	fmt.Printf("[StreamHub] Connected to hardware stream on 127.0.0.1:3071\n")
+func (h *StreamHub) pumpDaemonFrames(conn net.Conn) {
+	defer func() {
+		h.mu.Lock()
+		if h.daemonConn == conn {
+			h.daemonConn = nil
+		}
+		_ = conn.Close()
+		h.mu.Unlock()
+	}()
+
 	buf := make([]byte, 1024*1024)
-
 	for {
 		var size int32
 		var flags int32
 		var pts int64
 
 		if err := binary.Read(conn, binary.BigEndian, &size); err != nil {
-			break
+			return
 		}
 		if err := binary.Read(conn, binary.BigEndian, &flags); err != nil {
-			break
+			return
 		}
+		// pts is part of the on-wire contract but unused downstream (the browser stamps
+		// frames with performance.now()); parse to advance the stream, then ignore it.
 		if err := binary.Read(conn, binary.BigEndian, &pts); err != nil {
-			break
+			return
 		}
 
 		if size <= 0 || int(size) > len(buf) {
-			break
+			return
 		}
 
 		if _, err := io.ReadFull(conn, buf[:size]); err != nil {
-			break
+			return
 		}
 
 		isKey := byte(0)
@@ -213,14 +266,6 @@ func (h *StreamHub) connectDaemonLoop() {
 
 		h.broadcast(msg)
 	}
-
-	h.mu.Lock()
-	if h.daemonConn == conn {
-		h.daemonConn = nil
-	}
-	_ = conn.Close()
-	h.mu.Unlock()
-	fmt.Printf("[StreamHub] Hardware stream loop ended\n")
 }
 
 func setPendingHandoffNotice(notice string) {

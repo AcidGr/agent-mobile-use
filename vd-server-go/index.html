@@ -179,6 +179,14 @@
         let ws = null;
         let decoder = null;
 
+        // Distinguishes a deliberate stop (user pressed pause, page unloading) from an
+        // unexpected drop. Only unexpected drops auto-reconnect.
+        let userStopped = false;
+        let reconnectTimer = null;
+        let reconnectDelay = 500;
+        const MAX_RECONNECT_DELAY = 5000;
+        let decoderUnsupported = false;
+
         async function fetchAudioStatus() {
             try {
                 const res = await fetch('/api/audio/status');
@@ -225,6 +233,8 @@
         }
 
         function renderToggle() {
+            // Pure presentation: never stop the stream here. Stream lifecycle is owned by
+            // updateStatus/startStream/stopStream so a redraw can't kill a live stream.
             if (screenState === 'running') {
                 toggleEl.className = 'btn-icon btn-screen-on';
                 toggleEl.title = '副屏运行中 (点击关闭)';
@@ -235,34 +245,53 @@
                 toggleEl.title = '副屏已休眠 (点击开启)';
                 toggleEl.disabled = false;
                 streamBtn.disabled = true;
-                stopStream();
             } else {
                 toggleEl.className = 'btn-icon btn-screen-off';
                 toggleEl.title = '服务未连接';
                 toggleEl.disabled = true;
                 streamBtn.disabled = true;
-                stopStream();
             }
         }
 
-        async function updateStatus() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                if (data.status === 'running') {
-                    screenState = 'running';
-                } else {
-                    canvasEl.style.display = 'none';
-                    tipEl.style.display = 'block';
-                    tipEl.innerText = '副屏未启动';
-                    screenState = 'stopped';
-                    stopStream();
+        function showTip(text) {
+            canvasEl.style.display = 'none';
+            tipEl.style.display = 'block';
+            tipEl.innerText = text;
+        }
+
+        // A single failed /api/status probe is not proof the screen went away: the daemon
+        // may still be coming up right after /api/start. Probe a few times before declaring
+        // the screen stopped, which is the terminal state that used to kill the stream.
+        async function probeStatus(attempts = 3, delayMs = 400) {
+            let lastErr = null;
+            for (let i = 0; i < attempts; i++) {
+                try {
+                    const res = await fetch('/api/status', { cache: 'no-store' });
+                    const data = await res.json();
+                    if (data.status === 'running') return { ok: true, running: true };
+                    if (data.status === 'failed') return { ok: true, running: false, failed: true };
+                    lastErr = null;
+                } catch (e) {
+                    lastErr = e;
                 }
-            } catch (e) {
-                tipEl.style.display = 'block';
-                tipEl.innerText = '无法连接服务';
+                if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+            }
+            if (lastErr) return { ok: false };
+            return { ok: true, running: false };
+        }
+
+        async function updateStatus() {
+            const result = await probeStatus();
+            if (!result.ok) {
+                showTip('无法连接服务');
                 screenState = 'unreachable';
-                stopStream();
+                stopStream(true);
+            } else if (result.running) {
+                screenState = 'running';
+            } else {
+                showTip(result.failed ? '副屏启动失败' : '副屏未启动');
+                screenState = 'stopped';
+                stopStream(true);
             }
             renderToggle();
             fetchAudioStatus();
@@ -272,11 +301,14 @@
         function initDecoder() {
             if (decoder) {
                 try { decoder.close(); } catch (_) {}
+                decoder = null;
             }
             if (!window.VideoDecoder) {
-                alert('当前浏览器未启用 WebCodecs 硬件解码，请使用手机 Chrome/Edge 并直接访问 http://127.0.0.1:3070/');
+                decoderUnsupported = true;
+                showTip('当前浏览器未启用 WebCodecs 硬件解码，请使用手机 Chrome/Edge 访问');
                 return false;
             }
+            decoderUnsupported = false;
             decoder = new VideoDecoder({
                 output: (frame) => {
                     if (canvasEl.width !== frame.displayWidth || canvasEl.height !== frame.displayHeight) {
@@ -301,21 +333,52 @@
             return true;
         }
 
-        function startStream() {
-            if (isStreaming || screenState !== 'running') return;
+        function clearReconnect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        }
+
+        function scheduleReconnect() {
+            if (userStopped || screenState !== 'running' || decoderUnsupported) return;
+            if (reconnectTimer) return;
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                if (userStopped || screenState !== 'running') return;
+                reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+                startStream(true);
+            }, reconnectDelay);
+        }
+
+        function startStream(isRetry) {
+            if (isStreaming) return;
+            clearReconnect();
+            if (!isRetry) { userStopped = false; }
+            if (screenState !== 'running') return;
             if (!initDecoder()) return;
 
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/api/stream/ws`);
-            ws.binaryType = 'arraybuffer';
+            let sock;
+            try {
+                sock = new WebSocket(`${protocol}//${location.host}/api/stream/ws`);
+            } catch (e) {
+                scheduleReconnect();
+                return;
+            }
+            ws = sock;
+            sock.binaryType = 'arraybuffer';
 
-            ws.onopen = () => {
+            sock.onopen = () => {
+                if (ws !== sock) return;
                 isStreaming = true;
+                reconnectDelay = 500;
                 streamBtn.className = 'btn-icon btn-stream-on';
                 streamBtn.title = '视频流运行中 (点击暂停)';
             };
 
-            ws.onmessage = (event) => {
+            sock.onmessage = (event) => {
+                if (ws !== sock) return;
                 if (!decoder || decoder.state !== 'configured') return;
                 const raw = new Uint8Array(event.data);
                 if (raw.length < 2) return;
@@ -334,12 +397,20 @@
                 }
             };
 
-            ws.onclose = ws.onerror = () => {
-                stopStream();
+            sock.onclose = sock.onerror = () => {
+                if (ws !== sock) return;
+                // Unexpected drop (network blip, encoder restart, gateway reconnect):
+                // release this socket but keep the user's intent to watch, then retry.
+                teardownSocket();
+                if (!userStopped && screenState === 'running') {
+                    scheduleReconnect();
+                }
             };
         }
 
-        function stopStream() {
+        // Release the socket + decoder without touching userStopped. Used by the reconnect
+        // path, which must survive the teardown.
+        function teardownSocket() {
             if (ws) {
                 try { ws.close(); } catch (_) {}
                 ws = null;
@@ -353,11 +424,20 @@
             streamBtn.title = '视频流已暂停 (点击开启)';
         }
 
+        // stopStream(userInitiated=true) marks a deliberate stop so no auto-reconnect fires.
+        function stopStream(userInitiated) {
+            if (userInitiated) {
+                userStopped = true;
+            }
+            if (userInitiated) clearReconnect();
+            teardownSocket();
+        }
+
         function toggleStream() {
             if (isStreaming) {
-                stopStream();
+                stopStream(true);
             } else {
-                startStream();
+                startStream(false);
             }
         }
 
@@ -375,22 +455,29 @@
             toggling = false;
             const state = await updateStatus();
             if (state === 'running') {
-                startStream();
+                startStream(false);
             }
         }
 
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden && isStreaming) {
-                stopStream();
+            if (document.hidden) {
+                // Hidden: release the encoder to save power. stopStream(false) keeps
+                // userStopped untouched, so the visible branch below can resume.
+                if (isStreaming && !userStopped) {
+                    stopStream(false);
+                }
+            } else if (!userStopped && screenState === 'running' && !isStreaming) {
+                // Visible again: restore the stream that the hidden-state teardown paused.
+                startStream(true);
             }
         });
         window.addEventListener('beforeunload', () => {
-            stopStream();
+            stopStream(true);
         });
 
         updateStatus().then(state => {
             if (state === 'running') {
-                startStream();
+                startStream(false);
             }
         });
     </script>

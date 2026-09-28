@@ -117,13 +117,17 @@ public class DaemonMain {
                 Method mCreateVD = dm.getClass().getMethod("createVirtualDisplay", Class.forName("android.hardware.display.VirtualDisplayConfig"));
                 vd = (VirtualDisplay) mCreateVD.invoke(dm, config);
             } catch (Throwable t) {
-                System.err.println("[AgentDaemon] VirtualDisplayConfig creation failed, falling back to legacy API: " + t.getMessage());
-                vd = dm.createVirtualDisplay("AgentVirtualDisplay", sWidth, sHeight, sDpi, reader.getSurface(), flags);
+                // Deliberately no legacy-API fallback: silently downgrading would start a
+                // display with different flags/metrics (no notch mirroring, no OWN_FOCUS)
+                // while the console still reports a healthy screen. Surface the real error
+                // instead of masking it.
+                System.err.println("[AgentDaemon] VirtualDisplayConfig creation failed (no fallback): " + t);
+                t.printStackTrace();
             }
 
             if (vd == null || vd.getDisplay() == null) {
-                System.err.println("[AgentDaemon] Failed to create virtual display!");
-                writeStatus("stopped", -1);
+                System.err.println("[AgentDaemon] Virtual display creation failed; not reporting a running screen.");
+                writeStatus("failed", -1);
                 System.exit(1);
                 return;
             }
@@ -144,11 +148,21 @@ public class DaemonMain {
                 System.err.println("[AgentDaemon] Warning: Failed to set IME policy: " + t.getMessage());
             }
 
-            // Write status
+            // Bind the stream server BEFORE publishing "running". The web console treats
+            // status=="running" as "the video pipeline is up", so publishing it first made
+            // clients race the 127.0.0.1:3071 listener and land on a black screen. Binding
+            // first removes that window entirely.
+            if (!startStreamServer(vd, reader)) {
+                System.err.println("[AgentDaemon] Failed to bind stream server on 127.0.0.1:3071; not reporting a running screen.");
+                writeStatus("failed", -1);
+                System.exit(1);
+                return;
+            }
+            System.out.println("[AgentDaemon] Stream server ready on 127.0.0.1:3071");
+
+            // Publish status only after the encoder pipeline can accept clients.
             int pid = android.os.Process.myPid();
             writeStatus("running", displayId, pid, sWidth, sHeight, sDpi);
-
-            startStreamServer(vd, reader);
 
             File stopFile = new File(STOP_SIGNAL);
             if (stopFile.exists()) stopFile.delete();
@@ -196,39 +210,67 @@ public class DaemonMain {
 
     private static ServerSocket sStreamServer = null;
 
-    private static void startStreamServer(final VirtualDisplay vd, final ImageReader reader) {
+    /**
+     * Binds the internal stream listener on 127.0.0.1:3071 and starts the accept loop.
+     *
+     * Synchronous on purpose: the caller must not publish status="running" until the port
+     * is actually accepting connections, otherwise the web console races the listener.
+     *
+     * @return true when the socket is bound and the accept loop is running.
+     */
+    private static boolean startStreamServer(final VirtualDisplay vd, final ImageReader reader) {
+        try {
+            sStreamServer = new ServerSocket();
+            sStreamServer.setReuseAddress(true);
+            sStreamServer.bind(new InetSocketAddress("127.0.0.1", 3071));
+        } catch (Throwable err) {
+            System.err.println("[AgentDaemon] Stream server bind failed: " + err.getMessage());
+            return false;
+        }
+
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
-                try {
-                    sStreamServer = new ServerSocket();
-                    sStreamServer.setReuseAddress(true);
-                    sStreamServer.bind(new InetSocketAddress("127.0.0.1", 3071));
-                    System.out.println("[AgentDaemon] Stream server listening on 127.0.0.1:3071");
-
-                    while (!sStreamServer.isClosed()) {
-                        Socket client = null;
-                        try {
-                            client = sStreamServer.accept();
-                            client.setTcpNoDelay(true);
-                            System.out.println("[AgentDaemon] Stream client connected from " + client.getRemoteSocketAddress());
-                            handleStreamClient(vd, reader, client);
-                        } catch (Throwable err) {
-                            if (sStreamServer.isClosed()) break;
-                            System.err.println("[AgentDaemon] Stream client session closed: " + err.getMessage());
-                        } finally {
-                            if (client != null) {
-                                try { client.close(); } catch (Throwable ignored) {}
+                System.out.println("[AgentDaemon] Stream server listening on 127.0.0.1:3071");
+                while (!sStreamServer.isClosed()) {
+                    Socket client = null;
+                    try {
+                        client = sStreamServer.accept();
+                        client.setTcpNoDelay(true);
+                        System.out.println("[AgentDaemon] Stream client connected from " + client.getRemoteSocketAddress());
+                        // Serve each client on its own thread so a long-lived encoder session
+                        // cannot block the accept loop (the gateway is the single-writer hub,
+                        // so this normally stays at one connection).
+                        final Socket c = client;
+                        Thread worker = new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    handleStreamClient(vd, reader, c);
+                                } catch (Throwable err) {
+                                    System.err.println("[AgentDaemon] Stream client session closed: " + err.getMessage());
+                                } finally {
+                                    try { c.close(); } catch (Throwable ignored) {}
+                                }
                             }
+                        }, "StreamClientThread");
+                        worker.setDaemon(true);
+                        worker.start();
+                        client = null; // ownership transferred to the worker thread
+                    } catch (Throwable err) {
+                        if (sStreamServer.isClosed()) break;
+                        System.err.println("[AgentDaemon] Stream server error: " + err.getMessage());
+                    } finally {
+                        if (client != null) {
+                            try { client.close(); } catch (Throwable ignored) {}
                         }
                     }
-                } catch (Throwable err) {
-                    System.err.println("[AgentDaemon] Stream server error: " + err.getMessage());
                 }
             }
         }, "StreamServerThread");
         t.setDaemon(true);
         t.start();
+        return true;
     }
 
     private static void stopStreamServer() {
