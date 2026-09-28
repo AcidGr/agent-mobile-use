@@ -1421,16 +1421,18 @@ func performDumpInternal(targetDid int, st StatusResp, noSystemUi bool) (string,
 }
 
 func isTransientTorn(treeText string, targetDid int) bool {
-	if treeText == "" {
+	if strings.TrimSpace(treeText) == "" {
 		return true
 	}
-	if strings.Contains(treeText, "tree_blocked=1") ||
-		strings.Contains(treeText, "no_windows=1") ||
-		strings.Contains(treeText, "total=0") ||
-		strings.Contains(treeText, "app_nodes=0") {
+	lower := strings.ToLower(treeText)
+	if strings.Contains(lower, "tree_blocked=1") ||
+		strings.Contains(lower, "no_windows=1") ||
+		strings.Contains(lower, "total=0") ||
+		strings.Contains(lower, "app_nodes=0") ||
+		strings.Contains(lower, "tree 0 nodes") {
 		return true
 	}
-	if targetDid == 0 {
+	if targetDid == 0 || strings.Contains(treeText, "mode=foreground") {
 		for _, s := range []string{"act_sent=0", "act_sent=1", "act_sent=2"} {
 			if strings.Contains(treeText, s) {
 				return true
@@ -1438,6 +1440,21 @@ func isTransientTorn(treeText string, targetDid int) bool {
 		}
 	}
 	return false
+}
+
+func captureUiDumpWithRetry(targetDid int, st StatusResp, noSystemUi bool, maxRetries int, delayMs int) (string, string, error) {
+	var lastStatus, lastText string
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lastStatus, lastText, lastErr = performDumpInternal(targetDid, st, noSystemUi)
+		if lastErr == nil && !isTransientTorn(lastText, targetDid) {
+			return lastStatus, lastText, nil
+		}
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
+	}
+	return lastStatus, lastText, lastErr
 }
 
 func resolveTarget(targetDid int, targetSpec string) (int, int, error) {
@@ -1774,8 +1791,8 @@ func main() {
 
 		switch action {
 		case "observe":
-			statusStr, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
-			if err != nil {
+			statusStr, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			if err != nil && textStr == "" {
 				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error()})
 				return
 			}
@@ -1822,18 +1839,12 @@ func main() {
 				actionDesc = fmt.Sprintf("OK: Long-pressed %s(%d, %d) for %dms", targetDesc, x, y, p.DurationMs)
 			}
 
-			time.Sleep(25 * time.Millisecond)
-			_, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
-			if err != nil || isTransientTorn(textStr, targetDid) {
-				deadline := time.Now().Add(350 * time.Millisecond)
-				for time.Now().Before(deadline) {
-					time.Sleep(25 * time.Millisecond)
-					_, t, e := performDumpInternal(targetDid, st, p.NoSystemUI)
-					if e == nil && !isTransientTorn(t, targetDid) {
-						textStr = t
-						break
-					}
-				}
+			// Restore physical transition buffer (350ms) + 2x 600ms backoff retry
+			time.Sleep(350 * time.Millisecond)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("%s, but UI dump failed: %v", actionDesc, err)})
+				return
 			}
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
 
@@ -1860,7 +1871,9 @@ func main() {
 					actionDesc = fmt.Sprintf("Type failed: %s", tp.Error)
 				}
 			}
-			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			// Restore text input settling buffer (200ms) + 2x 600ms backoff retry
+			time.Sleep(200 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
 
 		case "swipe":
@@ -1879,8 +1892,9 @@ func main() {
 			exec.Command("/system/bin/input", "-d", did, "swipe",
 				strconv.Itoa(x1), strconv.Itoa(y1), strconv.Itoa(x2), strconv.Itoa(y2), strconv.Itoa(dur)).Run()
 
-			time.Sleep(120 * time.Millisecond)
-			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			// Restore inertia settling buffer (200ms) + 2x 600ms backoff retry
+			time.Sleep(200 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Swiped (%d, %d) -> (%d, %d) in %dms", x1, y1, x2, y2, dur),
@@ -1895,13 +1909,14 @@ func main() {
 			kc := parseKeycode(keyName)
 			exec.Command("/system/bin/input", "-d", did, "keyevent", kc).Run()
 
+			// Restore nav key buffer (350ms) vs normal key (200ms) + 2x 600ms backoff retry
 			isNav := strings.EqualFold(keyName, "BACK") || strings.EqualFold(keyName, "HOME")
 			if isNav {
-				time.Sleep(250 * time.Millisecond)
+				time.Sleep(350 * time.Millisecond)
 			} else {
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(200 * time.Millisecond)
 			}
-			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Pressed key '%s'", keyName),
@@ -1919,19 +1934,9 @@ func main() {
 				return
 			}
 
-			time.Sleep(50 * time.Millisecond)
-			_, textStr, err := performDumpInternal(targetDid, st, p.NoSystemUI)
-			if err != nil || isTransientTorn(textStr, targetDid) {
-				deadline := time.Now().Add(2000 * time.Millisecond)
-				for time.Now().Before(deadline) {
-					time.Sleep(30 * time.Millisecond)
-					_, t, e := performDumpInternal(targetDid, st, p.NoSystemUI)
-					if e == nil && !isTransientTorn(t, targetDid) {
-						textStr = t
-						break
-					}
-				}
-			}
+			// Restore app cold-start buffer (2000ms) + 2x 600ms backoff retry
+			time.Sleep(2000 * time.Millisecond)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Launched app %s", rawPkg),
@@ -1943,8 +1948,16 @@ func main() {
 			if ms <= 0 {
 				ms = 1000
 			}
+			if ms > 10000 {
+				ms = 10000
+			}
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			_, textStr, _ := performDumpInternal(targetDid, st, p.NoSystemUI)
+			_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 600)
+			json.NewEncoder(w).Encode(ActionResponse{
+				Success: true,
+				Message: fmt.Sprintf("OK: Waited for %dms", ms),
+				Data:    textStr,
+			})
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: true,
 				Message: fmt.Sprintf("OK: Waited for %dms", ms),
