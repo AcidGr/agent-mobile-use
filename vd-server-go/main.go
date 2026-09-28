@@ -490,7 +490,7 @@ func clearCompletedOnDevice() {
 
 func startCapsuleWatchdog() {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
 		var failCount int
@@ -500,7 +500,9 @@ func startCapsuleWatchdog() {
 				continue
 			}
 			pid := getGlowPID()
-			if pid <= 0 || !isGlowServiceAlive() {
+			// Fast path: if PID is positive and signal 0 succeeds, the process is alive in kernel
+			alive := pid > 0 && syscall.Kill(pid, 0) == nil
+			if !alive {
 				// ponytail: simple 5-strike cooldown ceiling, add exponential backoff if crash-loop occurs
 				if failCount >= 5 {
 					time.Sleep(5 * time.Second)

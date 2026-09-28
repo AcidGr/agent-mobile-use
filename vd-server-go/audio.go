@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 )
 
 var (
@@ -171,7 +170,7 @@ func reconcileVdAudio(vdDid int) {
 	}
 }
 
-// initAudioGuard sets up fail-safe sweeps, signal handlers, and background reconciliation
+// initAudioGuard sets up fail-safe sweeps and signal handlers
 func initAudioGuard() {
 	// 1. Startup self-healing sweep to clear any previous crash remnants
 	unmuteAllAudio()
@@ -184,16 +183,5 @@ func initAudioGuard() {
 		fmt.Printf("[audio] caught signal %v, restoring audio for all apps...\n", sig)
 		unmuteAllAudio()
 		os.Exit(0)
-	}()
-
-	// 3. Periodic reconcile ticker while in background mode
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		for range ticker.C {
-			st := getStatus()
-			if st.DisplayID > 0 && getCurrentMode() == "background" {
-				reconcileVdAudio(st.DisplayID)
-			}
-		}
 	}()
 }
