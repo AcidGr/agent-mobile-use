@@ -66,7 +66,7 @@
    - `HookEntry`：基于 LSPosed 的 `system_server` 特权补丁，解锁虚拟显示器多任务承载能力、主屏输入法隔离（IMMS），并拦截实体按键（如 OnePlus 侧边 Action Button）直达控制台。
    - `GlowService`：独立的前台悬浮窗服务（`TYPE_APPLICATION_OVERLAY`），在前台模式下绘制全屏赛博呼吸光效、实时触控涟漪与滑动激光轨迹，并在打孔区常驻“一键切后台”的灵动岛胶囊。
    - `DemoDialogActivity`：全屏透明浮层 Activity，通过 Android WebView 内嵌 DSH 网页控制台（`/?ov=1`），内置 HMAC-SHA256 自动鉴权与 `onNewIntent` 跨会话热切换 JS Bridge。
-   - `QuestionActivity` & `NotifyReceiver`：免中断的悬浮卡片提问交互（BottomSheet Dialog）与高优先级任务完成横幅通知，支持点击直接跳转并激活对应会话。
+   - `QuestionActivity` & `NotifyReceiver`：免中断的交互提问跳板（直达灵动坞 Web 控制台）与高优先级任务完成横幅通知，支持点击直接跳转并激活对应会话。
 
 ---
 
@@ -79,45 +79,61 @@
 - **`vd start`**：唤醒底层虚拟副屏，自适应计算物理主屏分辨率与 DPI，启动 3070 端口监控网关。
 - **`vd stop`**：完全销毁副屏，向系统注销 Display，回收所有显存与计算资源。
 - **`vd status`**：查看当前副屏状态（运行中/休眠）、当前 Display ID 以及动态屏幕规格。
-- **`vd launch <包名>`**：定向调度指定应用直接在副屏启动（例如 `vd launch com.sankuai.meituan`）。
+- **`vd launch <包名> [--user <id>]`**：定向调度指定应用直接在副屏启动（例如 `vd launch com.sankuai.meituan`，支持应用双开分身 `--user 999`）。
 - **`vd tree`**：结构化 Dump 当前副屏的无障碍控件树（平铺格式：状态行 + 列头 + 一行一元素，含节点文本、flags、边界与可点击中心坐标；`truncated`/`omitted` 如实报告任何截断损失）。
-- **`vd tap <x> <y>`**：向副屏指定坐标发送物理触控点击事件（利用 `input -d <did> tap`）。
+- **`vd tap <x> <y>`**：向当前目标屏幕发送物理触控点击事件（底层通过 `/api/action` 执行并回传更新后的观测树）。
 - **`vd type [target] "<文本>"`**：静默文字注入（双轨确定性：可指定 UI 树数字节点 ID 如 `146`，或省略 target 直接灌入当前聚焦输入框；0 键盘弹窗）。
-- **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向副屏发送滑动、曲线笔触或长按手势。
-- **`vd key <keycode>`**：向副屏发送系统物理按键（如 4 为返回，3 为主页，66 为回车）。
-- **`vd screenshot [path]`**：定向截取副屏当前帧并保存为 PNG 图片（默认路径 `/data/local/tmp/vd_screenshot.png`）。
-- **`vd apps [query]`**：获取本机已安装的应用名称与启动 Activity 组件名。
+- **`vd swipe <x1> <y1> <x2> <y2> [duration_ms]`**：向目标屏幕发送滑动、曲线笔触或长按手势。
+- **`vd key <keycode>`**：向目标屏幕发送系统物理按键（如 4 为返回，3 为主页，66 为回车）。
+- **`vd screenshot [path]`**：定向截取当前屏幕画面并保存为 JPEG 图片（默认路径 `/data/local/tmp/vd_screenshot.jpg`）。
+- **`vd apps [query]`**：获取本机已安装的应用名称与启动 Activity 组件名（支持分身查询）。
 
 #### 2. HTTP / REST 监控网关 (Port 3070)
 
 由纯静态 Go 服务 `vd_server` 提供：
-- `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供手动刷新快照、当前状态指示与副屏开关按钮。
-- `GET http://127.0.0.1:3070/api/status`：获取副屏 JSON 状态（含状态、物理/副屏宽高、DPI、当前主/副屏操作模式）。
-- `GET http://127.0.0.1:3070/api/screenshot`：获取副屏当前画面。副屏运行时**默认直接返回守护进程缓存的 JPEG**（全分辨率 1272×2800，仅约 270 KB，端到端延迟低至 ~60ms）；物理主屏或守护进程未启动时自动回退为 `screencap -p` PNG 路径。
-- `GET|POST http://127.0.0.1:3070/api/start` · `POST http://127.0.0.1:3070/api/stop`：远程拉起/注销副屏。
-- `GET|POST http://127.0.0.1:3070/api/mode`：前后台操作模式查询与切换（`foreground` 驱动主屏并亮起边缘光效；`background` 静默驱动虚拟副屏；`idle` 待机解脱控制）。支持 `?mode=...` 参数快速切换。
-- `GET /api/dump_ui`：平铺式无障碍树观测（状态行 + 列头 + 一行一元素），支持 `?no_system_ui=1` 过滤状态栏等系统外壳干扰。
-- `POST /api/type`：确定性文字注入（仅接收数字节点 ID `target` 或聚焦模式，单次 `ACTION_SET_TEXT` + 回读校验）。
-- `POST /api/click` · `POST /api/swipe` · `POST /api/key` · `POST /api/launch`：坐标点击、手势滑动、系统按键、定向启动应用。
-- `GET|POST /api/apps`：查询本机桌面应用列表。
-- `POST /api/notify`：投递系统横幅通知与任务完成状态，支持会话深链接绑定。
-- `POST /api/question` · `POST /api/answer` · `POST /api/question/cancel`：交互式提问（BottomSheet 浮层卡片）双向调度通道。
+- `GET http://127.0.0.1:3070/`：可视化 Web 监控界面，提供低延迟 H.264 硬件编码实时视频流、副屏状态指示与前后台切换开关。
+- `GET /api/stream/ws`：WebSocket H.264 低延迟裸流通道，直连 `DaemonMain` 硬件编码器（1080P / 60FPS / 6Mbps）。
+- `GET /api/status`：获取当前显示器 JSON 状态（含运行状态、物理/副屏宽高、DPI、当前操作模式与目标 Display ID）。
+- `GET /api/screenshot`：获取当前目标屏幕画面。副屏运行时默认直接提取硬件帧缓存并高效压缩为 JPEG（全分辨率，端到端延迟低至 ~60ms）；主屏模式自动调用硬件抓屏。
+- `POST /api/action`：**统一复合动作执行引擎**。聚合了 `observe`、`click`、`swipe`、`type`、`key`、`launch_app`、`wait` 等全部物理动作，并在动作后自动进行自适应物理过渡与回弹 UI dump 观测，彻底消除盲等待。
+- `GET|POST /api/start` · `POST /api/stop`：远程拉起/注销底层虚拟副屏。
+- `GET|POST /api/mode`：前后台操作模式查询与切换（`foreground` 驱动主屏并亮起全屏赛博光效；`background` 静默驱动虚拟副屏并自动静音；`idle` 待机解脱控制并动态卸载无障碍守卫）。支持 `?mode=...` 参数。
+- `GET /api/dump_ui`：平铺式无障碍树观测接口（状态行 + 列头 + 一行一元素），支持 `?no_system_ui=1` 过滤状态栏等系统外壳干扰。
+- `GET|POST /api/apps`：查询本机桌面应用列表（自动归一化解析 `--user` 分身应用）。
+- `POST /api/notify`：投递系统横幅通知与任务完成状态，支持会话深链接绑定与前台查看抑制。
+- `POST /api/question` · `POST /api/question/cancel`：交互提问通知投递与取消（前台模式直接呼出灵动坞 Web 控制台，后台模式派发通知横幅）。
+- `GET /api/audio/status` · `POST /api/audio/toggle` · `POST /api/audio/unmute-all`：副屏应用智能静音状态查询、手动开关与全量解静音（基于 AppOps `PLAY_AUDIO` 事件驱动治理）。
+- `GET /api/session/watch` · `POST /api/task_event`：DSH 活跃会话内核级连接心跳与状态同步。
 
 ---
 
 ### 近期演进与重大重构实测
 
-#### 1. `mobile_type` 纯减法重构与双轨确定性
+#### 1. 交互提问直达灵动坞 Web 控制台（降维重构）
+- **物理砍掉 500+ 行手画 Java 弹窗**：移除了早期简陋黑底的本地 BottomSheet 表单，改为直接呼出半透明灵动坞（`DemoDialogActivity`）悬浮窗进入对应 DSH 会话。
+- **上下文保全与 Markdown 渲染**：用户在手机端不仅能看到操作上下文和屏幕截图，更能享受与桌面端 100% 一致的 Markdown 排版；回答直接走 DSH 内部原生信道，彻底杜绝本地中继丢答案。
+
+#### 2. `/api/action` 复合动作引擎与自适应物理沉降
+- **动作 + 观测原子化聚合**：将点击、滑动、输入、按键与后续的 UI Dump 紧密聚合为单次请求，由服务端根据物理惯性、转场撕裂（Sliding Extent）进行毫秒级动态沉降，大幅削减客户端网络往返延迟。
+- **数字节点 ID 极速解析**：在内存中缓存最新一帧的节点坐标映射，支持通过 `node:146` 直接命中物理中心点击，无需重复遍历整棵树。
+
+#### 3. 基于 Display 状态机的无障碍动态常驻守卫
+- **杜绝单次 Dump 的 I/O 震荡**：不再在单次抓树时频繁开关 TalkBack，而是以 `target_display_id` 为唯一事实源——当模式切为前台/后台（`>=0`）时常驻挂载 TalkBack，切为待机（`idle`）或全部会话断开时自动精准卸载，全生命周期仅开关 1 次并完好保留用户自选无障碍服务。
+
+#### 4. 纯事件驱动静音守护者 (Audio Guard)
+- **消除后台长跑异常耗电**：剔除了无脑 2 秒轮询的定时器，仅在应用启动到副屏或切换模式时触发静音治理，后台熄屏运行不再唤醒 CPU，保证真机纯净省电。
+
+#### 5. `mobile_type` 纯减法重构与双轨确定性
 - **彻底剔除模糊猜测与副反应**：消除了脆弱的 `idx:N`（切片序号与树 ID 歧义）、字符串 Resource ID 猜测（在混淆布局如微信 `bkk` 重复时会导致歧义报错），以及自动补发 ENTER 的逻辑。
 - **严格双轨制**：
   1. **聚焦模式**（省略 target 或 `"focused"`）：向当前聚焦控件直接注入。
   2. **精确节点模式**（直接传 UI 树数字 ID 如 `146`）：在抓取树时保留原生句柄，1:1 精确命中，失败附带完整 before/after 证据，零多余点击与回退。
 
-#### 2. 会话深链接与通知即时触达
+#### 6. 会话深链接与通知即时触达
 - **会话绑定与直达**：点击任务完成通知栏横幅，通过 PendingIntent 传递 Session ID，直接呼出并激活 Web 浮层（`DemoDialogActivity`）并跳转到触发该任务的具体会话。
 - **热切换（`onNewIntent`）支持**：当浮层处于后台或已开启状态时，点击不同会话的通知会自动调用 WebView JS Bridge 进行无缝切换，无需重新加载整个页面。
 
-#### 3. Dump 字段截断实测升级（140 → 4000，head+tail）
+#### 7. Dump 字段截断实测升级（140 → 4000，head+tail）
 - **长文本与链接保全**：富文本单字段防灾上限放宽至 4000 字符，并采用 Head + 160-char Tail 保尾机制，彻底避免客服聊天链接参数（如 `?orderId=...`）被静默截断。
 
 ---
@@ -186,28 +202,43 @@ The whole drawing process took place entirely in the background virtual display 
 ### Exposed Tools & Interfaces
 
 1. **CLI Bus (`/system/bin/vd`)**:
-   - `vd start` / `vd stop` / `vd status`: Virtual display lifecycle management.
-   - `vd launch <pkg>`: Launch application directly onto the background display.
+   - `vd start` / `vd stop` / `vd status`: Virtual display lifecycle management and display metrics.
+   - `vd launch <pkg> [--user <id>]`: Launch application directly onto target display (supports dual/clone apps via `--user 999`).
    - `vd tree`: Flat structured dump of the accessibility hierarchy — status line, column header, one row per element with text, flags, bounds, and tap centre.
-   - `vd tap <x> <y>`: Inject touch events directly to the target display.
+   - `vd tap <x> <y>`: Inject touch events directly to target display (delegates through `/api/action`).
    - `vd type [target] "<text>"`: Deterministic dual-track silent text injection without keyboard popups (numeric node ID or focused input).
    - `vd swipe <x1> <y1> <x2> <y2> [duration]`: Simulate drag/swipe gestures or brush strokes.
    - `vd key <keycode>`: Send key events (e.g. 4 for BACK, 3 for HOME, 66 for ENTER).
-   - `vd screenshot [path]`: Take a direct frame capture of the virtual display.
-   - `vd apps [query]`: List launchable applications.
+   - `vd screenshot [path]`: Take a direct JPEG frame capture of the current target display.
+   - `vd apps [query]`: List launchable applications (supports multi-user clone app resolution).
 
 2. **HTTP / REST Gateway (Port 3070)**:
-   - `GET /`: Visual web snapshot monitor with a manual refresh and display toggle.
-   - `GET /api/status`: JSON display status.
-   - `GET /api/screenshot`: Current frame of the display (serves daemon's cached JPEG for sub-60ms reads).
+   - `GET /`: Visual web console with live low-latency H.264 video streaming and display controls.
+   - `GET /api/stream/ws`: WebSocket low-latency raw H.264 bitstream directly fed from `DaemonMain` hardware encoder (1080P / 60FPS / 6Mbps).
+   - `GET /api/status`: JSON display status (running state, display metrics, current mode, target display ID).
+   - `GET /api/screenshot`: Current frame of target display (serves daemon's cached JPEG for sub-60ms reads).
+   - `POST /api/action`: **Unified composite action engine**. Aggregates `observe`, `click`, `swipe`, `type`, `key`, `launch_app`, and `wait`, followed by adaptive physical settling and automatic UI dump in a single round-trip.
    - `GET|POST /api/start` · `POST /api/stop`: Bring display up/down.
-   - `GET|POST /api/mode`: Query or switch between `foreground`, `background`, and `idle` (supports `?mode=...`).
+   - `GET|POST /api/mode`: Query or switch between `foreground` (physical display with cyber glow), `background` (silent virtual display with auto-mute), and `idle` (standby mode with dynamic TalkBack unmounting).
    - `GET /api/dump_ui`: Flat accessibility observation (supports `?no_system_ui=1`).
-   - `POST /api/type`: Deterministic dual-track text injection.
-   - `POST /api/click` · `POST /api/swipe` · `POST /api/key` · `POST /api/launch`: Direct touch, gestures, physical keys, and app launching.
-   - `GET|POST /api/apps`: Query installed launcher applications.
-   - `POST /api/notify`: Post notifications with session deep-linking.
-   - `POST /api/question` · `POST /api/answer`: Interactive confirmation channels.
+   - `GET|POST /api/apps`: Query installed launcher applications (normalized `--user` clone app resolution).
+   - `POST /api/notify`: Post notifications with session deep-linking and foreground suppression.
+   - `POST /api/question` · `POST /api/question/cancel`: Interactive question presentation (immediate Web console popup in foreground, heads-up banner in background).
+   - `GET /api/audio/status` · `POST /api/audio/toggle` · `POST /api/audio/unmute-all`: Event-driven background audio mute guard (powered by AppOps `PLAY_AUDIO`).
+   - `GET /api/session/watch` · `POST /api/task_event`: Kernel-backed connection watchdogs and active session tracking.
+
+---
+
+### Recent Architectural Evolution
+
+1. **Direct Web Console Question Interaction**:
+   Eliminated 500+ lines of bespoke Java form dialogs in `QuestionActivity`. In foreground mode, the translucent Web overlay (`DemoDialogActivity`) pops up immediately; in background mode, a high-priority heads-up notification links directly to the session Web UI with full context, screenshots, and Markdown rendering.
+2. **Unified `/api/action` Composite Engine & Adaptive Settling**:
+   Physical input and updated accessibility observations are unified into single requests. Sliding animation extent and transition tears are settled automatically on the server side, cutting network round-trips.
+3. **Display-State-Machine Accessibility Guard**:
+   TalkBack service lifecycle is bound to the target display state machine (`>=0` attached, `idle` detached) rather than toggled per-dump, eliminating I/O flapping while preserving user accessibility configurations.
+4. **Event-Driven Audio Guard**:
+   Substituted periodic polling with strict event-driven AppOps audio muting during app launch and mode switches, stopping CPU wakeups and preserving battery during background execution.
 
 ---
 
