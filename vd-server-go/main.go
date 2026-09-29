@@ -2209,32 +2209,14 @@ func main() {
 		if isCompletedStr == "true" && getSessionActive() {
 			go updateCapsuleState()
 		}
-		if err == nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
+		// No fallback: a failed notification must surface as a failure, not be
+		// silently masked by a degraded cmd-notification path. Report the real
+		// error so the cause can be investigated instead of hidden.
+		if err != nil {
+			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: err.Error(), Data: string(out)})
 			return
 		}
-
-		// Fallback: Use cmd notification post if APK broadcast fails
-		flags := "-S bigtext"
-		if _, statErr := os.Stat("/data/local/tmp/dsh_whale_icon.png"); statErr == nil {
-			flags += " -i file:///data/local/tmp/dsh_whale_icon.png"
-		}
-		if _, statErr := os.Stat("/data/local/tmp/dsh_whale_avatar.png"); statErr == nil {
-			flags += " -I file:///data/local/tmp/dsh_whale_avatar.png"
-		}
-
-		fallbackCmd := exec.Command("/system/bin/su", "2000", "-c", `cmd notification post `+flags+` -t "$NOTIFY_TITLE" "$NOTIFY_TAG" "$NOTIFY_CONTENT"`)
-		fallbackCmd.Env = append(os.Environ(),
-			"NOTIFY_TITLE="+p.Title,
-			"NOTIFY_TAG="+p.Tag,
-			"NOTIFY_CONTENT="+p.Content,
-		)
-		fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
-		if fallbackErr != nil {
-			json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fallbackErr.Error(), Data: string(fallbackOut)})
-			return
-		}
-		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(fallbackOut)})
+		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: string(out)})
 	})
 
 	mux.HandleFunc("/api/question", func(w http.ResponseWriter, r *http.Request) {
