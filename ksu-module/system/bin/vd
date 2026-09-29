@@ -1,6 +1,23 @@
 #!/system/bin/sh
 # Agent Mobile Use - Lightweight CLI gateway wrapper
 BASE_URL="http://127.0.0.1:3070"
+
+# Minimal JSON string escaper: backslash, double-quote, newline, CR, tab.
+# Historical note: an earlier version interpolated raw "$2/$3" into the curl
+# -d template, which broke on quotes/backslashes and silently dropped multi-word
+# args; do not re-inline raw parameters into JSON without escaping first.
+json_escape() {
+    printf '%s' "$1" | awk '
+    BEGIN { ORS = "" }
+    {
+        if (NR > 1) printf "\\n"
+        gsub(/\\/, "\\\\")
+        gsub(/"/, "\\\"")
+        gsub(/\r/, "\\r")
+        gsub(/\t/, "\\t")
+        printf "%s", $0
+    }'
+}
 SERVER_BIN="/data/adb/modules/agent_mobile_use/bin/vd_server"
 if [ ! -x "$SERVER_BIN" ]; then
     SERVER_BIN="$(cd "$(dirname "$0")/../.." && pwd)/bin/vd_server"
@@ -47,7 +64,8 @@ case "$1" in
     launch)
         ensure_server
         shift
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"launch_app\", \"package\": \"$*\"}"
+        pkg=$(json_escape "$*")
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"launch_app\", \"package\": \"$pkg\"}"
         echo ""
         ;;
     tree|dump)
@@ -67,15 +85,21 @@ case "$1" in
     type)
         ensure_server
         if [ "$#" -ge 3 ]; then
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"target\": \"$2\", \"text\": \"$3\"}"
+            target=$(json_escape "$2")
+            shift 2
+            # Join all remaining words so `vd type 146 hello world` doesn't silently drop "world"
+            text=$(json_escape "$*")
+            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"target\": \"$target\", \"text\": \"$text\"}"
         else
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"text\": \"$2\"}"
+            text=$(json_escape "$2")
+            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"text\": \"$text\"}"
         fi
         echo ""
         ;;
     key)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"key\", \"key\": \"$2\"}"
+        key=$(json_escape "$2")
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"key\", \"key\": \"$key\"}"
         echo ""
         ;;
     screenshot)
