@@ -2413,8 +2413,17 @@ func main() {
 	if p := os.Getenv("PORT"); p != "" {
 		port = p
 	}
-	fmt.Printf("[AgentVD-Web-Go] Listening on 0.0.0.0:%s\n", port)
-	if err := http.ListenAndServe("0.0.0.0:"+port, mux); err != nil {
+	// Bind to loopback by default: every consumer (vd CLI, dsh plugin) runs
+	// on-device, so exposing the control API on all interfaces would let any
+	// device on the same LAN — or any webpage via the permissive CORS header —
+	// drive clicks, typing and screenshots without authentication. Set HOST to
+	// override if remote access is ever genuinely needed.
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	fmt.Printf("[AgentVD-Web-Go] Listening on %s:%s\n", host, port)
+	if err := http.ListenAndServe(host+":"+port, mux); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 	}
 }
