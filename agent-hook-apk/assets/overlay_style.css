@@ -18,6 +18,8 @@ html[data-dsh-overlay="true"]::before {
   z-index: 99999 !important;
   animation: dsh-edge-breathe-once 1.4s cubic-bezier(0.4, 0, 0.2, 1) 1 forwards !important;
 }
+
+
 html[data-dsh-overlay="true"] [class*="_boot"] {
   background: transparent !important;
   background-color: transparent !important;
@@ -427,6 +429,16 @@ html[data-dsh-overlay="true"] [class*="_centerCol"] {
   flex: 1 1 auto !important;
   min-width: 0 !important;
   animation: dsh-fade-in 0.35s ease-out 0.95s both !important;
+}
+
+/* Fast start keeps the edge glow but removes the delayed inner entrance animations.
+   The entire WebView, including these controls, still shares the native 240ms fade-in. */
+html[data-dsh-overlay="true"][data-dsh-fast-start="true"] .dsh-overlay-whale-btn,
+html[data-dsh-overlay="true"][data-dsh-fast-start="true"] .dsh-overlay-home-btn,
+html[data-dsh-overlay="true"][data-dsh-fast-start="true"] [class*="_centerCol"] {
+  animation: none !important;
+  opacity: 1 !important;
+  transform: none !important;
 }
 html[data-dsh-overlay="true"] [class*="_root"][data-phase] {
   background: transparent !important;
