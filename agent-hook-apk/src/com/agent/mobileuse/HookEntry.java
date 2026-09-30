@@ -21,6 +21,20 @@ public class HookEntry implements IXposedHookLoadPackage {
         if ("com.android.systemui".equals(lpparam.packageName)) {
             hookSystemUI(lpparam);
         }
+        // Hook self (SettingsActivity activation check)
+        if ("com.agent.mobileuse".equals(lpparam.packageName)) {
+            hookSelf(lpparam);
+        }
+    }
+
+    private void hookSelf(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            Class<?> clazz = XposedHelpers.findClass("com.agent.mobileuse.SettingsActivity", lpparam.classLoader);
+            XposedHelpers.findAndHookMethod(clazz, "isModuleActive", XC_MethodReplacement.returnConstant(Boolean.TRUE));
+            XposedBridge.log("[AgentMobileUseHook] isModuleActive hooked successfully!");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook isModuleActive: " + t.getMessage());
+        }
     }
 
     private void hookSystemServer(XC_LoadPackage.LoadPackageParam lpparam) {

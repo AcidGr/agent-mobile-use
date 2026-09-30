@@ -4,5 +4,6 @@
     <string-array name="xposedscope">
         <item>android</item>
         <item>com.android.systemui</item>
+        <item>com.agent.mobileuse</item>
     </string-array>
 </resources>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha1"
 	_ "embed"
 	"encoding/base64"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -45,6 +47,7 @@ type StatusResp struct {
 	DPI             int    `json:"dpi"`
 	Mode            string `json:"mode"`
 	TargetDisplayID int    `json:"target_display_id"`
+	LSPosedActive   bool   `json:"lsposed_active"`
 }
 
 var (
@@ -830,7 +833,23 @@ func getStatus() StatusResp {
 	}
 	resp.Mode = getCurrentMode()
 	resp.TargetDisplayID = getTargetDisplayID(resp)
+	resp.LSPosedActive = isLsposedActive()
 	return resp
+}
+
+func isLsposedActive() bool {
+	out, err := exec.Command("/system/bin/pidof", "lspd").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return false
+	}
+	matches, _ := filepath.Glob("/data/adb/lspd/log/modules_*.log")
+	for _, m := range matches {
+		data, err := os.ReadFile(m)
+		if err == nil && bytes.Contains(data, []byte("com.agent.mobileuse")) {
+			return true
+		}
+	}
+	return false
 }
 
 // displaySize resolves the pixel size of the display the agent is currently driving.

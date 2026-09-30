@@ -72,9 +72,14 @@ public class SettingsActivity extends Activity {
     private TextView mTvStatusDshVersion;
     private TextView mTvStatusGatewayPort;
     private TextView mTvStatusMode;
+    private TextView mTvStatusLsposed;
     private Switch mSwitchFluidCloud;
     private Switch mSwitchCompletionAlert;
     private Switch mSwitchLauncherIcon;
+
+    public static boolean isModuleActive() {
+        return false;
+    }
 
     // Tab 1 Views (DSH Core & Auth)
     private EditText mEtSecret;
@@ -406,6 +411,7 @@ public class SettingsActivity extends Activity {
         mTvStatusDshVersion = createStatusRow(portsCard, "DSH 运行时版本", "[FETCHING...]");
         mTvStatusGatewayPort = createStatusRow(portsCard, "守护进程网关", "[CHECKING] (127.0.0.1:3070)");
         mTvStatusMode = createStatusRow(portsCard, "当前运行模式", "IDLE (节能待机)");
+        mTvStatusLsposed = createStatusRow(portsCard, "LSPosed 模块挂载", "[CHECKING...]");
         layout.addView(portsCard);
 
         // 2. 系统特性偏好
@@ -874,6 +880,9 @@ public class SettingsActivity extends Activity {
                 // 5. Query saved secret if EditText is empty
                 final String savedSecret = getSavedSecret();
 
+                // 6. Direct LSPosed self-hook probe
+                final boolean lspDirect = isModuleActive();
+
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -930,6 +939,18 @@ public class SettingsActivity extends Activity {
                             if (mTvStatusGatewayPort != null) {
                                 mTvStatusGatewayPort.setText("[OFFLINE] (守护进程未运行)");
                                 mTvStatusGatewayPort.setTextColor(Color.parseColor("#F85149"));
+                            }
+                        }
+
+                        // Update LSPosed module status
+                        if (mTvStatusLsposed != null) {
+                            boolean lspActive = lspDirect || (status3070 != null && status3070.optBoolean("lsposed_active", false));
+                            if (lspActive) {
+                                mTvStatusLsposed.setText("[ACTIVE] (已注入系统与框架)");
+                                mTvStatusLsposed.setTextColor(Color.parseColor("#49E9A6"));
+                            } else {
+                                mTvStatusLsposed.setText("[INACTIVE] (模块未激活)");
+                                mTvStatusLsposed.setTextColor(Color.parseColor("#F85149"));
                             }
                         }
 
