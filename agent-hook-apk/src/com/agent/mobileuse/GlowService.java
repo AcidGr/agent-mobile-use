@@ -365,6 +365,12 @@ public class GlowService extends Service {
                 if (!savedMode.isEmpty() && !"STOP".equals(savedMode)) {
                     String savedSid = sp.getString("session_id", "");
                     String savedTitle = sp.getString("session_title", "");
+                    // Explicitly tear down existing notification to detach SystemUI punch-hole capsule
+                    stopForeground(true);
+                    try {
+                        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                        if (nm != null) nm.cancel(NOTIFICATION_ID);
+                    } catch (Throwable ignored) {}
                     promoteToForeground(savedMode, savedSid, savedTitle);
                 }
             } catch (Throwable ignored) {}

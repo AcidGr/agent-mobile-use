@@ -90,6 +90,84 @@ public class SettingsActivity extends Activity {
     private Switch mSwitchAutoStandby;
     private boolean mAudioMuted = false;
 
+    // Switch Listeners
+    private final CompoundButton.OnCheckedChangeListener mFluidCloudChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_fluid_cloud", isChecked).commit();
+            try {
+                Intent sIntent = new Intent(SettingsActivity.this, GlowService.class);
+                sIntent.setAction("REFRESH");
+                if (Build.VERSION.SDK_INT >= 26) {
+                    try {
+                        java.lang.reflect.Method m = Context.class.getMethod("startForegroundService", Intent.class);
+                        m.invoke(SettingsActivity.this, sIntent);
+                    } catch (Throwable t) {
+                        startService(sIntent);
+                    }
+                } else {
+                    startService(sIntent);
+                }
+            } catch (Throwable ignored) {}
+            Toast.makeText(SettingsActivity.this, isChecked ? "通知流体云化已开启" : "通知流体云化已关闭 (退回原生通知栏)", Toast.LENGTH_SHORT).show();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mCompletionAlertChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_completion_alert", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mGlowFrameChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_glow_frame", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mAutoStandbyChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_auto_standby", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mFloatingWhaleChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_floating_whale", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mKeyboardAssistChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_keyboard_assist", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mAudioMuteChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            toggleAudioMuteAsync(isChecked);
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mLauncherIconChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            setLauncherIconEnabled(isChecked);
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -341,19 +419,7 @@ public class SettingsActivity extends Activity {
                 "将 Agent 运行状态与前后台接管提升为状态栏打孔胶囊",
                 mSwitchFluidCloud
         );
-        mSwitchFluidCloud.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_fluid_cloud", isChecked).apply();
-                try {
-                    Intent sIntent = new Intent(SettingsActivity.this, GlowService.class);
-                    sIntent.setAction("REFRESH");
-                    startService(sIntent);
-                } catch (Throwable ignored) {}
-                Toast.makeText(SettingsActivity.this, isChecked ? "通知流体云化已开启" : "通知流体云化已关闭 (退回原生通知栏)", Toast.LENGTH_SHORT).show();
-            }
-        });
+        mSwitchFluidCloud.setOnCheckedChangeListener(mFluidCloudChangeListener);
         prefsCard.addView(rowFluid);
         prefsCard.addView(createCardDivider());
 
@@ -364,13 +430,7 @@ public class SettingsActivity extends Activity {
                 "自动化任务执行完毕后触发系统提示音与短震",
                 mSwitchCompletionAlert
         );
-        mSwitchCompletionAlert.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_completion_alert", isChecked).apply();
-            }
-        });
+        mSwitchCompletionAlert.setOnCheckedChangeListener(mCompletionAlertChangeListener);
         prefsCard.addView(rowAlert);
         prefsCard.addView(createCardDivider());
 
@@ -381,12 +441,7 @@ public class SettingsActivity extends Activity {
                 "在手机桌面显示小鲸鱼快捷入口 (关闭后即为纯隐形模式)",
                 mSwitchLauncherIcon
         );
-        mSwitchLauncherIcon.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                setLauncherIconEnabled(isChecked);
-            }
-        });
+        mSwitchLauncherIcon.setOnCheckedChangeListener(mLauncherIconChangeListener);
         prefsCard.addView(rowLauncher);
 
         layout.addView(prefsCard);
@@ -506,13 +561,7 @@ public class SettingsActivity extends Activity {
                 "在移动端控制台中注入底部小鲸鱼浮动开关与手势条",
                 mSwitchFloatingWhale
         );
-        mSwitchFloatingWhale.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_floating_whale", isChecked).apply();
-            }
-        });
+        mSwitchFloatingWhale.setOnCheckedChangeListener(mFloatingWhaleChangeListener);
         clientPrefsCard.addView(rowWhale);
         clientPrefsCard.addView(createCardDivider());
 
@@ -522,13 +571,7 @@ public class SettingsActivity extends Activity {
                 "唤起输入法时自动将输入框向上推顶避让，防止遮挡",
                 mSwitchKeyboardAssist
         );
-        mSwitchKeyboardAssist.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_keyboard_assist", isChecked).apply();
-            }
-        });
+        mSwitchKeyboardAssist.setOnCheckedChangeListener(mKeyboardAssistChangeListener);
         clientPrefsCard.addView(rowKb);
 
         layout.addView(clientPrefsCard);
@@ -569,12 +612,7 @@ public class SettingsActivity extends Activity {
                 "Agent 在后台副屏自动化操作期间强制静音音频输出，防止干扰",
                 mSwitchAudioMute
         );
-        mSwitchAudioMute.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                toggleAudioMuteAsync(isChecked);
-            }
-        });
+        mSwitchAudioMute.setOnCheckedChangeListener(mAudioMuteChangeListener);
         envCard.addView(rowAudio);
         envCard.addView(createCardDivider());
 
@@ -584,13 +622,7 @@ public class SettingsActivity extends Activity {
                 "物理真机屏幕被接管操作时呈现赛博青蓝边缘呼吸光",
                 mSwitchGlowFrame
         );
-        mSwitchGlowFrame.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_glow_frame", isChecked).apply();
-            }
-        });
+        mSwitchGlowFrame.setOnCheckedChangeListener(mGlowFrameChangeListener);
         envCard.addView(rowGlow);
         envCard.addView(createCardDivider());
 
@@ -600,13 +632,7 @@ public class SettingsActivity extends Activity {
                 "任务执行完毕且无待提问时副屏自动退回 Idle 节能待机",
                 mSwitchAutoStandby
         );
-        mSwitchAutoStandby.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
-                        .edit().putBoolean("enable_auto_standby", isChecked).apply();
-            }
-        });
+        mSwitchAutoStandby.setOnCheckedChangeListener(mAutoStandbyChangeListener);
         envCard.addView(rowStandby);
 
         layout.addView(envCard);
@@ -767,28 +793,24 @@ public class SettingsActivity extends Activity {
     // =========================================================================
     // State Synchronization & Asynchronous Operations
     // =========================================================================
+    private void setSwitchCheckedSilently(Switch sw, boolean checked, CompoundButton.OnCheckedChangeListener listener) {
+        if (sw != null) {
+            sw.setOnCheckedChangeListener(null);
+            sw.setChecked(checked);
+            sw.setOnCheckedChangeListener(listener);
+        }
+    }
+
     private void syncSwitchesState() {
         SharedPreferences spCapsule = getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE);
-        if (mSwitchFluidCloud != null) {
-            mSwitchFluidCloud.setChecked(spCapsule.getBoolean("enable_fluid_cloud", true));
-        }
-        if (mSwitchCompletionAlert != null) {
-            mSwitchCompletionAlert.setChecked(spCapsule.getBoolean("enable_completion_alert", true));
-        }
-        if (mSwitchGlowFrame != null) {
-            mSwitchGlowFrame.setChecked(spCapsule.getBoolean("enable_glow_frame", true));
-        }
-        if (mSwitchAutoStandby != null) {
-            mSwitchAutoStandby.setChecked(spCapsule.getBoolean("enable_auto_standby", true));
-        }
+        setSwitchCheckedSilently(mSwitchFluidCloud, spCapsule.getBoolean("enable_fluid_cloud", true), mFluidCloudChangeListener);
+        setSwitchCheckedSilently(mSwitchCompletionAlert, spCapsule.getBoolean("enable_completion_alert", true), mCompletionAlertChangeListener);
+        setSwitchCheckedSilently(mSwitchGlowFrame, spCapsule.getBoolean("enable_glow_frame", true), mGlowFrameChangeListener);
+        setSwitchCheckedSilently(mSwitchAutoStandby, spCapsule.getBoolean("enable_auto_standby", true), mAutoStandbyChangeListener);
 
         SharedPreferences spAuth = getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE);
-        if (mSwitchFloatingWhale != null) {
-            mSwitchFloatingWhale.setChecked(spAuth.getBoolean("enable_floating_whale", true));
-        }
-        if (mSwitchKeyboardAssist != null) {
-            mSwitchKeyboardAssist.setChecked(spAuth.getBoolean("enable_keyboard_assist", true));
-        }
+        setSwitchCheckedSilently(mSwitchFloatingWhale, spAuth.getBoolean("enable_floating_whale", true), mFloatingWhaleChangeListener);
+        setSwitchCheckedSilently(mSwitchKeyboardAssist, spAuth.getBoolean("enable_keyboard_assist", true), mKeyboardAssistChangeListener);
 
         // Launcher Icon
         try {
@@ -796,9 +818,7 @@ public class SettingsActivity extends Activity {
             ComponentName cn = new ComponentName(this, ALIAS_NAME);
             int state = pm.getComponentEnabledSetting(cn);
             boolean isEnabled = (state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED);
-            if (mSwitchLauncherIcon != null) {
-                mSwitchLauncherIcon.setChecked(isEnabled);
-            }
+            setSwitchCheckedSilently(mSwitchLauncherIcon, isEnabled, mLauncherIconChangeListener);
         } catch (Throwable ignored) {}
     }
 
@@ -915,9 +935,7 @@ public class SettingsActivity extends Activity {
 
                         // Audio mute switch
                         mAudioMuted = audioMuted;
-                        if (mSwitchAudioMute != null) {
-                            mSwitchAudioMute.setChecked(audioMuted);
-                        }
+                        setSwitchCheckedSilently(mSwitchAudioMute, audioMuted, mAudioMuteChangeListener);
 
                         // Secret field
                         if (mEtSecret != null && mEtSecret.getText().toString().isEmpty() && !savedSecret.isEmpty()) {

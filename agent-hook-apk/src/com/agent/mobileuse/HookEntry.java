@@ -185,8 +185,15 @@ public class HookEntry implements IXposedHookLoadPackage {
                         Object entry = param.args[0];
                         try {
                             Object sbn = invokeNoArg(entry, "getSbn");
-                            if (isValidAgentLiveAlert(sbn)) {
-                                param.setResult(Boolean.TRUE);
+                            if (sbn != null) {
+                                String pkg = (String) invokeNoArg(sbn, "getPackageName");
+                                if ("com.agent.mobileuse".equals(pkg)) {
+                                    if (isValidAgentLiveAlert(sbn)) {
+                                        param.setResult(Boolean.TRUE);
+                                    } else {
+                                        param.setResult(Boolean.FALSE);
+                                    }
+                                }
                             }
                         } catch (Throwable ignored) {}
                     }
@@ -210,8 +217,15 @@ public class HookEntry implements IXposedHookLoadPackage {
                         Object entry = param.args[0];
                         try {
                             Object sbn = invokeNoArg(entry, "getSbn");
-                            if (isValidAgentLiveAlert(sbn)) {
-                                param.setResult(Boolean.TRUE);
+                            if (sbn != null) {
+                                String pkg = (String) invokeNoArg(sbn, "getPackageName");
+                                if ("com.agent.mobileuse".equals(pkg)) {
+                                    if (isValidAgentLiveAlert(sbn)) {
+                                        param.setResult(Boolean.TRUE);
+                                    } else {
+                                        param.setResult(Boolean.FALSE);
+                                    }
+                                }
                             }
                         } catch (Throwable ignored) {}
                     }
