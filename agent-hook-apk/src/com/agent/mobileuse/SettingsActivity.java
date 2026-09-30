@@ -274,7 +274,7 @@ public class SettingsActivity extends Activity {
         LinearLayout headerContent = new LinearLayout(this);
         headerContent.setOrientation(LinearLayout.HORIZONTAL);
         headerContent.setGravity(Gravity.CENTER_VERTICAL);
-        headerContent.setPadding(dp(18), dp(12), dp(18), dp(12));
+        headerContent.setPadding(dp(16), dp(10), dp(16), dp(10));
 
         LinearLayout titleCol = new LinearLayout(this);
         titleCol.setOrientation(LinearLayout.VERTICAL);
@@ -282,33 +282,33 @@ public class SettingsActivity extends Activity {
         titleCol.setLayoutParams(titleLp);
 
         TextView title = new TextView(this);
-        title.setText("Agent Mobile 控制与配置中心");
-        title.setTextSize(17);
+        title.setText("Agent Mobile 控制中心");
+        title.setTextSize(15);
         title.setTextColor(Color.parseColor("#00D2FF"));
         title.setTypeface(Typeface.DEFAULT_BOLD);
         titleCol.addView(title);
 
         mTvHeaderSubtitle = new TextView(this);
-        mTvHeaderSubtitle.setText("基本信息 / 系统与端口监控");
-        mTvHeaderSubtitle.setTextSize(12);
+        mTvHeaderSubtitle.setText("基本信息 / 监控");
+        mTvHeaderSubtitle.setTextSize(11);
         mTvHeaderSubtitle.setTextColor(Color.parseColor("#8B949E"));
-        mTvHeaderSubtitle.setPadding(0, dp(2), 0, 0);
+        mTvHeaderSubtitle.setPadding(0, dp(1), 0, 0);
         titleCol.addView(mTvHeaderSubtitle);
 
         headerContent.addView(titleCol);
 
-        Button btnRefresh = createStyledButton("刷新状态", "#162338", "#00A3C4");
+        Button btnRefresh = createStyledButton("刷新", "#162338", "#00A3C4");
         btnRefresh.setTextColor(Color.parseColor("#00D2FF"));
-        btnRefresh.setTextSize(12);
-        btnRefresh.setPadding(dp(12), dp(6), dp(12), dp(6));
+        btnRefresh.setTextSize(11);
+        btnRefresh.setPadding(dp(10), dp(4), dp(10), dp(4));
         btnRefresh.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)
         ));
         btnRefresh.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 refreshStatusAsync();
-                Toast.makeText(SettingsActivity.this, "已触发全量状态刷新", Toast.LENGTH_SHORT).show();
+                Toast.makeText(SettingsActivity.this, "已刷新", Toast.LENGTH_SHORT).show();
             }
         });
         headerContent.addView(btnRefresh);
@@ -391,11 +391,11 @@ public class SettingsActivity extends Activity {
 
         if (mTvHeaderSubtitle != null) {
             if (index == 0) {
-                mTvHeaderSubtitle.setText("基本信息 / 系统与端口监控");
+                mTvHeaderSubtitle.setText("基本信息 / 监控");
             } else if (index == 1) {
-                mTvHeaderSubtitle.setText("DSH 设置 / 通信与安全凭据");
+                mTvHeaderSubtitle.setText("DSH 设置 / 凭据");
             } else {
-                mTvHeaderSubtitle.setText("虚拟副屏设置 / 硬件与自动化环境");
+                mTvHeaderSubtitle.setText("副屏设置 / 环境");
             }
         }
     }
@@ -412,63 +412,52 @@ public class SettingsActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(18), dp(16), dp(18), dp(24));
+        layout.setPadding(dp(16), dp(12), dp(16), dp(20));
 
-        // 1. 服务与网络监听监控
-        layout.addView(createSectionHeader("服务与网络监听监控"));
+        // 1. 服务与网络监控
+        layout.addView(createSectionHeader("服务与网络监控"));
         LinearLayout portsCard = createCardLayout();
-        mTvStatusDshPort = createStatusRow(portsCard, "DSH Web 控制台", "[CHECKING] (127.0.0.1:3080)");
-        mTvStatusDshVersion = createStatusRow(portsCard, "DSH 运行时版本", "[FETCHING...]");
-        mTvStatusGatewayPort = createStatusRow(portsCard, "守护进程网关", "[CHECKING] (127.0.0.1:3070)");
-        mTvStatusMode = createStatusRow(portsCard, "当前运行模式", "IDLE (节能待机)");
-        mTvStatusLsposed = createStatusRow(portsCard, "LSPosed 模块挂载", "[CHECKING...]");
+        mTvStatusDshPort = createStatusRow(portsCard, "DSH 控制台", "[CHECKING] 3080");
+        mTvStatusDshVersion = createStatusRow(portsCard, "DSH 版本", "[FETCHING...]");
+        mTvStatusGatewayPort = createStatusRow(portsCard, "网关服务", "[CHECKING] 3070");
+        mTvStatusMode = createStatusRow(portsCard, "运行模式", "IDLE (待机)");
+        mTvStatusLsposed = createStatusRow(portsCard, "LSPosed 模块", "[CHECKING...]");
         layout.addView(portsCard);
 
         // 2. 系统特性偏好
-        layout.addView(createSectionHeader("系统级特性偏好"));
+        layout.addView(createSectionHeader("系统特性偏好"));
         LinearLayout prefsCard = createCardLayout();
 
         // Switch 1: 流体云化
         mSwitchFluidCloud = new Switch(this);
-        LinearLayout rowFluid = createSwitchRow(
-                "通知流体云化 (Fluid Cloud / Live Alert)",
-                "将 Agent 运行状态与前后台接管提升为状态栏打孔胶囊",
-                mSwitchFluidCloud
-        );
+        LinearLayout rowFluid = createSwitchRow("通知流体云化", mSwitchFluidCloud);
         mSwitchFluidCloud.setOnCheckedChangeListener(mFluidCloudChangeListener);
         prefsCard.addView(rowFluid);
         prefsCard.addView(createCardDivider());
 
         // Switch 2: 任务完成强提醒
         mSwitchCompletionAlert = new Switch(this);
-        LinearLayout rowAlert = createSwitchRow(
-                "任务完成强提醒 (Sound & Vibration)",
-                "自动化任务执行完毕后触发系统提示音与短震",
-                mSwitchCompletionAlert
-        );
+        LinearLayout rowAlert = createSwitchRow("任务完成提醒", mSwitchCompletionAlert);
         mSwitchCompletionAlert.setOnCheckedChangeListener(mCompletionAlertChangeListener);
         prefsCard.addView(rowAlert);
         prefsCard.addView(createCardDivider());
 
         // Switch 3: 桌面快捷图标
         mSwitchLauncherIcon = new Switch(this);
-        LinearLayout rowLauncher = createSwitchRow(
-                "桌面应用快捷图标 (Launcher Icon)",
-                "在手机桌面显示小鲸鱼快捷入口 (关闭后即为纯隐形模式)",
-                mSwitchLauncherIcon
-        );
+        LinearLayout rowLauncher = createSwitchRow("桌面图标快捷方式", mSwitchLauncherIcon);
         mSwitchLauncherIcon.setOnCheckedChangeListener(mLauncherIconChangeListener);
         prefsCard.addView(rowLauncher);
 
         layout.addView(prefsCard);
 
-        // 3. 快速唤起与操作
-        layout.addView(createSectionHeader("操作与快捷唤起"));
+        // 3. 快速唤起
+        layout.addView(createSectionHeader("快捷唤起"));
         LinearLayout actionCard = createCardLayout();
-        Button btnOpenOverlay = createStyledButton("打开 Agent 悬浮控制台", "#0F2836", "#00A3C4");
+        Button btnOpenOverlay = createStyledButton("打开控制台", "#0F2836", "#00A3C4");
         btnOpenOverlay.setTextColor(Color.parseColor("#00D2FF"));
+        btnOpenOverlay.setTextSize(12);
         btnOpenOverlay.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(36)
         ));
         btnOpenOverlay.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -497,43 +486,39 @@ public class SettingsActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(18), dp(16), dp(18), dp(24));
+        layout.setPadding(dp(16), dp(12), dp(16), dp(20));
 
-        // 1. 网关与连接配置
-        layout.addView(createSectionHeader("网关连接配置"));
+        // 1. 网关连接
+        layout.addView(createSectionHeader("网关节点"));
         LinearLayout connCard = createCardLayout();
-        createStatusRow(connCard, "REST 网关节点", "http://127.0.0.1:3070");
-        createStatusRow(connCard, "Web 控制台节点", "http://127.0.0.1:3080");
-        createStatusRow(connCard, "通信协议", "HTTP / WebSocket Remote Mux");
+        createStatusRow(connCard, "网关节点", "http://127.0.0.1:3070");
+        createStatusRow(connCard, "控制台节点", "http://127.0.0.1:3080");
         layout.addView(connCard);
 
-        // 2. DSH 凭据管理
-        layout.addView(createSectionHeader("DSH 凭据管理"));
+        // 2. 通信密钥
+        layout.addView(createSectionHeader("通信凭据密钥"));
         LinearLayout secretCard = createCardLayout();
-
-        TextView tvSecretDesc = new TextView(this);
-        tvSecretDesc.setText("DeepSeek Harness 动态通信鉴权密钥");
-        tvSecretDesc.setTextSize(13);
-        tvSecretDesc.setTextColor(Color.parseColor("#8B949E"));
-        secretCard.addView(tvSecretDesc);
 
         LinearLayout inputRow = new LinearLayout(this);
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
-        inputRow.setPadding(0, dp(10), 0, dp(10));
+        inputRow.setPadding(0, dp(4), 0, dp(8));
         inputRow.setGravity(Gravity.CENTER_VERTICAL);
 
         mEtSecret = new EditText(this);
-        mEtSecret.setTextSize(13);
+        mEtSecret.setTextSize(12);
         mEtSecret.setTextColor(Color.parseColor("#E6EDF3"));
         mEtSecret.setBackground(makeButtonDrawable("#12141C", "#282D3D"));
-        mEtSecret.setPadding(dp(10), dp(8), dp(10), dp(8));
+        mEtSecret.setPadding(dp(8), dp(6), dp(8), dp(6));
         mEtSecret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, dp(40), 1.0f);
-        etLp.rightMargin = dp(8);
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, dp(34), 1.0f);
+        etLp.rightMargin = dp(6);
         mEtSecret.setLayoutParams(etLp);
         inputRow.addView(mEtSecret);
 
         final Button btnToggleMask = createStyledButton("显示", "#1E2230", "#30363D");
+        btnToggleMask.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)
+        ));
         btnToggleMask.setOnClickListener(new View.OnClickListener() {
             private boolean isMasked = true;
             @Override
@@ -552,10 +537,11 @@ public class SettingsActivity extends Activity {
         inputRow.addView(btnToggleMask);
         secretCard.addView(inputRow);
 
-        Button btnSaveSecret = createStyledButton("保存并同步密钥", "#00A3C4", null);
+        Button btnSaveSecret = createStyledButton("保存并同步", "#00A3C4", null);
         btnSaveSecret.setTextColor(Color.parseColor("#FFFFFF"));
+        btnSaveSecret.setTextSize(12);
         btnSaveSecret.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(34)
         ));
         btnSaveSecret.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -567,36 +553,24 @@ public class SettingsActivity extends Activity {
 
         layout.addView(secretCard);
 
-        // 3. Web 控制台偏好
-        layout.addView(createSectionHeader("Web 控制台偏好"));
+        // 3. 控制台偏好
+        layout.addView(createSectionHeader("控制台偏好"));
         LinearLayout clientPrefsCard = createCardLayout();
 
         mSwitchTranslucentTheme = new Switch(this);
-        LinearLayout rowTranslucent = createSwitchRow(
-                "前台毛玻璃透明主题 (Translucent Theme)",
-                "开启后控制台呈现赛博毛玻璃透视效果，关闭后恢复 DSH 原生纯黑实色",
-                mSwitchTranslucentTheme
-        );
+        LinearLayout rowTranslucent = createSwitchRow("毛玻璃透明主题", mSwitchTranslucentTheme);
         mSwitchTranslucentTheme.setOnCheckedChangeListener(mTranslucentThemeChangeListener);
         clientPrefsCard.addView(rowTranslucent);
         clientPrefsCard.addView(createCardDivider());
 
         mSwitchFloatingWhale = new Switch(this);
-        LinearLayout rowWhale = createSwitchRow(
-                "Web 悬浮控制条与小鲸鱼 (Floating Whale)",
-                "在移动端控制台中注入底部小鲸鱼浮动开关与手势条",
-                mSwitchFloatingWhale
-        );
+        LinearLayout rowWhale = createSwitchRow("悬浮控制球与快捷条", mSwitchFloatingWhale);
         mSwitchFloatingWhale.setOnCheckedChangeListener(mFloatingWhaleChangeListener);
         clientPrefsCard.addView(rowWhale);
         clientPrefsCard.addView(createCardDivider());
 
         mSwitchKeyboardAssist = new Switch(this);
-        LinearLayout rowKb = createSwitchRow(
-                "软键盘自适应滚动 (Keyboard Scroll Assist)",
-                "唤起输入法时自动将输入框向上推顶避让，防止遮挡",
-                mSwitchKeyboardAssist
-        );
+        LinearLayout rowKb = createSwitchRow("输入法自适应滚动", mSwitchKeyboardAssist);
         mSwitchKeyboardAssist.setOnCheckedChangeListener(mKeyboardAssistChangeListener);
         clientPrefsCard.addView(rowKb);
 
@@ -618,62 +592,51 @@ public class SettingsActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(18), dp(16), dp(18), dp(24));
+        layout.setPadding(dp(16), dp(12), dp(16), dp(20));
 
         // 1. 硬件参数
-        layout.addView(createSectionHeader("虚拟副屏硬件参数"));
+        layout.addView(createSectionHeader("副屏参数"));
         LinearLayout vdCard = createCardLayout();
-        mTvDisplayId = createStatusRow(vdCard, "虚拟副屏 Display ID", "-1 (待机中)");
-        mTvDisplayResolution = createStatusRow(vdCard, "副屏分辨率", "1080 x 2400");
-        mTvDisplayDpi = createStatusRow(vdCard, "像素密度 (DPI)", "480 DPI");
+        mTvDisplayId = createStatusRow(vdCard, "Display ID", "-1 (待机)");
+        mTvDisplayResolution = createStatusRow(vdCard, "分辨率", "1080 x 2400");
+        mTvDisplayDpi = createStatusRow(vdCard, "像素密度", "480 DPI");
         layout.addView(vdCard);
 
         // 2. 自动化运行环境
-        layout.addView(createSectionHeader("自动化运行环境"));
+        layout.addView(createSectionHeader("自动化环境"));
         LinearLayout envCard = createCardLayout();
 
         mSwitchAudioMute = new Switch(this);
-        LinearLayout rowAudio = createSwitchRow(
-                "副屏自动化独立静音 (Virtual Display Mute)",
-                "Agent 在后台副屏自动化操作期间强制静音音频输出，防止干扰",
-                mSwitchAudioMute
-        );
+        LinearLayout rowAudio = createSwitchRow("副屏自动化静音", mSwitchAudioMute);
         mSwitchAudioMute.setOnCheckedChangeListener(mAudioMuteChangeListener);
         envCard.addView(rowAudio);
         envCard.addView(createCardDivider());
 
         mSwitchGlowFrame = new Switch(this);
-        LinearLayout rowGlow = createSwitchRow(
-                "前台接管呼吸警示光 (Foreground Glow Frame)",
-                "物理真机屏幕被接管操作时呈现赛博青蓝边缘呼吸光",
-                mSwitchGlowFrame
-        );
+        LinearLayout rowGlow = createSwitchRow("前台接管呼吸光", mSwitchGlowFrame);
         mSwitchGlowFrame.setOnCheckedChangeListener(mGlowFrameChangeListener);
         envCard.addView(rowGlow);
         envCard.addView(createCardDivider());
 
         mSwitchAutoStandby = new Switch(this);
-        LinearLayout rowStandby = createSwitchRow(
-                "自动化完成自动待机 (Auto Standby on Finish)",
-                "任务执行完毕且无待提问时副屏自动退回 Idle 节能待机",
-                mSwitchAutoStandby
-        );
+        LinearLayout rowStandby = createSwitchRow("完成后自动待机", mSwitchAutoStandby);
         mSwitchAutoStandby.setOnCheckedChangeListener(mAutoStandbyChangeListener);
         envCard.addView(rowStandby);
 
         layout.addView(envCard);
 
         // 3. 环境模式切换
-        layout.addView(createSectionHeader("环境模式手动切换"));
+        layout.addView(createSectionHeader("模式手动切换"));
         LinearLayout modeCard = createCardLayout();
 
         LinearLayout btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
 
-        Button btnIdle = createStyledButton("待机 (Idle)", "#162338", "#282D3D");
-        LinearLayout.LayoutParams btnLp1 = new LinearLayout.LayoutParams(0, dp(38), 1.0f);
+        Button btnIdle = createStyledButton("待机", "#162338", "#282D3D");
+        LinearLayout.LayoutParams btnLp1 = new LinearLayout.LayoutParams(0, dp(32), 1.0f);
         btnLp1.rightMargin = dp(4);
         btnIdle.setLayoutParams(btnLp1);
+        btnIdle.setTextSize(11);
         btnIdle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -683,9 +646,10 @@ public class SettingsActivity extends Activity {
         btnRow.addView(btnIdle);
 
         Button btnBg = createStyledButton("后台副屏", "#162338", "#282D3D");
-        LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, dp(38), 1.0f);
+        LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, dp(32), 1.0f);
         btnLp2.rightMargin = dp(4);
         btnBg.setLayoutParams(btnLp2);
+        btnBg.setTextSize(11);
         btnBg.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -695,8 +659,9 @@ public class SettingsActivity extends Activity {
         btnRow.addView(btnBg);
 
         Button btnFg = createStyledButton("前台接管", "#162338", "#282D3D");
-        LinearLayout.LayoutParams btnLp3 = new LinearLayout.LayoutParams(0, dp(38), 1.0f);
+        LinearLayout.LayoutParams btnLp3 = new LinearLayout.LayoutParams(0, dp(32), 1.0f);
         btnFg.setLayoutParams(btnLp3);
+        btnFg.setTextSize(11);
         btnFg.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -718,10 +683,10 @@ public class SettingsActivity extends Activity {
     private TextView createSectionHeader(String title) {
         TextView tv = new TextView(this);
         tv.setText(title);
-        tv.setTextSize(12);
+        tv.setTextSize(11);
         tv.setTextColor(Color.parseColor("#00D2FF"));
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(dp(4), dp(16), 0, dp(8));
+        tv.setPadding(dp(2), dp(10), 0, dp(4));
         return tv;
     }
 
@@ -732,7 +697,7 @@ public class SettingsActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ));
         card.setBackground(makeCardDrawable());
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
         return card;
     }
 
@@ -742,8 +707,8 @@ public class SettingsActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
         );
-        lp.topMargin = dp(10);
-        lp.bottomMargin = dp(10);
+        lp.topMargin = dp(6);
+        lp.bottomMargin = dp(6);
         v.setLayoutParams(lp);
         return v;
     }
@@ -751,17 +716,17 @@ public class SettingsActivity extends Activity {
     private TextView createStatusRow(LinearLayout parent, String label, String defaultVal) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(4), 0, dp(4));
+        row.setPadding(0, dp(2), 0, dp(2));
 
         TextView tvLabel = new TextView(this);
         tvLabel.setText(label + ": ");
-        tvLabel.setTextSize(13);
+        tvLabel.setTextSize(12);
         tvLabel.setTextColor(Color.parseColor("#8B949E"));
         row.addView(tvLabel);
 
         TextView tvVal = new TextView(this);
         tvVal.setText(defaultVal);
-        tvVal.setTextSize(13);
+        tvVal.setTextSize(12);
         tvVal.setTextColor(Color.parseColor("#E6EDF3"));
         row.addView(tvVal);
 
@@ -769,36 +734,24 @@ public class SettingsActivity extends Activity {
         return tvVal;
     }
 
-    private LinearLayout createSwitchRow(String title, String desc, Switch sw) {
+    private LinearLayout createSwitchRow(String title, Switch sw) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-
-        LinearLayout textCol = new LinearLayout(this);
-        textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
-        textLp.rightMargin = dp(12);
-        textCol.setLayoutParams(textLp);
+        row.setPadding(0, dp(2), 0, dp(2));
 
         TextView tvTitle = new TextView(this);
         tvTitle.setText(title);
-        tvTitle.setTextSize(13);
+        tvTitle.setTextSize(12);
         tvTitle.setTextColor(Color.parseColor("#E6EDF3"));
-        textCol.addView(tvTitle);
+        LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        textLp.rightMargin = dp(8);
+        tvTitle.setLayoutParams(textLp);
 
-        if (desc != null && !desc.isEmpty()) {
-            TextView tvDesc = new TextView(this);
-            tvDesc.setText(desc);
-            tvDesc.setTextSize(11);
-            tvDesc.setTextColor(Color.parseColor("#8B949E"));
-            tvDesc.setPadding(0, dp(2), 0, 0);
-            textCol.addView(tvDesc);
-        }
-
-        row.addView(textCol);
+        row.addView(tvTitle);
         row.addView(sw);
         return row;
     }
@@ -806,12 +759,12 @@ public class SettingsActivity extends Activity {
     private Button createStyledButton(String text, String bgColor, String strokeColor) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextSize(13);
+        btn.setTextSize(11);
         btn.setTextColor(Color.parseColor("#E6EDF3"));
         btn.setBackground(makeButtonDrawable(bgColor, strokeColor));
-        btn.setPadding(dp(12), dp(8), dp(12), dp(8));
+        btn.setPadding(dp(10), dp(4), dp(10), dp(4));
         btn.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)
         ));
         return btn;
     }
@@ -910,10 +863,10 @@ public class SettingsActivity extends Activity {
                         // Update 3080 Port status
                         if (mTvStatusDshPort != null) {
                             if (dshListening) {
-                                mTvStatusDshPort.setText("[ONLINE] (127.0.0.1:3080)");
+                                mTvStatusDshPort.setText("[ONLINE] (3080)");
                                 mTvStatusDshPort.setTextColor(Color.parseColor("#49E9A6"));
                             } else {
-                                mTvStatusDshPort.setText("[OFFLINE] (端口未开放)");
+                                mTvStatusDshPort.setText("[OFFLINE]");
                                 mTvStatusDshPort.setTextColor(Color.parseColor("#F85149"));
                             }
                         }
@@ -940,11 +893,11 @@ public class SettingsActivity extends Activity {
                             int dpi = status3070.optInt("dpi", 480);
 
                             if (mTvStatusGatewayPort != null) {
-                                mTvStatusGatewayPort.setText("[ONLINE] (127.0.0.1:3070, PID: " + pid + ")");
+                                mTvStatusGatewayPort.setText("[ONLINE] (PID: " + pid + ")");
                                 mTvStatusGatewayPort.setTextColor(Color.parseColor("#49E9A6"));
                             }
                             if (mTvStatusMode != null) {
-                                mTvStatusMode.setText(mode + ("IDLE".equals(mode) ? " (节能待机)" : ""));
+                                mTvStatusMode.setText(mode + ("IDLE".equals(mode) ? " (待机)" : ""));
                                 mTvStatusMode.setTextColor(Color.parseColor("#00D2FF"));
                             }
                             if (mTvDisplayId != null) {
@@ -958,7 +911,7 @@ public class SettingsActivity extends Activity {
                             }
                         } else {
                             if (mTvStatusGatewayPort != null) {
-                                mTvStatusGatewayPort.setText("[OFFLINE] (守护进程未运行)");
+                                mTvStatusGatewayPort.setText("[OFFLINE]");
                                 mTvStatusGatewayPort.setTextColor(Color.parseColor("#F85149"));
                             }
                         }
@@ -967,10 +920,10 @@ public class SettingsActivity extends Activity {
                         if (mTvStatusLsposed != null) {
                             boolean lspActive = lspDirect || (status3070 != null && status3070.optBoolean("lsposed_active", false));
                             if (lspActive) {
-                                mTvStatusLsposed.setText("[ACTIVE] (已注入系统与框架)");
+                                mTvStatusLsposed.setText("[ACTIVE]");
                                 mTvStatusLsposed.setTextColor(Color.parseColor("#49E9A6"));
                             } else {
-                                mTvStatusLsposed.setText("[INACTIVE] (模块未激活)");
+                                mTvStatusLsposed.setText("[INACTIVE]");
                                 mTvStatusLsposed.setTextColor(Color.parseColor("#F85149"));
                             }
                         }
