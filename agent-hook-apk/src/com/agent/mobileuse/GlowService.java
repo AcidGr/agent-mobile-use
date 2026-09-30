@@ -239,12 +239,15 @@ public class GlowService extends Service {
                 builder.setSmallIcon(R.drawable.dsh_whale_icon);
             }
 
-            // Explicit Oplus Fluid Cloud Icon slot
-            if (capsuleIcon != null) {
-                android.os.Bundle extras = new android.os.Bundle();
+            // Oplus Fluid Cloud Icon slot & personalization
+            android.content.SharedPreferences spPref = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            boolean enableFluidCloud = spPref.getBoolean("enable_fluid_cloud", true);
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putBoolean("enable_fluid_cloud", enableFluidCloud);
+            if (enableFluidCloud && capsuleIcon != null) {
                 extras.putParcelable("oplus_small_icon", capsuleIcon);
-                builder.addExtras(extras);
             }
+            builder.addExtras(extras);
 
             // Eliminate Android 12+ 10-second FGS notification deferral (FOREGROUND_SERVICE_IMMEDIATE = 1)
             try {
@@ -355,6 +358,16 @@ public class GlowService extends Service {
         } else if ("START_RUNNING".equals(action)) {
             hideGlow();
             promoteToForeground("RUNNING", sid, title);
+        } else if ("REFRESH".equals(action)) {
+            try {
+                android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                String savedMode = sp.getString("mode", "");
+                if (!savedMode.isEmpty() && !"STOP".equals(savedMode)) {
+                    String savedSid = sp.getString("session_id", "");
+                    String savedTitle = sp.getString("session_title", "");
+                    promoteToForeground(savedMode, savedSid, savedTitle);
+                }
+            } catch (Throwable ignored) {}
         } else if ("STOP".equals(action)) {
             try {
                 android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);

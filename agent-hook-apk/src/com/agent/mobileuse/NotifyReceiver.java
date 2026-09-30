@@ -251,6 +251,11 @@ public class NotifyReceiver extends BroadcastReceiver {
             bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 
+            // Personalization settings
+            android.content.SharedPreferences sp = context.getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            boolean enableFluidCloud = sp.getBoolean("enable_fluid_cloud", true);
+            boolean enableAlert = sp.getBoolean("enable_completion_alert", true);
+
             // Set SmallIcon and LargeIcon to transparent vector Cyber Checkmark
             try {
                 Bitmap checkIcon = createCyberCheckmarkBitmap(192);
@@ -259,13 +264,22 @@ public class NotifyReceiver extends BroadcastReceiver {
                     builder.setSmallIcon(icon);
                     builder.setLargeIcon(checkIcon);
                     android.os.Bundle extras = new android.os.Bundle();
-                    extras.putParcelable("oplus_small_icon", icon);
+                    extras.putBoolean("enable_fluid_cloud", enableFluidCloud);
+                    if (enableFluidCloud) {
+                        extras.putParcelable("oplus_small_icon", icon);
+                    }
                     builder.addExtras(extras);
                 } else {
                     builder.setSmallIcon(R.drawable.dsh_whale_icon);
                 }
             } catch (Throwable t) {
                 builder.setSmallIcon(R.drawable.dsh_whale_icon);
+            }
+
+            if (enableAlert) {
+                builder.setDefaults(Notification.DEFAULT_ALL);
+            } else {
+                builder.setDefaults(0);
             }
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)

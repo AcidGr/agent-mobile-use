@@ -154,6 +154,10 @@ public class HookEntry implements IXposedHookLoadPackage {
                 // Exclude Android system AutoGroupSummary notifications (FLAG_GROUP_SUMMARY = 0x200)
                 if ((n.flags & 0x00000200) != 0) return false;
                 if (n.extras != null) {
+                    // Check user personalization switch: Fluid Cloud conversion
+                    if (!n.extras.getBoolean("enable_fluid_cloud", true)) {
+                        return false;
+                    }
                     CharSequence title = n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
                     if (title == null || title.toString().trim().isEmpty()) return false;
                 }

@@ -42,6 +42,30 @@
             android:excludeFromRecents="true"
             android:exported="true" />
 
+        <activity
+            android:name=".SettingsActivity"
+            android:label="Agent 控制与配置中心"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".LauncherAlias"
+            android:targetActivity=".SettingsActivity"
+            android:label="Agent 控制台"
+            android:icon="@drawable/dsh_whale_icon"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <service
             android:name=".ConsoleTileService"
             android:label="Agent 控制台"
