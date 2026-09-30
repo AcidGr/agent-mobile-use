@@ -118,8 +118,13 @@
       return false;
     };
 
+    var cfg = window.__DSH_MOBILE_CONFIG__ || {};
+
     // 1. Whale Button (Toggle Sidebar)
-    if (!document.querySelector(".dsh-overlay-whale-btn")) {
+    var existingWhale = document.querySelector(".dsh-overlay-whale-btn");
+    if (cfg.enableWhale === false) {
+      if (existingWhale) existingWhale.remove();
+    } else if (!existingWhale) {
       var whaleBtn = document.createElement("button");
       whaleBtn.type = "button";
       whaleBtn.className = "dsh-overlay-whale-btn";
@@ -137,7 +142,10 @@
     }
 
     // 2. Home Button (New Session & Clear)
-    if (!document.querySelector(".dsh-overlay-home-btn")) {
+    var existingHome = document.querySelector(".dsh-overlay-home-btn");
+    if (cfg.enableWhale === false) {
+      if (existingHome) existingHome.remove();
+    } else if (!existingHome) {
       var homeBtn = document.createElement("button");
       homeBtn.type = "button";
       homeBtn.className = "dsh-overlay-home-btn";
@@ -186,7 +194,10 @@
     }
 
     // 3. Back to Chat Button
-    if (!document.querySelector(".dsh-overlay-back-chat-btn")) {
+    var existingBack = document.querySelector(".dsh-overlay-back-chat-btn");
+    if (cfg.enableWhale === false) {
+      if (existingBack) existingBack.remove();
+    } else if (!existingBack) {
       var backToChatBtn = document.createElement("button");
       backToChatBtn.type = "button";
       backToChatBtn.className = "dsh-overlay-back-chat-btn";
@@ -227,6 +238,8 @@
 
     // 5. Scroll chat to bottom on composer focus
     var onComposerFocus = function (e) {
+      var currentCfg = window.__DSH_MOBILE_CONFIG__ || {};
+      if (currentCfg.enableKeyboardAssist === false) return;
       var target = e.target;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || (target.closest && target.closest('[data-composer-card], [class*="_card"]')))) {
         scrollChatToBottom();
@@ -239,6 +252,8 @@
 
     // 6. Viewport resize listener
     var onViewportResize = function () {
+      var currentCfg = window.__DSH_MOBILE_CONFIG__ || {};
+      if (currentCfg.enableKeyboardAssist === false) return;
       var active = document.activeElement;
       if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable || (active.closest && active.closest('[data-composer-card], [class*="_card"]')))) {
         scrollChatToBottom();

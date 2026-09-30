@@ -83,6 +83,7 @@ public class SettingsActivity extends Activity {
 
     // Tab 1 Views (DSH Core & Auth)
     private EditText mEtSecret;
+    private Switch mSwitchTranslucentTheme;
     private Switch mSwitchFloatingWhale;
     private Switch mSwitchKeyboardAssist;
 
@@ -140,6 +141,15 @@ public class SettingsActivity extends Activity {
         public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
             getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
                     .edit().putBoolean("enable_auto_standby", isChecked).commit();
+        }
+    };
+
+    private final CompoundButton.OnCheckedChangeListener mTranslucentThemeChangeListener = new CompoundButton.OnCheckedChangeListener() {
+        @Override
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+            getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
+                    .edit().putBoolean("enable_translucent_theme", isChecked).commit();
+            Toast.makeText(SettingsActivity.this, isChecked ? "毛玻璃透明主题已开启" : "已恢复 DSH 原生纯黑实色主题", Toast.LENGTH_SHORT).show();
         }
     };
 
@@ -561,6 +571,16 @@ public class SettingsActivity extends Activity {
         layout.addView(createSectionHeader("Web 控制台偏好"));
         LinearLayout clientPrefsCard = createCardLayout();
 
+        mSwitchTranslucentTheme = new Switch(this);
+        LinearLayout rowTranslucent = createSwitchRow(
+                "前台毛玻璃透明主题 (Translucent Theme)",
+                "开启后控制台呈现赛博毛玻璃透视效果，关闭后恢复 DSH 原生纯黑实色",
+                mSwitchTranslucentTheme
+        );
+        mSwitchTranslucentTheme.setOnCheckedChangeListener(mTranslucentThemeChangeListener);
+        clientPrefsCard.addView(rowTranslucent);
+        clientPrefsCard.addView(createCardDivider());
+
         mSwitchFloatingWhale = new Switch(this);
         LinearLayout rowWhale = createSwitchRow(
                 "Web 悬浮控制条与小鲸鱼 (Floating Whale)",
@@ -815,6 +835,7 @@ public class SettingsActivity extends Activity {
         setSwitchCheckedSilently(mSwitchAutoStandby, spCapsule.getBoolean("enable_auto_standby", true), mAutoStandbyChangeListener);
 
         SharedPreferences spAuth = getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE);
+        setSwitchCheckedSilently(mSwitchTranslucentTheme, spAuth.getBoolean("enable_translucent_theme", true), mTranslucentThemeChangeListener);
         setSwitchCheckedSilently(mSwitchFloatingWhale, spAuth.getBoolean("enable_floating_whale", true), mFloatingWhaleChangeListener);
         setSwitchCheckedSilently(mSwitchKeyboardAssist, spAuth.getBoolean("enable_keyboard_assist", true), mKeyboardAssistChangeListener);
 

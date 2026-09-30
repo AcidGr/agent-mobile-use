@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -257,13 +258,17 @@ public class DemoDialogActivity extends Activity {
     }
 
     private void initBaseUI() {
-        // 1. Root backdrop: transparent
+        // 1. Root backdrop
+        SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
+        boolean isTranslucent = sp.getBoolean("enable_translucent_theme", true);
+        int winBg = isTranslucent ? Color.TRANSPARENT : Color.parseColor("#151517");
+
         mRootLayout = new FrameLayout(this);
         mRootLayout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        mRootLayout.setBackgroundColor(Color.TRANSPARENT);
+        mRootLayout.setBackgroundColor(winBg);
 
         // Dynamically handle soft keyboard (IME) insets in edge-to-edge mode
         mRootLayout.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
@@ -303,8 +308,8 @@ public class DemoDialogActivity extends Activity {
         mCard.setLayoutParams(cardLp);
         mCard.setClickable(false);
 
-        // Fully transparent card background
-        mCard.setBackgroundColor(Color.TRANSPARENT);
+        // Card background
+        mCard.setBackgroundColor(winBg);
 
         // 3. Loading Progress Bar
         mProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -324,7 +329,7 @@ public class DemoDialogActivity extends Activity {
             1.0f
         );
         mWebView.setLayoutParams(webLp);
-        mWebView.setBackgroundColor(Color.TRANSPARENT);
+        mWebView.setBackgroundColor(winBg);
         mWebView.setAlpha(0f); // Hidden initially to eliminate flash, smoothly faded in after overlay injection
 
         setupWebViewSettings();
@@ -368,17 +373,28 @@ public class DemoDialogActivity extends Activity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 Log.i(TAG, "onPageStarted: " + url);
-                view.evaluateJavascript(
-                    "try{" +
-                    "  document.documentElement.setAttribute('data-dsh-overlay','true');" +
-                    "  window.__DSH_OVERLAY__=true;" +
-                    "  if(!document.getElementById('dsh-early-boot-hide')){" +
-                    "    var s=document.createElement('style');" +
-                    "    s.id='dsh-early-boot-hide';" +
-                    "    s.textContent='html[data-dsh-overlay=\"true\"],body{background:transparent!important}[class*=\"_boot\"]{background:transparent!important}[class*=\"_boot\"] [class*=\"_card\"]{display:none!important}';" +
-                    "    (document.head||document.documentElement).appendChild(s);" +
-                    "  }" +
-                    "}catch(e){}", null);
+                SharedPreferences spTheme = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
+                boolean isTrans = spTheme.getBoolean("enable_translucent_theme", true);
+                if (isTrans) {
+                    view.evaluateJavascript(
+                        "try{" +
+                        "  document.documentElement.setAttribute('data-dsh-overlay','true');" +
+                        "  window.__DSH_OVERLAY__=true;" +
+                        "  if(!document.getElementById('dsh-early-boot-hide')){" +
+                        "    var s=document.createElement('style');" +
+                        "    s.id='dsh-early-boot-hide';" +
+                        "    s.textContent='html[data-dsh-overlay=\"true\"],body{background:transparent!important}[class*=\"_boot\"]{background:transparent!important}[class*=\"_boot\"] [class*=\"_card\"]{display:none!important}';" +
+                        "    (document.head||document.documentElement).appendChild(s);" +
+                        "  }" +
+                        "}catch(e){}", null);
+                } else {
+                    view.evaluateJavascript(
+                        "try{" +
+                        "  document.documentElement.removeAttribute('data-dsh-overlay');" +
+                        "  window.__DSH_OVERLAY__=false;" +
+                        "  var st=document.getElementById('dsh-early-boot-hide');if(st)st.remove();" +
+                        "}catch(e){}", null);
+                }
             }
 
             @Override
@@ -542,7 +558,12 @@ public class DemoDialogActivity extends Activity {
     private void injectMobileOverlay(WebView view) {
         if (view == null) return;
         try {
-            byte[] cssBytes = getOverlayCssBytes();
+            SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
+            boolean enableTranslucent = sp.getBoolean("enable_translucent_theme", true);
+            boolean enableWhale = sp.getBoolean("enable_floating_whale", true);
+            boolean enableKbAssist = sp.getBoolean("enable_keyboard_assist", true);
+
+            byte[] cssBytes = enableTranslucent ? getOverlayCssBytes() : new byte[0];
             byte[] jsBytes = getOverlayJsBytes();
 
             String cssBase64 = (cssBytes != null && cssBytes.length > 0) ? Base64.encodeToString(cssBytes, Base64.NO_WRAP) : "";
@@ -551,15 +572,27 @@ public class DemoDialogActivity extends Activity {
             StringBuilder sb = new StringBuilder();
             sb.append("(function() {");
             sb.append("  try {");
-            sb.append("    document.documentElement.setAttribute('data-dsh-overlay', 'true');");
-            sb.append("    window.__DSH_OVERLAY__ = true;");
-            if (!cssBase64.isEmpty()) {
-                sb.append("    if (!document.getElementById('dsh-overlay-injected-style')) {");
-                sb.append("      var s = document.createElement('style');");
-                sb.append("      s.id = 'dsh-overlay-injected-style';");
-                sb.append("      s.textContent = decodeURIComponent(escape(atob('").append(cssBase64).append("')));");
-                sb.append("      (document.head || document.documentElement).appendChild(s);");
-                sb.append("    }");
+            sb.append("    window.__DSH_MOBILE_CONFIG__ = {");
+            sb.append("      enableTranslucent: ").append(enableTranslucent).append(",");
+            sb.append("      enableWhale: ").append(enableWhale).append(",");
+            sb.append("      enableKeyboardAssist: ").append(enableKbAssist);
+            sb.append("    };");
+            if (enableTranslucent) {
+                sb.append("    document.documentElement.setAttribute('data-dsh-overlay', 'true');");
+                sb.append("    window.__DSH_OVERLAY__ = true;");
+                if (!cssBase64.isEmpty()) {
+                    sb.append("    if (!document.getElementById('dsh-overlay-injected-style')) {");
+                    sb.append("      var s = document.createElement('style');");
+                    sb.append("      s.id = 'dsh-overlay-injected-style';");
+                    sb.append("      s.textContent = decodeURIComponent(escape(atob('").append(cssBase64).append("')));");
+                    sb.append("      (document.head || document.documentElement).appendChild(s);");
+                    sb.append("    }");
+                }
+            } else {
+                sb.append("    document.documentElement.removeAttribute('data-dsh-overlay');");
+                sb.append("    window.__DSH_OVERLAY__ = false;");
+                sb.append("    var st = document.getElementById('dsh-overlay-injected-style'); if (st) st.remove();");
+                sb.append("    var eb = document.getElementById('dsh-early-boot-hide'); if (eb) eb.remove();");
             }
             if (!jsBase64.isEmpty()) {
                 sb.append("    if (!window.__DSH_MOBILE_OVERLAY_INITIALIZED__) {");
@@ -568,6 +601,8 @@ public class DemoDialogActivity extends Activity {
                 sb.append("      sc.id = 'dsh-overlay-injected-script';");
                 sb.append("      sc.textContent = code;");
                 sb.append("      (document.head || document.documentElement).appendChild(sc);");
+                sb.append("    } else if (typeof window.__DSH_UPDATE_MOBILE_CONFIG__ === 'function') {");
+                sb.append("      window.__DSH_UPDATE_MOBILE_CONFIG__(window.__DSH_MOBILE_CONFIG__);");
                 sb.append("    }");
             }
             sb.append("  } catch(e) { console.error('[overlay-inject] error:', e); }");
@@ -848,9 +883,23 @@ public class DemoDialogActivity extends Activity {
         hideSoftInput();
         sIsForeground = true;
         reportViewState(true, sCurrentViewingSessionId);
-        if (mWebView != null) {
-            mWebView.clearFocus();
-            mWebView.onResume();
+        try {
+            SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
+            boolean isTranslucent = sp.getBoolean("enable_translucent_theme", true);
+            int winBg = isTranslucent ? Color.TRANSPARENT : Color.parseColor("#151517");
+            if (mRootLayout != null) mRootLayout.setBackgroundColor(winBg);
+            if (mCard != null) mCard.setBackgroundColor(winBg);
+            if (mWebView != null) {
+                mWebView.setBackgroundColor(winBg);
+                mWebView.clearFocus();
+                mWebView.onResume();
+                injectMobileOverlay(mWebView);
+            }
+        } catch (Throwable ignored) {
+            if (mWebView != null) {
+                mWebView.clearFocus();
+                mWebView.onResume();
+            }
         }
     }
 
