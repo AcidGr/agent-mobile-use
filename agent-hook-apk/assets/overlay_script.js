@@ -40,7 +40,18 @@
     return origFocus.apply(this, arguments);
   };
 
-  // Target session deep link & hot-switching support
+  // Read the Session selected by DSH's persisted navigation store.
+  var getCurrentSessionId = function () {
+    try {
+      var raw = localStorage.getItem("dsh.sessions.current");
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      return obj && typeof obj.sessionId === "string" && obj.sessionId ? obj.sessionId : null;
+    } catch (e) {}
+    return null;
+  };
+
+  // Target session deep link support.
   var getTargetSession = function () {
     try {
       var search = window.location && window.location.search;
@@ -59,30 +70,84 @@
   };
 
   var targetSessionFromUrl = getTargetSession();
-  if (targetSessionFromUrl) {
-    try {
-      localStorage.setItem("dsh.sessions.current", JSON.stringify({ sessionId: targetSessionFromUrl }));
-    } catch (e) {}
-  }
 
-  // Global hot-switch interface for Android WebView bridge
-  window.DSH_SWITCH_SESSION = function (sessionId) {
-    if (!sessionId) return false;
+  // dsh-web-mobile-fix exposes a Cordis-backed switcher that calls
+  // uiWorkspace.openSession() directly. Preserve it when the plugin is present.
+  var cordisSessionSwitch = typeof window.DSH_SWITCH_SESSION === "function"
+    ? window.DSH_SWITCH_SESSION
+    : null;
+
+  var findSessionRow = function (sessionId) {
+    if (!sessionId) return null;
+    var rows = document.querySelectorAll('[data-row-key^="session:"]');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute("data-row-key") === "session:" + sessionId) return rows[i];
+    }
+    return null;
+  };
+
+  // React stores the current host-node props on a private __reactProps$ key.
+  // DSH's SessionNodeItem onClick closes directly over onOpen(node.id), whose
+  // implementation calls uiWorkspace.openSession(). Invoking that existing
+  // handler keeps DSH's retain/release and history hydration logic intact.
+  var getNativeSessionClick = function (row) {
+    if (!row) return null;
     try {
-      localStorage.setItem("dsh.sessions.current", JSON.stringify({ sessionId: sessionId }));
-      if (location.search.indexOf("session=") >= 0) {
-        location.search = location.search.replace(/session=[^&]+/, "session=" + sessionId);
-      } else {
-        location.search += (location.search ? "&" : "?") + "session=" + sessionId;
+      var keys = Object.keys(row);
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (key.indexOf("__reactProps$") !== 0 && key.indexOf("__reactEventHandlers$") !== 0) continue;
+        var props = row[key];
+        if (props && typeof props.onClick === "function") return props.onClick;
       }
-      if (window.DSHOverlayBridge && window.DSHOverlayBridge.reportSession) {
-        window.DSHOverlayBridge.reportSession(sessionId);
+    } catch (e) {}
+    return null;
+  };
+
+  var openSessionInPage = function (sessionId, row) {
+    if (!sessionId) return false;
+
+    // Prefer the public bridge from dsh-web-mobile-fix when available.
+    if (cordisSessionSwitch && cordisSessionSwitch !== window.DSH_SWITCH_SESSION) {
+      try {
+        if (cordisSessionSwitch(sessionId)) return true;
+      } catch (e) {
+        console.warn("[overlay] Cordis session switch failed, falling back to native row:", e);
       }
-      return true;
-    } catch (e) {
-      console.warn("[overlay] DSH_SWITCH_SESSION failed:", e);
+    }
+
+    row = row || findSessionRow(sessionId);
+    var nativeClick = getNativeSessionClick(row);
+    if (nativeClick) {
+      try {
+        nativeClick();
+        return true;
+      } catch (e) {
+        console.warn("[overlay] native Session row handler failed:", e);
+      }
+    }
+
+    // Last-resort DOM path. Mark the synthetic dispatch so the document
+    // capture handler below lets it reach React instead of intercepting it.
+    if (row && typeof row.click === "function") {
+      try {
+        row.__DSH_OVERLAY_SYNTHETIC_SESSION_CLICK__ = true;
+        row.click();
+        return true;
+      } catch (e) {
+        console.warn("[overlay] synthetic Session row click failed:", e);
+      } finally {
+        try { delete row.__DSH_OVERLAY_SYNTHETIC_SESSION_CLICK__; } catch (e) {}
+      }
     }
     return false;
+  };
+
+  // Global hot-switch interface for Android WebView bridge / target-session
+  // launches. Unlike the old implementation this never reloads the WebView.
+  window.DSH_SWITCH_SESSION = function (sessionId) {
+    if (typeof sessionId !== "string" || !sessionId) return false;
+    return openSessionInPage(sessionId, findSessionRow(sessionId));
   };
 
   function initUIElements() {
@@ -120,6 +185,111 @@
 
     var cfg = window.__DSH_MOBILE_CONFIG__ || {};
 
+    var sidebarToggleSelector = '[data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]';
+
+    var collapseSidebarOnce = function () {
+      var frame = document.querySelector('[class*="_frame"]');
+      if (!frame) return false;
+      if (frame.hasAttribute("data-sidebar-collapsed")) return true;
+      var toggleBtn = document.querySelector(sidebarToggleSelector);
+      if (!toggleBtn) return false;
+      toggleBtn.click();
+      return true;
+    };
+
+    var finishSessionSwitch = function () {
+      collapseSidebarOnce();
+      switchToChat();
+      scrollChatToBottom();
+    };
+
+    var waitForSessionSelection = function (sessionId, row, retries) {
+      var selected = false;
+      try {
+        selected = getCurrentSessionId() === sessionId ||
+          !!(row && row.getAttribute && row.getAttribute("aria-selected") === "true");
+      } catch (e) {}
+
+      if (selected) {
+        if (window.DSHOverlayBridge && window.DSHOverlayBridge.reportSession) {
+          try { window.DSHOverlayBridge.reportSession(sessionId); } catch (e) {}
+        }
+        setTimeout(finishSessionSwitch, 60);
+        return;
+      }
+
+      if (retries > 0) {
+        setTimeout(function () {
+          waitForSessionSelection(sessionId, findSessionRow(sessionId) || row, retries - 1);
+        }, 60);
+      }
+    };
+
+    // Intercept only the row body. Rather than writing persistence and
+    // reloading, invoke the row's own React onClick closure, which enters
+    // uiWorkspace.openSession() inside DSH. Row action buttons keep their
+    // native behavior.
+    var onSessionRowClick = function (event) {
+      var target = event.target instanceof Element ? event.target : (event.target && event.target.parentElement);
+      if (!target || !target.closest) return;
+
+      var row = target.closest('[data-row-key^="session:"]');
+      if (!row) return;
+      if (row.__DSH_OVERLAY_SYNTHETIC_SESSION_CLICK__) return;
+
+      var interactive = target.closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]');
+      if (interactive && row.contains(interactive) && interactive !== row) return;
+
+      var rowKey = row.getAttribute("data-row-key") || "";
+      if (rowKey.indexOf("session:") !== 0) return;
+      var sessionId = rowKey.slice("session:".length);
+      if (!sessionId) return;
+
+      var nativeClick = getNativeSessionClick(row);
+      if (!nativeClick && !cordisSessionSwitch) {
+        // If React internals are unavailable, leave the physical click alone
+        // and only observe whether DSH's normal handler switches selection.
+        setTimeout(function () {
+          waitForSessionSelection(sessionId, row, 24);
+        }, 0);
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+
+      try {
+        if (document.activeElement && typeof document.activeElement.blur === "function") {
+          document.activeElement.blur();
+        }
+        if (window.DSHOverlayBridge && typeof window.DSHOverlayBridge.hideSoftInput === "function") {
+          window.DSHOverlayBridge.hideSoftInput();
+        }
+      } catch (e) {}
+
+      if (openSessionInPage(sessionId, row)) {
+        waitForSessionSelection(sessionId, row, 24);
+      }
+    };
+    document.addEventListener("click", onSessionRowClick, true);
+
+    // A target Session supplied by the Android Activity is opened in-page once
+    // the Session rows exist. This mirrors dsh-web-mobile-fix's retry behavior
+    // without forcing a page navigation.
+    if (targetSessionFromUrl) {
+      var targetOpenRetries = 0;
+      var tryOpenTargetSession = function () {
+        var row = findSessionRow(targetSessionFromUrl);
+        if (row && openSessionInPage(targetSessionFromUrl, row)) {
+          waitForSessionSelection(targetSessionFromUrl, row, 24);
+          return;
+        }
+        if (targetOpenRetries++ < 20) setTimeout(tryOpenTargetSession, 150);
+      };
+      setTimeout(tryOpenTargetSession, 100);
+    }
+
     // 1. Whale Button (Toggle Sidebar)
     var existingWhale = document.querySelector(".dsh-overlay-whale-btn");
     if (cfg.enableWhale === false) {
@@ -133,7 +303,7 @@
       whaleBtn.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        var toggleBtn = document.querySelector('[data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
+        var toggleBtn = document.querySelector(sidebarToggleSelector);
         if (toggleBtn) {
           toggleBtn.click();
         }
@@ -219,18 +389,14 @@
       if (!frame || frame.hasAttribute("data-sidebar-collapsed")) return;
 
       var autoCollapseTarget = target.closest && target.closest(
-        '[class*="_sessionRow"], [class*="_searchResultRow"], ' +
+        '[class*="_searchResultRow"], ' +
         '[class*="_panelRow"], nav[class*="_panelList"] button, ' +
         'button[class*="_panelRow"], button[aria-label*="插件"], button[aria-label*="Plugin" i], ' +
         'button[class*="_newSession"], button[aria-label*="新会话"], button[aria-label*="新建会话"]'
       );
       if (autoCollapseTarget) {
         setTimeout(function () {
-          var currentFrame = document.querySelector('[class*="_frame"]');
-          if (currentFrame && !currentFrame.hasAttribute("data-sidebar-collapsed")) {
-            var toggleBtn = document.querySelector('[data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
-            if (toggleBtn) toggleBtn.click();
-          }
+          collapseSidebarOnce();
         }, 80);
       }
     };
