@@ -13,9 +13,9 @@ cp "$WORKSPACE/vd-server-go/vd_server" "$SCRIPT_DIR/bin/vd_server"
 cp "$WORKSPACE/vd-tool-java/bin/agent_tools.dex" "$SCRIPT_DIR/bin/agent_tools.dex"
 cp "$WORKSPACE/vd-tool-java/bin/agent_vd.dex" "$SCRIPT_DIR/bin/agent_vd.dex"
 
-# 3. Copy Hook APK (preserve proven production apk if present)
-if [ ! -f "$SCRIPT_DIR/apk/agent_hook.apk" ] && [ -f "$WORKSPACE/agent-hook-apk/build/agent_hook.apk" ]; then
-    cp "$WORKSPACE/agent-hook-apk/build/agent_hook.apk" "$SCRIPT_DIR/apk/agent_hook.apk"
+# 3. Copy Hook APK
+if [ -f "$WORKSPACE/agent-hook-apk/build/agent_hook.apk" ]; then
+    cp -f "$WORKSPACE/agent-hook-apk/build/agent_hook.apk" "$SCRIPT_DIR/apk/agent_hook.apk"
 fi
 
 # 4. Create zip

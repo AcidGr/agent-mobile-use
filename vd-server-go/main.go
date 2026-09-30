@@ -1007,15 +1007,112 @@ func ensureA11yServiceDetached() {
 	_ = os.Remove(a11yMarkerFile)
 }
 
+func resolveBootClasspath() (string, string) {
+	bcp := os.Getenv("BOOTCLASSPATH")
+	dex2oatBcp := os.Getenv("DEX2OATBOOTCLASSPATH")
+	if bcp != "" && dex2oatBcp != "" {
+		return bcp, dex2oatBcp
+	}
+
+	baseJars := []string{
+		"/apex/com.android.art/javalib/core-oj.jar",
+		"/apex/com.android.art/javalib/core-libart.jar",
+		"/apex/com.android.art/javalib/okhttp.jar",
+		"/apex/com.android.art/javalib/bouncycastle.jar",
+		"/apex/com.android.art/javalib/apache-xml.jar",
+		"/system/framework/framework.jar",
+		"/system/framework/framework-graphics.jar",
+		"/system/framework/framework-location.jar",
+		"/system/framework/ext.jar",
+		"/system/framework/telephony-common.jar",
+		"/system/framework/voip-common.jar",
+		"/system/framework/ims-common.jar",
+		"/apex/com.android.i18n/javalib/core-icu4j.jar",
+	}
+
+	candidateJars := []string{
+		"/system/framework/framework-ondeviceintelligence-platform.jar",
+		"/system/framework/framework-nfc.jar",
+		"/system/framework/tcmiface.jar",
+		"/system/framework/qcom.fmradio.jar",
+		"/system/framework/QPerformance.jar",
+		"/system/framework/UxPerformance.jar",
+		"/system/framework/WfdCommon.jar",
+		"/system/framework/oplus-framework.jar",
+		"/system/framework/subsystem-framework.jar",
+		"/apex/com.android.adservices/javalib/framework-adservices.jar",
+		"/apex/com.android.adservices/javalib/framework-sdksandbox.jar",
+		"/apex/com.android.appsearch/javalib/framework-appsearch.jar",
+		"/apex/com.android.configinfrastructure/javalib/framework-configinfrastructure.jar",
+		"/apex/com.android.conscrypt/javalib/conscrypt.jar",
+		"/apex/com.android.crashrecovery/javalib/framework-crashrecovery.jar",
+		"/apex/com.android.devicelock/javalib/framework-devicelock.jar",
+		"/apex/com.android.healthfitness/javalib/framework-healthfitness.jar",
+		"/apex/com.android.ipsec/javalib/android.net.ipsec.ike.jar",
+		"/apex/com.android.media/javalib/updatable-media.jar",
+		"/apex/com.android.mediaprovider/javalib/framework-mediaprovider.jar",
+		"/apex/com.android.mediaprovider/javalib/framework-pdf.jar",
+		"/apex/com.android.mediaprovider/javalib/framework-pdf-v.jar",
+		"/apex/com.android.mediaprovider/javalib/framework-photopicker.jar",
+		"/apex/com.android.ondevicepersonalization/javalib/framework-ondevicepersonalization.jar",
+		"/apex/com.android.os.statsd/javalib/framework-statsd.jar",
+		"/apex/com.android.permission/javalib/framework-permission.jar",
+		"/apex/com.android.permission/javalib/service-permission.jar",
+		"/apex/com.android.scheduling/javalib/framework-scheduling.jar",
+		"/apex/com.android.sdkext/javalib/framework-sdkextensions.jar",
+		"/apex/com.android.tethering/javalib/framework-tethering.jar",
+		"/apex/com.android.uwb/javalib/framework-uwb.jar",
+		"/apex/com.android.wifi/javalib/framework-wifi.jar",
+	}
+
+	validJars := make([]string, 0, len(baseJars)+len(candidateJars))
+	for _, j := range baseJars {
+		if _, err := os.Stat(j); err == nil {
+			validJars = append(validJars, j)
+		}
+	}
+	for _, j := range candidateJars {
+		if _, err := os.Stat(j); err == nil {
+			validJars = append(validJars, j)
+		}
+	}
+
+	constructed := strings.Join(validJars, ":")
+	if bcp == "" {
+		bcp = constructed
+	}
+	if dex2oatBcp == "" {
+		dex2oatBcp = constructed
+	}
+	return bcp, dex2oatBcp
+}
+
+var (
+	dshAuthSecretMu sync.RWMutex
+	dshAuthSecret   string
+)
+
+func initDshSecret() {
+	if data, err := os.ReadFile("/data/local/tmp/.dsh_secret"); err == nil {
+		s := strings.TrimSpace(string(data))
+		if s != "" {
+			dshAuthSecretMu.Lock()
+			dshAuthSecret = s
+			dshAuthSecretMu.Unlock()
+		}
+	}
+}
+
 func getToolEnv(dexPath string) []string {
+	bcp, dex2oatBcp := resolveBootClasspath()
 	return append(os.Environ(),
 		"ANDROID_ROOT=/system",
 		"ANDROID_DATA=/data",
 		"ANDROID_ART_ROOT=/apex/com.android.art",
 		"ANDROID_I18N_ROOT=/apex/com.android.i18n",
 		"ANDROID_TZDATA_ROOT=/apex/com.android.tzdata",
-		"BOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar:/apex/com.android.adservices/javalib/framework-adservices.jar:/apex/com.android.adservices/javalib/framework-sdksandbox.jar:/apex/com.android.appsearch/javalib/framework-appsearch.jar:/apex/com.android.configinfrastructure/javalib/framework-configinfrastructure.jar:/apex/com.android.conscrypt/javalib/conscrypt.jar:/apex/com.android.crashrecovery/javalib/framework-crashrecovery.jar:/apex/com.android.devicelock/javalib/framework-devicelock.jar:/apex/com.android.healthfitness/javalib/framework-healthfitness.jar:/apex/com.android.ipsec/javalib/android.net.ipsec.ike.jar:/apex/com.android.media/javalib/updatable-media.jar:/apex/com.android.mediaprovider/javalib/framework-mediaprovider.jar:/apex/com.android.mediaprovider/javalib/framework-pdf.jar:/apex/com.android.mediaprovider/javalib/framework-pdf-v.jar:/apex/com.android.mediaprovider/javalib/framework-photopicker.jar:/apex/com.android.ondevicepersonalization/javalib/framework-ondevicepersonalization.jar:/apex/com.android.os.statsd/javalib/framework-statsd.jar:/apex/com.android.permission/javalib/framework-permission.jar:/apex/com.android.permission/javalib/framework-permission-s.jar:/apex/com.android.profiling/javalib/framework-profiling.jar:/apex/com.android.scheduling/javalib/framework-scheduling.jar:/apex/com.android.sdkext/javalib/framework-sdkextensions.jar:/apex/com.android.tethering/javalib/framework-connectivity.jar:/apex/com.android.tethering/javalib/framework-connectivity-b.jar:/apex/com.android.tethering/javalib/framework-connectivity-t.jar:/apex/com.android.tethering/javalib/framework-tethering.jar:/apex/com.android.uwb/javalib/framework-ranging.jar:/apex/com.android.uwb/javalib/framework-uwb.jar:/apex/com.android.virt/javalib/framework-virtualization.jar:/apex/com.android.wifi/javalib/framework-wifi.jar",
-		"DEX2OATBOOTCLASSPATH=/apex/com.android.art/javalib/core-oj.jar:/apex/com.android.art/javalib/core-libart.jar:/apex/com.android.art/javalib/okhttp.jar:/apex/com.android.art/javalib/bouncycastle.jar:/apex/com.android.art/javalib/apache-xml.jar:/system/framework/framework.jar:/system/framework/framework-graphics.jar:/system/framework/framework-location.jar:/system/framework/ext.jar:/system/framework/telephony-common.jar:/system/framework/voip-common.jar:/system/framework/ims-common.jar:/system/framework/framework-ondeviceintelligence-platform.jar:/system/framework/framework-nfc.jar:/system/framework/tcmiface.jar:/system/framework/qcom.fmradio.jar:/system/framework/QPerformance.jar:/system/framework/UxPerformance.jar:/system/framework/WfdCommon.jar:/system/framework/oplus-framework.jar:/system/framework/subsystem-framework.jar:/apex/com.android.i18n/javalib/core-icu4j.jar",
+		"BOOTCLASSPATH="+bcp,
+		"DEX2OATBOOTCLASSPATH="+dex2oatBcp,
 		"CLASSPATH="+dexPath,
 	)
 }
@@ -1605,6 +1702,7 @@ type CompositeActionRequest struct {
 
 func main() {
 	thawAppProcess()
+	initDshSecret()
 	startCapsuleWatchdog()
 	initAudioGuard()
 
@@ -2281,6 +2379,38 @@ func main() {
 			cancelQuestionOnDevice(p.RequestID)
 		}
 		json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: "Question cancelled"})
+	})
+
+	mux.HandleFunc("/api/auth/secret", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "POST" {
+			var p struct {
+				Secret string `json:"secret"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil && strings.TrimSpace(p.Secret) != "" {
+				s := strings.TrimSpace(p.Secret)
+				dshAuthSecretMu.Lock()
+				dshAuthSecret = s
+				dshAuthSecretMu.Unlock()
+				_ = os.WriteFile("/data/local/tmp/.dsh_secret", []byte(s+"\n"), 0644)
+				json.NewEncoder(w).Encode(map[string]any{"success": true})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"success": false, "message": "invalid secret"})
+			return
+		}
+		// GET
+		dshAuthSecretMu.RLock()
+		s := dshAuthSecret
+		dshAuthSecretMu.RUnlock()
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "secret": s})
 	})
 
 	mux.HandleFunc("/api/view_state", func(w http.ResponseWriter, r *http.Request) {

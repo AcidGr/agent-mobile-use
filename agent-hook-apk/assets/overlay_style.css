@@ -1,0 +1,1172 @@
+@keyframes dsh-edge-breathe-once {
+  0% { box-shadow: inset 0 0 16px 2px rgba(0,210,255,0.15), inset 0 0 4px 1px rgba(0,210,255,0.3); opacity: 0; }
+  20% { opacity: 0.85; }
+  50% { box-shadow: inset 0 0 52px 6px rgba(0,210,255,0.85), inset 0 0 22px 3px rgba(110,70,255,0.9), inset 0 0 6px 2px #fff; opacity: 1; }
+  80% { opacity: 0.75; }
+  100% { box-shadow: inset 0 0 16px 2px rgba(0,210,255,0.1), inset 0 0 4px 1px rgba(0,210,255,0.2); opacity: 0; visibility: hidden; }
+}
+html[data-dsh-overlay="true"],
+html[data-dsh-overlay="true"] body {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+html[data-dsh-overlay="true"]::before {
+  content: "" !important;
+  position: fixed !important;
+  inset: 0 !important;
+  pointer-events: none !important;
+  z-index: 99999 !important;
+  animation: dsh-edge-breathe-once 1.4s cubic-bezier(0.4, 0, 0.2, 1) 1 forwards !important;
+}
+html[data-dsh-overlay="true"] [class*="_boot"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+html[data-dsh-overlay="true"] [class*="_boot"] [class*="_card"] {
+  display: none !important;
+}
+
+/* ── Mobile Overlay Card & Modal Styles ── */
+@keyframes dsh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* ── mobile entrance animations ── */
+@keyframes dsh-bubble-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes dsh-composer-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes dsh-btn-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* ── mobile UI fixes (≤700px) ── */
+@media (max-width: 700px) {
+  /* 1. Settings panel: elegant centered floating modal card */
+  [role="dialog"][aria-modal="true"][aria-labelledby] {
+    flex-direction: column !important;
+    width: min(92vw, 440px) !important;
+    max-width: min(92vw, 440px) !important;
+    height: min(78vh, 78dvh, 620px) !important;
+    min-height: 420px !important;
+    max-height: min(86vh, 86dvh, 680px) !important;
+    border-radius: 20px !important;
+    background: rgba(28, 32, 42, 0.96) !important;
+    backdrop-filter: blur(28px) !important;
+    -webkit-backdrop-filter: blur(28px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+    overflow: hidden !important;
+    margin: auto !important;
+    display: flex !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav {
+    flex: none !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 14px 14px 6px !important;
+    gap: 8px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav > div:last-child {
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    overflow-x: auto !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button {
+    flex: 0 0 auto !important;
+    height: 36px !important;
+    padding: 6px 12px !important;
+    gap: 6px !important;
+    justify-content: center !important;
+  }
+  /* Keep every tab label visible: the stock label is flex:1 with
+        flex-basis 0, which collapses to zero width inside a content-sized
+        button; let the text drive the button width instead (0 1 auto). */
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button > :last-child {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button[aria-current="true"] {
+    background: var(--dsw-specific-sidebar-nav-item-active, #e8ebf1) !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div > div:first-child {
+    padding: 12px 12px 6px !important;
+  }
+  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div > div:last-child {
+    padding: 0 16px 16px !important;
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    min-height: 0 !important;
+  }
+  /* 2. Composer bar: keep all tools and actions on a single row without wrapping */
+  [data-composer-seat], [data-slot="conversation.composer.bar"] {
+    --dsh-composer-side-clearance: 8px !important;
+  }
+  [data-slot="conversation.composer.bar"] [class*="_row"] {
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    padding: 2px 6px 6px !important;
+    align-items: center !important;
+  }
+  [data-slot="conversation.composer.bar"] [class*="_tools"],
+  [data-slot="conversation.composer.bar"] [class*="_modes"],
+  [data-slot="conversation.composer.bar"] [class*="_trailing"] {
+    gap: 6px !important;
+  }
+  [data-slot="conversation.composer.bar"] [class*="_tools"] {
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+  }
+  [data-slot="conversation.composer.bar"] [class*="_trailing"] {
+    flex-shrink: 0 !important;
+  }
+  [data-slot="conversation.composer.bar"] [class*="_select"] {
+    max-width: 96px !important;
+    padding: 0 16px 0 4px !important;
+    text-overflow: ellipsis !important;
+  }
+  [data-slot="conversation.input.model"] > div > button {
+    max-width: 120px !important;
+    padding: 0 4px !important;
+    gap: 2px !important;
+  }
+  [data-slot="conversation.input.model"] > div > button > span {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+  /* Grid column stability on mobile screens */
+  [class*="_sidebarCol"] {
+    grid-column: 1 !important;
+  }
+  [class*="_centerCol"] {
+    grid-column: 2 !important;
+  }
+  /* 3. Expanded sidebar on narrow screens: take 100% full width and collapse center */
+  [class*="_frame"]:not([data-sidebar-collapsed]) {
+    grid-template-columns: 100% 0px 0px !important;
+  }
+  [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_sidebarCol"] {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    z-index: 60 !important;
+  }
+  [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_centerCol"] {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+}
+
+/* ── overlay floating chat mode ── */
+html[data-dsh-overlay="true"],
+html[data-dsh-overlay="true"] body,
+html[data-dsh-overlay="true"] #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+html[data-dsh-overlay="true"] [class*="_frame"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+/* Grid column stability in overlay: explicit column assignment prevents auto-placement shifting */
+html[data-dsh-overlay="true"] [class*="_sidebarCol"] {
+  grid-column: 1 !important;
+}
+html[data-dsh-overlay="true"] [class*="_centerCol"] {
+  grid-column: 2 !important;
+}
+/* Collapsed sidebar rail in overlay: completely hide the 56px black rail while keeping column 1 anchor */
+html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-collapsed] {
+  grid-template-columns: 0px minmax(0, 1fr) 0px !important;
+}
+html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-collapsed] [class*="_sidebarCol"] {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* Expanded sidebar in overlay: take 100% full screen with solid frosted backdrop */
+html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) {
+  grid-template-columns: 100% 0px 0px !important;
+}
+html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_sidebarCol"] {
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  background: rgba(22, 25, 33, 0.98) !important;
+  backdrop-filter: blur(28px) !important;
+  -webkit-backdrop-filter: blur(28px) !important;
+  padding-top: max(48px, env(safe-area-inset-top, 48px)) !important;
+  box-sizing: border-box !important;
+  z-index: 60 !important;
+}
+html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_centerCol"] {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_rightbarCol"],
+html[data-dsh-overlay="true"] [class*="_handle"] {
+  display: none !important;
+  width: 0 !important;
+}
+/* Floating black whale button at top-left */
+.dsh-overlay-whale-btn {
+  position: fixed !important;
+  top: max(38px, env(safe-area-inset-top, 38px)) !important;
+  left: 14px !important;
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  z-index: 120 !important;
+  padding: 0 !important;
+  outline: none !important;
+  animation: dsh-btn-pop-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) 0.95s both !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+.dsh-overlay-whale-btn:active {
+  transform: scale(0.92) !important;
+}
+.dsh-overlay-whale-btn img {
+  width: 26px !important;
+  height: 26px !important;
+  display: block !important;
+  pointer-events: none !important;
+}
+/* Floating home (new session) button at top-right */
+.dsh-overlay-home-btn {
+  position: fixed !important;
+  top: max(38px, env(safe-area-inset-top, 38px)) !important;
+  right: 14px !important;
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  z-index: 120 !important;
+  padding: 0 !important;
+  outline: none !important;
+  animation: dsh-btn-pop-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) 0.95s both !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+.dsh-overlay-home-btn:active {
+  transform: scale(0.92) !important;
+}
+.dsh-overlay-home-btn svg {
+  width: 19px !important;
+  height: 19px !important;
+  stroke: #1C1F26 !important;
+  stroke-width: 2.2 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+  display: block !important;
+  pointer-events: none !important;
+}
+/* Floating Back-to-Chat Button in Overlay when viewing Trajectory */
+.dsh-overlay-back-chat-btn {
+  position: fixed !important;
+  top: max(38px, env(safe-area-inset-top, 38px)) !important;
+  left: 64px !important;
+  height: 40px !important;
+  border-radius: 20px !important;
+  background: rgba(30, 34, 44, 0.94) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
+  display: none !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 0 14px 0 10px !important;
+  cursor: pointer !important;
+  z-index: 125 !important;
+  outline: none !important;
+  color: #FFFFFF !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  animation: dsh-btn-pop-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+.dsh-overlay-back-chat-btn:active {
+  transform: scale(0.94) !important;
+  background: rgba(255, 255, 255, 0.22) !important;
+}
+.dsh-overlay-back-chat-btn svg {
+  width: 16px !important;
+  height: 16px !important;
+  stroke: #07C160 !important;
+  stroke-width: 2.4 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+  display: block !important;
+  pointer-events: none !important;
+}
+/* When Trajectory View is visible, automatically show the Back-to-Chat button */
+html[data-dsh-overlay="true"]:has([data-trajectory-scroll]) .dsh-overlay-back-chat-btn,
+html[data-dsh-overlay="true"]:has([data-conversation-composer-overlay]) .dsh-overlay-back-chat-btn {
+  display: inline-flex !important;
+}
+/* Strictly suppress Back-to-Chat button in Plugin Manager */
+html[data-dsh-overlay="true"]:has([data-plugin-panel]) .dsh-overlay-back-chat-btn {
+  display: none !important;
+}
+/* Plugin Manager Page in Overlay Mode: elegant dark base surface */
+html[data-dsh-overlay="true"] [data-plugin-panel] {
+  background: rgba(18, 20, 26, 0.98) !important;
+  backdrop-filter: blur(28px) !important;
+  -webkit-backdrop-filter: blur(28px) !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  box-sizing: border-box !important;
+  padding-top: calc(max(38px, env(safe-area-inset-top, 38px)) + 16px) !important;
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 32px)) !important;
+  padding-left: clamp(16px, 4vw, 32px) !important;
+  padding-right: clamp(16px, 4vw, 32px) !important;
+  position: relative !important;
+  z-index: 50 !important;
+  overflow-y: auto !important;
+}
+/* Card list item: only style the top-level <li> cards, NEVER inner elements */
+html[data-dsh-overlay="true"] [data-plugin-panel] ul[class*="_cards"] > li {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 14px !important;
+  margin: 6px 0 !important;
+  padding: 4px !important;
+}
+html[data-dsh-overlay="true"] [data-plugin-panel] ul[class*="_cards"] > li:active {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+/* Detail page container */
+html[data-dsh-overlay="true"] [data-plugin-panel] > div[class*="_detail"] {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 16px !important;
+  padding: 16px !important;
+}
+/* Hide inspectButton on tool cards in overlay mode to prevent accidental jumps */
+html[data-dsh-overlay="true"] button[class*="inspectButton"],
+html[data-dsh-overlay="true"] [class*="inspectButton"] {
+  display: none !important;
+  pointer-events: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_centerCol"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  width: 100% !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  animation: dsh-fade-in 0.35s ease-out 0.95s both !important;
+}
+html[data-dsh-overlay="true"] [class*="_root"][data-phase] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+/* Hide top conversation header and its 0.5px bottom divider in overlay */
+html[data-dsh-overlay="true"] [data-slot="conversation.header"],
+html[data-dsh-overlay="true"] [data-slot="conversation.session.header"],
+html[data-dsh-overlay="true"] header[data-window-drag],
+html[data-dsh-overlay="true"] [class*="_centerCol"] > div > header[class*="_header"] {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  border: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_tabs"] {
+  display: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_widthHandle"] {
+  display: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_scrollBody"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  scrollbar-width: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_scrollBody"]::-webkit-scrollbar,
+html[data-dsh-overlay="true"] [class*="_scroll"]::-webkit-scrollbar {
+  display: none !important;
+}
+html[data-dsh-overlay="true"] [class*="_scroll"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  scrollbar-width: none !important;
+}
+/* Hero empty state: hide fish & headline, preserve workspace pill container */
+html[data-dsh-overlay="true"] [class*="pXSMma_root"] {
+  display: none !important;
+}
+/* Floating Workspace Chip Container */
+html[data-dsh-overlay="true"] [class*="_heroWorkspaceRow"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  margin-bottom: 8px !important;
+  padding: 0 4px !important;
+  width: 100% !important;
+  pointer-events: auto !important;
+  animation: dsh-bubble-rise-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+html[data-dsh-overlay="true"] [class*="_heroWorkspaceRow"] button,
+html[data-dsh-overlay="true"] [class*="_heroWorkspaceRow"] [class*="_workspace"] {
+  background: rgba(30, 34, 44, 0.88) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 20px !important;
+  padding: 6px 14px !important;
+  color: #F0F2F5 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.15s ease, transform 0.1s ease !important;
+}
+html[data-dsh-overlay="true"] [class*="_heroWorkspaceRow"] button:active {
+  transform: scale(0.96) !important;
+}
+/* Floating Todo Panel Container */
+html[data-dsh-overlay="true"] [data-slot="conversation.input.dock"] {
+  width: 100% !important;
+}
+html[data-dsh-overlay="true"] [data-slot="conversation.input.dock"] [class*="_root"] {
+  background: rgba(26, 30, 38, 0.94) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35) !important;
+  margin-bottom: 8px !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+html[data-dsh-overlay="true"] [data-slot="conversation.input.dock"] [class*="_header"] {
+  display: flex !important;
+  align-items: center !important;
+  color: #F0F2F5 !important;
+}
+html[data-dsh-overlay="true"] [data-slot="conversation.input.dock"] [class*="_item"] {
+  color: #D1D5DB !important;
+}
+/* Hide empty QueueDock ghost line/panel */
+html[data-dsh-overlay="true"] [data-queue-dock]:not(:has(li)),
+html[data-dsh-overlay="true"] [data-queue-dock]:empty,
+html[data-dsh-overlay="true"] [data-queue-dock] [class*="_panel"]:not(:has(li)),
+html[data-dsh-overlay="true"] [class*="_dock"]:not(:has(li)):empty {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+}
+/* Work Mode, Plan Mode & Model selector buttons */
+html[data-dsh-overlay="true"] [class*="_modes"] button,
+html[data-dsh-overlay="true"] [data-slot="conversation.input.plan"] button,
+html[data-dsh-overlay="true"] [data-slot="conversation.input.permission"] button,
+html[data-dsh-overlay="true"] [data-slot="conversation.input.model"] button {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 14px !important;
+  color: #E2E6EE !important;
+  padding: 4px 10px !important;
+  font-size: 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  cursor: pointer !important;
+  transition: background-color 0.15s ease, transform 0.1s ease !important;
+}
+html[data-dsh-overlay="true"] [class*="_modes"] button:active,
+html[data-dsh-overlay="true"] [data-slot="conversation.input.plan"] button:active,
+html[data-dsh-overlay="true"] [data-slot="conversation.input.model"] button:active {
+  transform: scale(0.95) !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+}
+/* Menus, Popovers, Dropdowns, and Dialogs: Solid frosted container */
+html[data-dsh-overlay="true"] [role="menu"],
+html[data-dsh-overlay="true"] [role="listbox"],
+html[data-dsh-overlay="true"] [role="dialog"],
+html[data-dsh-overlay="true"] [data-dockkit-tab-menu],
+[data-floating-ui-portal] [role="menu"],
+[data-floating-ui-portal] [role="listbox"],
+[data-floating-ui-portal] [role="dialog"] {
+  background: rgba(24, 28, 36, 0.98) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55) !important;
+  color: #F0F2F5 !important;
+}
+html[data-dsh-overlay="true"] [role="menuitem"],
+html[data-dsh-overlay="true"] [role="option"],
+[data-floating-ui-portal] [role="menuitem"],
+[data-floating-ui-portal] [role="option"] {
+  color: #E2E6EE !important;
+  border-radius: 8px !important;
+}
+html[data-dsh-overlay="true"] [role="menuitem"]:hover,
+html[data-dsh-overlay="true"] [role="menuitem"][data-highlighted],
+[data-floating-ui-portal] [role="menuitem"]:hover,
+[data-floating-ui-portal] [role="menuitem"][data-highlighted] {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #FFFFFF !important;
+}
+html[data-dsh-overlay="true"] [class*="_root"][data-phase="hero"] [class*="_scrollBody"] {
+  justify-content: flex-end !important;
+}
+html[data-dsh-overlay="true"] [class*="_composerHero"] {
+  align-self: stretch !important;
+  padding-bottom: max(14px, env(safe-area-inset-bottom, 14px)) !important;
+  width: 100% !important;
+  animation: dsh-composer-rise-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+/* Floating bottom composer (sticky over transparent scrollbody) */
+html[data-dsh-overlay="true"] [data-phase="active"] [data-composer-seat],
+html[data-dsh-overlay="true"] [class*="_composerSeat"] {
+  background: none !important;
+  background-color: transparent !important;
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 10 !important;
+  padding: 0 12px max(14px, env(safe-area-inset-bottom, 14px)) !important;
+  animation: dsh-composer-rise-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+html[data-dsh-overlay="true"] [class*="_viewArea"] {
+  padding-bottom: 24px !important;
+}
+html[data-dsh-overlay="true"] [class*="_card"][data-composer-card],
+html[data-dsh-overlay="true"] [data-composer-seat] [class*="_card"] {
+  background: rgba(28, 31, 38, 0.92) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45) !important;
+  border-radius: 24px !important;
+}
+html[data-dsh-overlay="true"] [class*="_toBottomSlot"] {
+  display: none !important;
+}
+/* Turn navigation rail & turn jump marks: completely hidden in mobile overlay mode */
+html[data-dsh-overlay="true"] nav[aria-label*="导航"],
+html[data-dsh-overlay="true"] nav[aria-label*="navigation" i],
+html[data-dsh-overlay="true"] [class*="_slot"]:has(> nav[aria-label*="导航"]),
+html[data-dsh-overlay="true"] [class*="_slot"]:has(> nav[aria-label*="navigation" i]) {
+  display: none !important;
+  pointer-events: none !important;
+}
+/* Ask Question & Plan Review Cards in Overlay */
+html[data-dsh-overlay="true"] [data-question-key],
+html[data-dsh-overlay="true"] [data-plan-review-key] {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 0 0 6px !important;
+  animation: dsh-bubble-rise-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_card"],
+html[data-dsh-overlay="true"] [data-plan-review-key] [class*="_card"] {
+  background: rgba(26, 30, 38, 0.96) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55) !important;
+  color: #F0F2F5 !important;
+  height: auto !important;
+  max-height: min(85vh, 620px) !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] header {
+  display: flex !important;
+  height: auto !important;
+  min-height: auto !important;
+  padding: 8px 12px 6px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_headingBlock"] {
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_title"] {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  line-height: 20px !important;
+  color: #F8FAFC !important;
+  text-align: left !important;
+  margin: 0 !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_eyebrow"] {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  line-height: 14px !important;
+  color: #94A3B8 !important;
+  margin-bottom: 2px !important;
+  text-align: left !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_detail"] {
+  margin: 2px 4px 6px !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+  color: #CBD5E1 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_body"] {
+  flex: 0 1 auto !important;
+  min-height: 0 !important;
+  padding: 2px 0 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_options"] {
+  flex: none !important;
+  margin: 0 !important;
+  padding: 2px 6px !important;
+  gap: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_option"] {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-radius: 8px !important;
+  min-height: unset !important;
+  height: auto !important;
+  flex: none !important;
+  padding: 6px 6px !important;
+  gap: 10px !important;
+  display: flex !important;
+  align-items: center !important;
+  text-align: left !important;
+  justify-content: flex-start !important;
+  color: #E2E6EE !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_option"]:last-child {
+  border-bottom-color: transparent !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_optionSelected"],
+html[data-dsh-overlay="true"] [data-question-key] [class*="_option"][aria-checked="true"] {
+  background: rgba(7, 193, 96, 0.16) !important;
+  border-color: rgba(7, 193, 96, 0.4) !important;
+  color: #FFFFFF !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_number"] {
+  background: transparent !important;
+  color: #94A3B8 !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  flex: 0 0 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+  align-self: center !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_checkbox"] {
+  align-self: center !important;
+  margin: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_optionCopy"] {
+  flex: 1 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  text-align: left !important;
+  gap: 1px !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_optionLine"] {
+  display: inline-flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+  gap: 3px 6px !important;
+  min-height: unset !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: normal !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_optionLabel"] {
+  font-size: 14px !important;
+  font-weight: 550 !important;
+  line-height: 19px !important;
+  color: #F1F5F9 !important;
+  text-align: left !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_description"] {
+  display: block !important;
+  width: 100% !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 16px !important;
+  color: #94A3B8 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_badge"] {
+  background: rgba(7, 193, 96, 0.22) !important;
+  color: #4ADE80 !important;
+  border-radius: 4px !important;
+  padding: 0 4px !important;
+  font-size: 10.5px !important;
+  line-height: 16px !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_footer"] {
+  margin-top: 2px !important;
+  padding: 4px 10px 6px !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_customRow"] {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  min-height: unset !important;
+  padding: 4px 6px !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_customRowActive"],
+html[data-dsh-overlay="true"] [data-question-key] [class*="_customRow"]:focus-within {
+  background: rgba(7, 193, 96, 0.12) !important;
+  border-color: rgba(7, 193, 96, 0.4) !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_fieldInput"] {
+  color: #F0F2F5 !important;
+}
+html[data-dsh-overlay="true"] [data-question-key] [class*="_footer"] button[class*="_primary"],
+html[data-dsh-overlay="true"] [data-plan-review-key] button[class*="_primary"] {
+  background: #07C160 !important;
+  color: #FFFFFF !important;
+}
+/* Chat Flow Item entrance (Bubbles, tool calls, thinking, status) */
+html[data-dsh-overlay="true"] [data-chat-flow-kind] {
+  animation: dsh-bubble-rise-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+/* AI Message Flow Item & Bubble (WeChat style) */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  width: 100% !important;
+  margin-top: 6px !important;
+  margin-bottom: 6px !important;
+  min-width: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [data-slot="conversation.chat.node"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] > [data-slot] {
+  display: contents !important;
+}
+/* AI Bubble Container: target the AssistantMarkdown root */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [data-slot="conversation.chat.node"] > [class*="_root"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] > [data-slot] > [class*="_root"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] > div > [class*="_root"] {
+  background: rgba(34, 38, 46, 0.94) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  color: #F0F2F5 !important;
+  border-radius: 18px 18px 18px 4px !important;
+  padding: 10px 14px !important;
+  width: fit-content !important;
+  max-width: 88% !important;
+  box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  box-sizing: border-box !important;
+}
+/* When inside a collapsed turn-process, hide the process member completely so no hollow artifacts appear */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"][data-turn-process-hidden] {
+  display: none !important;
+}
+/* If assistant-step contains ONLY a thinking block (no dialogue text), strip the giant bubble wrapping so it becomes a sleek pill */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_root"]:has(> [class*="_body"] > [data-variant="think"]:only-child),
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_root"]:has(> [class*="_body"] > div:only-child > [data-variant="think"]:only-child) {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+/* Standalone Reasoning / Think Row: floating frosted pill capsule matching tool calls */
+html[data-dsh-overlay="true"] [data-variant="think"] {
+  background: rgba(30, 34, 42, 0.88) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 14px !important;
+  padding: 6px 12px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25) !important;
+}
+/* When NOT expanded, break DSH's 24px height-lock so pill comfortably wraps the single summary line */
+html[data-dsh-overlay="true"] [data-variant="think"]:not([data-expanded]) {
+  height: auto !important;
+  min-height: 34px !important;
+  contain: none !important;
+}
+/* Prevent horizontal text overflow when collapsed: truncate cleanly with ellipsis inside the pill */
+html[data-dsh-overlay="true"] [data-variant="think"]:not([data-expanded]) [class*="_summary"],
+html[data-dsh-overlay="true"] [data-variant="think"]:not([data-expanded]) [class*="_summaryText"],
+html[data-dsh-overlay="true"] [data-variant="think"]:not([data-expanded]) [class*="summaryText"] {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  max-width: 100% !important;
+}
+/* When think block is expanded, reset height & containment on the root AND all disclosure containers so text is 100% enclosed */
+html[data-dsh-overlay="true"] [data-variant="think"][data-expanded],
+html[data-dsh-overlay="true"] [data-variant="think"][data-expanded] [class*="_root"],
+html[data-dsh-overlay="true"] [data-variant="think"][data-expanded] [data-open] {
+  height: auto !important;
+  min-height: auto !important;
+  max-height: none !important;
+  contain: none !important;
+  overflow: visible !important;
+}
+/* Reset native DSH sticky/white disclosure row inside our frosted pill */
+html[data-dsh-overlay="true"] [data-variant="think"] [data-disclosure-row],
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="_row"] {
+  background: transparent !important;
+  border: none !important;
+}
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="_title"] {
+  color: #E2E6EE !important;
+  font-weight: 500 !important;
+  font-size: 13px !important;
+}
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="_summary"] {
+  color: #9CA3AF !important;
+  font-size: 12.5px !important;
+}
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="_chevron"] {
+  color: #9CA3AF !important;
+}
+/* Think Body: the expanded long reasoning text */
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="thinkBody"],
+html[data-dsh-overlay="true"] [data-variant="think"] [class*="_thinkBody"] {
+  color: #D1D5DB !important;
+  padding: 10px 4px 6px 12px !important;
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  display: block !important;
+  max-height: 480px !important;
+  overflow-y: auto !important;
+}
+/* Inner body & markdown formatting inside AI bubble */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] {
+  gap: 8px !important;
+  width: 100% !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] p {
+  margin: 6px 0 !important;
+  line-height: 1.55 !important;
+  color: #F0F2F5 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] p:first-child {
+  margin-top: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] p:last-child {
+  margin-bottom: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] ul,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] ol {
+  margin: 6px 0 !important;
+  padding-left: 20px !important;
+  color: #F0F2F5 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] li {
+  margin: 3px 0 !important;
+  line-height: 1.5 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] h1,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] h2,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] h3,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] h4 {
+  color: #FFFFFF !important;
+  font-weight: 600 !important;
+  margin: 8px 0 4px !important;
+  font-size: 15px !important;
+  line-height: 1.4 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] code:not(pre code) {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #8CE0FF !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  font-size: 13px !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] pre {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  border-radius: 10px !important;
+  margin: 8px 0 !important;
+  background: rgba(18, 20, 24, 0.9) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.08) !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] .md-table-wide,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_body"] table {
+  margin-left: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  display: block !important;
+  box-sizing: border-box !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_stopped"] {
+  margin-top: 6px !important;
+  align-self: flex-start !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_actions"] {
+  display: none !important;
+}
+/* User Message Bubble (WeChat style) */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="user"] [class*="_bubble"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="steering"] [class*="_bubble"] {
+  background: #07C160 !important;
+  color: #FFFFFF !important;
+  border-radius: 18px 18px 4px 18px !important;
+  padding: 10px 14px !important;
+  font-weight: 450 !important;
+  box-shadow: 0 2px 10px rgba(7, 193, 96, 0.25) !important;
+}
+/* Tool Calls & Turn Process Capsules (Floating Pill Style) */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  margin: 4px 0 !important;
+  width: 100% !important;
+}
+/* Apply frosted bubble ONLY to the outermost callRow container */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="callRow"] {
+  background: rgba(30, 34, 42, 0.88) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 14px !important;
+  padding: 6px 12px !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3) !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* Ensure inner ToolRow and card children inside callRow NEVER have their own bubble */
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="callRow"] [class*="_root"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="callRow"] [class*="_card"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="callRow"] [class*="_bodyWrap"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="callRow"] [class*="_bodyScroll"] {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="_ioCard"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="_diffBody"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"] [class*="_terminalBody"] {
+  background: rgba(18, 20, 26, 0.65) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  margin-top: 6px !important;
+  padding: 8px 12px !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-process"] {
+  display: flex !important;
+  align-items: center !important;
+  margin: 4px 0 !important;
+  width: 100% !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-process"] button,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-process"] [class*="_root"] {
+  background: rgba(36, 40, 50, 0.9) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 18px !important;
+  padding: 6px 14px !important;
+  color: #D1D5DB !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.15s ease, transform 0.1s ease !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-process"] button:active,
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-process"] [class*="_root"]:active {
+  transform: scale(0.96) !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+}
+/* Step Process Pills: '正在分析请求' / '正在运行命令' / '执行了命令' */
+html[data-dsh-overlay="true"] [data-step-process] {
+  margin: 6px 0 !important;
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+html[data-dsh-overlay="true"] [data-step-process] button[class*="_title"],
+html[data-dsh-overlay="true"] [data-step-process] > div > button {
+  background: rgba(32, 36, 46, 0.9) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 16px !important;
+  padding: 6px 14px !important;
+  color: #E2E6EE !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: fit-content !important;
+  max-width: 92% !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.15s ease, transform 0.1s ease !important;
+}
+html[data-dsh-overlay="true"] [data-step-process] button[class*="_title"]:active,
+html[data-dsh-overlay="true"] [data-step-process] > div > button:active {
+  transform: scale(0.96) !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+}
+html[data-dsh-overlay="true"] [data-step-process] [class*="_leading"] {
+  color: #9CA3AF !important;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none !important;
+}
+html[data-dsh-overlay="true"] [data-step-process] [class*="_label"] {
+  color: #E2E6EE !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+html[data-dsh-overlay="true"] [data-step-process] button[class*="_title"][aria-expanded="true"] {
+  padding-bottom: 6px !important;
+  margin-bottom: 6px !important;
+}
+html[data-dsh-overlay="true"] [data-step-process-body] {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 0 !important;
+  margin-top: 4px !important;
+}
+/* Thinking status: clean and visible */
+html[data-dsh-overlay="true"] [class*="_turnStatus"] {
+  margin: 8px 0 !important;
+  padding: 0 4px !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="turn-tail"] {
+  display: none !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="context"] {
+  display: none !important;
+}
+html[data-dsh-overlay="true"] [data-chat-flow-kind="compaction"],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="manual-compaction"] {
+  display: none !important;
+}
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  html[data-dsh-overlay="true"] [data-chat-flow-kind],
+  html[data-dsh-overlay="true"] [data-question-key],
+  html[data-dsh-overlay="true"] [data-plan-review-key],
+  html[data-dsh-overlay="true"] [data-composer-seat],
+  html[data-dsh-overlay="true"] [class*="_composerSeat"],
+  html[data-dsh-overlay="true"] [class*="_composerHero"],
+  html[data-dsh-overlay="true"] [class*="_heroWorkspaceRow"],
+  html[data-dsh-overlay="true"] [class*="_centerCol"],
+  .dsh-overlay-whale-btn,
+  .dsh-overlay-home-btn,
+  .dsh-overlay-back-chat-btn {
+    animation: none !important;
+  }
+}

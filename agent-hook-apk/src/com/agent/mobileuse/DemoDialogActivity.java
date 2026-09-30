@@ -3,8 +3,10 @@ package com.agent.mobileuse;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -27,6 +29,8 @@ import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -36,8 +40,10 @@ import android.widget.ProgressBar;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStream;
 import java.security.MessageDigest;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -45,7 +51,6 @@ import javax.crypto.spec.SecretKeySpec;
 public class DemoDialogActivity extends Activity {
     private static final String TAG = "DemoDialogActivity";
     private static final String DSH_WEB_URL = "http://127.0.0.1:3080/?ov=1";
-    private static final String DEFAULT_SECRET = "5E8js7iGeZGFiTXVT1Mi0ZnkBqEXqChPpZ2rPT1X0u8";
 
     public static volatile boolean sIsForeground = false;
     public static volatile String sCurrentViewingSessionId = "";
@@ -320,6 +325,7 @@ public class DemoDialogActivity extends Activity {
         );
         mWebView.setLayoutParams(webLp);
         mWebView.setBackgroundColor(Color.TRANSPARENT);
+        mWebView.setAlpha(0f); // Hidden initially to eliminate flash, smoothly faded in after overlay injection
 
         setupWebViewSettings();
         mCard.addView(mWebView);
@@ -354,53 +360,66 @@ public class DemoDialogActivity extends Activity {
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                Log.d(TAG, "shouldOverrideUrlLoading: " + url);
                 return false;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                Log.i(TAG, "onPageStarted: " + url);
+                view.evaluateJavascript(
+                    "try{" +
+                    "  document.documentElement.setAttribute('data-dsh-overlay','true');" +
+                    "  window.__DSH_OVERLAY__=true;" +
+                    "  if(!document.getElementById('dsh-early-boot-hide')){" +
+                    "    var s=document.createElement('style');" +
+                    "    s.id='dsh-early-boot-hide';" +
+                    "    s.textContent='html[data-dsh-overlay=\"true\"],body{background:transparent!important}[class*=\"_boot\"]{background:transparent!important}[class*=\"_boot\"] [class*=\"_card\"]{display:none!important}';" +
+                    "    (document.head||document.documentElement).appendChild(s);" +
+                    "  }" +
+                    "}catch(e){}", null);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                Log.i(TAG, "onPageFinished: " + url);
                 view.clearHistory();
-                String js = "(function() {" +
-                    "  if (window.__DSH_SESSION_OBSERVER_INSTALLED__) return;" +
-                    "  window.__DSH_SESSION_OBSERVER_INSTALLED__ = true;" +
-                    "  window.DSH_SWITCH_SESSION = function(id) {" +
-                    "    try {" +
-                    "      localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: id }));" +
-                    "      if (location.search.indexOf('session=') >= 0) {" +
-                    "        location.search = location.search.replace(/session=[^&]+/, 'session=' + id);" +
-                    "      } else {" +
-                    "        location.search += (location.search ? '&' : '?') + 'session=' + id;" +
-                    "      }" +
-                    "    } catch(e) {}" +
-                    "  };" +
-                    "  function check() {" +
-                    "    try {" +
-                    "      var raw = localStorage.getItem('dsh.sessions.current');" +
-                    "      if (raw) {" +
-                    "        var obj = JSON.parse(raw);" +
-                    "        if (obj && obj.sessionId && window.DSHOverlayBridge && window.DSHOverlayBridge.reportSession) {" +
-                    "          window.DSHOverlayBridge.reportSession(obj.sessionId);" +
-                    "        }" +
-                    "      }" +
-                    "    } catch(e) {}" +
-                    "  }" +
-                    "  check();" +
-                    "  setInterval(check, 1000);" +
-                    "})();";
-                view.evaluateJavascript(js, null);
+                injectMobileOverlay(view);
+
+                // Diagnostic: inspect document title and body child count
+                view.evaluateJavascript("(function(){ return 'title=' + document.title + ' | bodyChildren=' + (document.body ? document.body.children.length : -1) + ' | url=' + location.href; })()", new ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String val) {
+                        Log.i(TAG, "Page DOM probe: " + val);
+                    }
+                });
+            }
+
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                Log.e(TAG, "onReceivedError: code=" + errorCode + " desc=" + description + " url=" + failingUrl);
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                int status = errorResponse != null ? errorResponse.getStatusCode() : -1;
+                String reqUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : "";
+                Log.e(TAG, "onReceivedHttpError: status=" + status + " url=" + reqUrl);
             }
         });
 
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(android.webkit.ConsoleMessage consoleMessage) {
-                Log.d("DSHWebConsole", consoleMessage.message() + " -- Line " + consoleMessage.lineNumber() + " of " + consoleMessage.sourceId());
+                Log.i("DSHWebConsole", "[" + consoleMessage.messageLevel() + "] " + consoleMessage.message() + " (" + consoleMessage.sourceId() + ":" + consoleMessage.lineNumber() + ")");
                 return true;
             }
 
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
+                Log.d(TAG, "onProgressChanged: " + newProgress);
                 if (mProgressBar != null) {
                     if (newProgress < 100) {
                         mProgressBar.setVisibility(View.VISIBLE);
@@ -408,6 +427,9 @@ public class DemoDialogActivity extends Activity {
                     } else {
                         mProgressBar.setVisibility(View.GONE);
                     }
+                }
+                if (newProgress >= 50) {
+                    injectMobileOverlay(view);
                 }
             }
 
@@ -485,11 +507,99 @@ public class DemoDialogActivity extends Activity {
         });
     }
 
+    private static volatile byte[] sCachedOverlayCssBytes = null;
+    private static volatile byte[] sCachedOverlayJsBytes = null;
+
+    private synchronized byte[] getOverlayCssBytes() {
+        if (sCachedOverlayCssBytes != null) return sCachedOverlayCssBytes;
+        sCachedOverlayCssBytes = loadAssetBytes("overlay_style.css");
+        return sCachedOverlayCssBytes;
+    }
+
+    private synchronized byte[] getOverlayJsBytes() {
+        if (sCachedOverlayJsBytes != null) return sCachedOverlayJsBytes;
+        sCachedOverlayJsBytes = loadAssetBytes("overlay_script.js");
+        return sCachedOverlayJsBytes;
+    }
+
+    private byte[] loadAssetBytes(String filename) {
+        try {
+            InputStream is = getAssets().open(filename);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            is.close();
+            return baos.toByteArray();
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to load asset " + filename + ": " + t.getMessage(), t);
+            return new byte[0];
+        }
+    }
+
+    private void injectMobileOverlay(WebView view) {
+        if (view == null) return;
+        try {
+            byte[] cssBytes = getOverlayCssBytes();
+            byte[] jsBytes = getOverlayJsBytes();
+
+            String cssBase64 = (cssBytes != null && cssBytes.length > 0) ? Base64.encodeToString(cssBytes, Base64.NO_WRAP) : "";
+            String jsBase64 = (jsBytes != null && jsBytes.length > 0) ? Base64.encodeToString(jsBytes, Base64.NO_WRAP) : "";
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("(function() {");
+            sb.append("  try {");
+            sb.append("    document.documentElement.setAttribute('data-dsh-overlay', 'true');");
+            sb.append("    window.__DSH_OVERLAY__ = true;");
+            if (!cssBase64.isEmpty()) {
+                sb.append("    if (!document.getElementById('dsh-overlay-injected-style')) {");
+                sb.append("      var s = document.createElement('style');");
+                sb.append("      s.id = 'dsh-overlay-injected-style';");
+                sb.append("      s.textContent = decodeURIComponent(escape(atob('").append(cssBase64).append("')));");
+                sb.append("      (document.head || document.documentElement).appendChild(s);");
+                sb.append("    }");
+            }
+            if (!jsBase64.isEmpty()) {
+                sb.append("    if (!window.__DSH_MOBILE_OVERLAY_INITIALIZED__) {");
+                sb.append("      var code = decodeURIComponent(escape(atob('").append(jsBase64).append("')));");
+                sb.append("      var sc = document.createElement('script');");
+                sb.append("      sc.id = 'dsh-overlay-injected-script';");
+                sb.append("      sc.textContent = code;");
+                sb.append("      (document.head || document.documentElement).appendChild(sc);");
+                sb.append("    }");
+            }
+            sb.append("  } catch(e) { console.error('[overlay-inject] error:', e); }");
+            sb.append("})();");
+
+            view.evaluateJavascript(sb.toString(), null);
+
+            // Smooth fade-in once styles and controls are injected
+            if (mWebView != null && mWebView.getAlpha() < 1f) {
+                mWebView.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mWebView != null && mWebView.getAlpha() < 1f) {
+                            mWebView.animate()
+                                    .alpha(1f)
+                                    .setDuration(240)
+                                    .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                                    .start();
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "injectMobileOverlay error: " + t.getMessage(), t);
+        }
+    }
+
     private void loadWebConsole() {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final String cookie = getDshAuthCookie();
+                final String cookie = getDshAuthCookie(DemoDialogActivity.this);
 
                 mMainHandler.post(new Runnable() {
                     @Override
@@ -527,23 +637,85 @@ public class DemoDialogActivity extends Activity {
         }).start();
     }
 
-    public static String getDshAuthCookie() {
+    public static String getDshAuthCookie(Context context) {
         try {
-            String secret = DEFAULT_SECRET;
-            // Check if overridden in workspace file
+            String secret = "";
+
+            // 1. Try querying local gateway http://127.0.0.1:3070/api/auth/secret
             try {
-                File credFile = new File("/storage/emulated/0/workspace/.dsh_secret");
-                if (credFile.exists() && credFile.length() > 0) {
-                    FileInputStream fis = new FileInputStream(credFile);
-                    byte[] buf = new byte[(int) credFile.length()];
-                    int read = fis.read(buf);
-                    fis.close();
-                    if (read > 0) {
-                        String s = new String(buf, 0, read, "UTF-8").trim();
-                        if (!s.isEmpty()) secret = s;
+                java.net.URL url = new java.net.URL("http://127.0.0.1:3070/api/auth/secret");
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(400);
+                conn.setReadTimeout(400);
+                if (conn.getResponseCode() == 200) {
+                    java.io.InputStream is = conn.getInputStream();
+                    byte[] buf = new byte[1024];
+                    int n = is.read(buf);
+                    is.close();
+                    if (n > 0) {
+                        JSONObject json = new JSONObject(new String(buf, 0, n, "UTF-8"));
+                        String s = json.optString("secret", "").trim();
+                        if (!s.isEmpty()) {
+                            secret = s;
+                            if (context != null) {
+                                context.getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE)
+                                        .edit().putString("dsh_secret", secret).apply();
+                            }
+                        }
                     }
                 }
+                conn.disconnect();
             } catch (Throwable ignored) {}
+
+            // 2. Try /data/local/tmp/.dsh_secret (dynamically synced by vd_server or DSH)
+            if (secret.isEmpty()) {
+                try {
+                    File tmpFile = new File("/data/local/tmp/.dsh_secret");
+                    if (tmpFile.exists() && tmpFile.length() > 0) {
+                        FileInputStream fis = new FileInputStream(tmpFile);
+                        byte[] buf = new byte[(int) tmpFile.length()];
+                        int read = fis.read(buf);
+                        fis.close();
+                        if (read > 0) {
+                            String s = new String(buf, 0, read, "UTF-8").trim();
+                            if (!s.isEmpty()) secret = s;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            // 3. Try /storage/emulated/0/workspace/.dsh_secret (user override file)
+            if (secret.isEmpty()) {
+                try {
+                    File credFile = new File("/storage/emulated/0/workspace/.dsh_secret");
+                    if (credFile.exists() && credFile.length() > 0) {
+                        FileInputStream fis = new FileInputStream(credFile);
+                        byte[] buf = new byte[(int) credFile.length()];
+                        int read = fis.read(buf);
+                        fis.close();
+                        if (read > 0) {
+                            String s = new String(buf, 0, read, "UTF-8").trim();
+                            if (!s.isEmpty()) secret = s;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            // 4. Try SharedPreferences cache
+            if (secret.isEmpty() && context != null) {
+                try {
+                    String s = context.getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE)
+                            .getString("dsh_secret", "");
+                    if (s != null && !s.trim().isEmpty()) {
+                        secret = s.trim();
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            if (secret.isEmpty()) {
+                Log.w(TAG, "No DSH auth secret found; loading without pre-authenticated session cookie");
+                return null;
+            }
 
             String authority = "127.0.0.1:3080";
             byte[] secBytes = Base64.decode(secret, Base64.URL_SAFE);
@@ -576,6 +748,10 @@ public class DemoDialogActivity extends Activity {
             Log.e(TAG, "Failed to generate cookie: " + t.getMessage(), t);
             return null;
         }
+    }
+
+    public static String getDshAuthCookie() {
+        return getDshAuthCookie(null);
     }
 
     public void hideSoftInput() {

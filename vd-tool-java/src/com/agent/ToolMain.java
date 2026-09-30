@@ -163,6 +163,12 @@ public class ToolMain {
             "com.coloros.smartsidebar",
             "com.oplus.systemui",
             "com.oplusos.systemui",
+            "com.miui.securityadd",
+            "com.miui.sidebar",
+            "com.samsung.android.app.cocktailbarservice",
+            "com.samsung.android.sidebarservice",
+            "com.huawei.intelligent",
+            "com.vivo.upslide",
     };
 
     private static boolean isSystemUiPackage(String p) {

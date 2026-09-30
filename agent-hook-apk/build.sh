@@ -22,8 +22,13 @@ echo "[build] 1. Generating R.java and initial package with aapt..."
     -F build/apk/unaligned.apk
 
 echo "[build] 2. Compiling Java sources..."
+mkdir -p build/stubs_classes
+if [ -d "stubs" ]; then
+    javac -proc:none -source 1.8 -target 1.8 -cp "$ANDROID_JAR" $(find stubs -name "*.java") -d build/stubs_classes
+fi
+
 javac -proc:none -source 1.8 -target 1.8 \
-    -cp "$ANDROID_JAR:$XPOSED_JAR" \
+    -cp "$ANDROID_JAR:$XPOSED_JAR:build/stubs_classes" \
     $(find src build/gen -name "*.java") \
     -d build/classes
 
@@ -36,7 +41,9 @@ echo "[build] 4. Adding classes.dex and assets to APK..."
 cd build
 "$AAPT" add "apk/unaligned.apk" "classes.dex"
 cd "$SCRIPT_DIR"
-"$AAPT" add "build/apk/unaligned.apk" "assets/xposed_init"
+for a in $(find assets -type f); do
+    "$AAPT" add "build/apk/unaligned.apk" "$a"
+done
 
 echo "[build] 5. Zipaligning APK to 4-byte boundary..."
 zipalign -p -f 4 "build/apk/unaligned.apk" "build/apk/aligned.apk"

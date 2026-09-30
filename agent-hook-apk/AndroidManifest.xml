@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.agent.mobileuse"
-    android:versionCode="703"
-    android:versionName="0.7.3-alpha">
+    android:versionCode="705"
+    android:versionName="0.7.5-alpha">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -41,6 +41,17 @@
             android:taskAffinity="com.agent.mobileuse.overlay"
             android:excludeFromRecents="true"
             android:exported="true" />
+
+        <service
+            android:name=".ConsoleTileService"
+            android:label="Agent 控制台"
+            android:icon="@drawable/dsh_whale_icon"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".NotifyReceiver"
