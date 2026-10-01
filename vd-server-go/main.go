@@ -2000,15 +2000,15 @@ func main() {
 			}
 			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
 
-		case "type":
-			targetSpec := "focused"
-			if targetStr != "" {
-				targetSpec = targetStr
+		case "set_value":
+			if targetStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'set_value' requires a target node ID"})
+				return
 			}
 			b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
-			out, reqErr := globalDumpDaemon.Request(fmt.Sprintf("type_b64 %d %s %s", targetDid, targetSpec, b64))
+			out, reqErr := globalDumpDaemon.Request(fmt.Sprintf("set_value_b64 %d %s %s", targetDid, targetStr, b64))
 			if reqErr != nil {
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Type request failed: %v", reqErr)})
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Set value request failed: %v", reqErr)})
 				return
 			}
 			var tp struct {
@@ -2019,7 +2019,7 @@ func main() {
 				VerifiedText string `json:"verified_text"`
 			}
 			if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &tp); err != nil {
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Invalid type response: %v", err)})
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Invalid set_value response: %v", err)})
 				return
 			}
 			if !tp.OK {
@@ -2027,11 +2027,11 @@ func main() {
 				if tp.Reason != "" {
 					errMsg = fmt.Sprintf("%s (%s)", tp.Error, tp.Reason)
 				}
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Type failed: %s", errMsg)})
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Set value failed: %s", errMsg)})
 				return
 			}
 
-			actionDesc := fmt.Sprintf("OK: Text injected [cost=%dms]", tp.CostMs)
+			actionDesc := fmt.Sprintf("OK: Set value on target %s [cost=%dms]", targetStr, tp.CostMs)
 			if tp.VerifiedText != "" {
 				actionDesc += fmt.Sprintf(" | after=\"%s\"", tp.VerifiedText)
 			}

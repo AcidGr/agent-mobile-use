@@ -82,18 +82,12 @@ case "$1" in
         curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"swipe\", \"coordinate\": [$2, $3], \"end_coordinate\": [$4, $5], \"duration_ms\": ${6:-300}}"
         echo ""
         ;;
-    type)
+    set_value)
         ensure_server
-        if [ "$#" -ge 3 ]; then
-            target=$(json_escape "$2")
-            shift 2
-            # Join all remaining words so `vd type 146 hello world` doesn't silently drop "world"
-            text=$(json_escape "$*")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"target\": \"$target\", \"text\": \"$text\"}"
-        else
-            text=$(json_escape "$2")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"text\": \"$text\"}"
-        fi
+        target=$(json_escape "$2")
+        shift 2
+        text=$(json_escape "$*")
+        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"set_value\", \"target\": \"$target\", \"text\": \"$text\"}"
         echo ""
         ;;
     key)
@@ -123,7 +117,7 @@ case "$1" in
         echo "  start | stop | restart | status | mode <fg|bg|idle>"
         echo "  launch <pkg> [--user <id>]"
         echo "  tree | tap <x> <y> | swipe <x1> <y1> <x2> <y2> [ms]"
-        echo "  type [target] <text> | key <keycode>"
+        echo "  set_value <target> <text> | key <keycode>"
         echo "  screenshot [path] | apps [query]"
         ;;
 esac
