@@ -55,8 +55,229 @@ public class HookEntry implements IXposedHookLoadPackage {
         // Isolate InputMethodManagerService (IME) to prevent soft keyboard popup on Display 0
         hookImmsDisplayIsolation(cl);
 
+        // Screenshot exclusion must be applied from system_server. Doing this from the
+        // ordinary app process is blocked by hidden-API / WindowManager privilege checks.
+        hookAgentScreenshotExclusion(cl);
+
+        // Reclassify only the accessibility representation of our overlay. The real
+        // WindowState remains an ordinary Activity window, so UI/focus/touch semantics
+        // are unchanged while accessibility keeps the application underneath introspectable.
+        hookAgentAccessibilityOverlayClassification(cl);
+
         // Intercept Action Button on OnePlus 13 (ColorOS) to launch DemoDialogActivity
         hookActionButton(cl);
+    }
+
+    private static Object getFieldRecursive(Object obj, String fieldName) {
+        if (obj == null) return null;
+        Class<?> cur = obj.getClass();
+        while (cur != null) {
+            try {
+                java.lang.reflect.Field f = cur.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                return f.get(obj);
+            } catch (NoSuchFieldException e) {
+                cur = cur.getSuperclass();
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isAgentWindowState(Object win) {
+        if (win == null) return false;
+        try {
+            Object attrsObj = getFieldRecursive(win, "mAttrs");
+            if (attrsObj instanceof android.view.WindowManager.LayoutParams) {
+                android.view.WindowManager.LayoutParams attrs =
+                        (android.view.WindowManager.LayoutParams) attrsObj;
+                if ("com.agent.mobileuse".equals(attrs.packageName)) return true;
+                CharSequence title = attrs.getTitle();
+                if (title != null) {
+                    String s = title.toString();
+                    if (s.contains("com.agent.mobileuse") || "AgentMobileEdgeGlow".equals(s)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            Object pkg = invokeNoArg(win, "getOwningPackage");
+            if (pkg != null && "com.agent.mobileuse".equals(pkg.toString())) return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static Object extractSurfaceControl(Object result, Object animator) {
+        try {
+            Class<?> scClass = Class.forName("android.view.SurfaceControl");
+            if (result != null && scClass.isInstance(result)) return result;
+
+            Object sc = getFieldRecursive(result, "mSurfaceControl");
+            if (sc != null && scClass.isInstance(sc)) return sc;
+
+            sc = getFieldRecursive(animator, "mSurfaceControl");
+            if (sc != null && scClass.isInstance(sc)) return sc;
+
+            Object controller = getFieldRecursive(animator, "mSurfaceController");
+            sc = getFieldRecursive(controller, "mSurfaceControl");
+            if (sc != null && scClass.isInstance(sc)) return sc;
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static void markSkipScreenshotFromSystemServer(Object surfaceControl) throws Throwable {
+        if (surfaceControl == null) return;
+        Class<?> scClass = Class.forName("android.view.SurfaceControl");
+        Class<?> txClass = Class.forName("android.view.SurfaceControl$Transaction");
+        Object tx = txClass.getConstructor().newInstance();
+
+        java.lang.reflect.Method setSkip;
+        try {
+            setSkip = txClass.getMethod("setSkipScreenshot", scClass, boolean.class);
+        } catch (NoSuchMethodException e) {
+            setSkip = txClass.getDeclaredMethod("setSkipScreenshot", scClass, boolean.class);
+            setSkip.setAccessible(true);
+        }
+        setSkip.invoke(tx, surfaceControl, true);
+        txClass.getMethod("apply").invoke(tx);
+        try {
+            txClass.getMethod("close").invoke(tx);
+        } catch (Throwable ignored) {}
+    }
+
+    private void hookAgentScreenshotExclusion(ClassLoader cl) {
+        try {
+            Class<?> animatorClass = XposedHelpers.findClass(
+                    "com.android.server.wm.WindowStateAnimator", cl);
+            XposedBridge.hookAllMethods(animatorClass, "createSurfaceLocked",
+                    new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Object win = getFieldRecursive(param.thisObject, "mWin");
+                    if (!isAgentWindowState(win)) return;
+
+                    Object sc = extractSurfaceControl(param.getResult(), param.thisObject);
+                    if (sc == null) {
+                        XposedBridge.log("[AgentMobileUseHook] Agent window surface created but SurfaceControl was not found");
+                        return;
+                    }
+
+                    try {
+                        markSkipScreenshotFromSystemServer(sc);
+                        XposedBridge.log("[AgentMobileUseHook] SKIP_SCREENSHOT applied to agent overlay surface");
+                    } catch (Throwable t) {
+                        XposedBridge.log("[AgentMobileUseHook] Failed to apply SKIP_SCREENSHOT: " + t);
+                    }
+                }
+            });
+            XposedBridge.log("[AgentMobileUseHook] WindowStateAnimator screenshot exclusion hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook screenshot exclusion: " + t);
+        }
+    }
+
+    private static boolean setFieldRecursive(Object obj, String fieldName, Object value) {
+        if (obj == null) return false;
+        Class<?> cur = obj.getClass();
+        while (cur != null) {
+            try {
+                java.lang.reflect.Field f = cur.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                f.set(obj, value);
+                return true;
+            } catch (NoSuchFieldException e) {
+                cur = cur.getSuperclass();
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static Object getWindowStateFromAccessibilityWindow(Object service, Object a11yWindow) {
+        if (service == null || a11yWindow == null) return null;
+        try {
+            Object token = getFieldRecursive(a11yWindow, "mWindow");
+            if (token == null) return null;
+            Object map = getFieldRecursive(service, "mWindowMap");
+            if (map instanceof java.util.Map) {
+                return ((java.util.Map<?, ?>) map).get(token);
+            }
+            if (map != null) {
+                java.lang.reflect.Method get = map.getClass().getMethod("get", Object.class);
+                return get.invoke(map, token);
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static boolean isAgentAccessibilityWindow(Object service, Object a11yWindow) {
+        Object win = getWindowStateFromAccessibilityWindow(service, a11yWindow);
+        if (isAgentWindowState(win)) return true;
+
+        // Fallback for OEM builds where mWindowMap is wrapped or renamed.
+        try {
+            Object windowInfo = getFieldRecursive(a11yWindow, "mWindowInfo");
+            Object title = getFieldRecursive(windowInfo, "title");
+            if (title != null) {
+                String s = title.toString();
+                if (s.contains("com.agent.mobileuse") || "AgentMobileEdgeGlow".equals(s)) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static void reclassifyAccessibilityWindow(Object a11yWindow) {
+        final int typeAccessibilityOverlay =
+                android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
+
+        // AccessibilityWindowManager consumes AccessibilityWindow#getType() while
+        // computing unaccounted screen space. Changing only this cached a11y type
+        // makes our overlay transparent to that computation without touching mAttrs.
+        setFieldRecursive(a11yWindow, "mType", Integer.valueOf(typeAccessibilityOverlay));
+
+        // Keep the WindowInfo handed to AccessibilityManager consistent so clients see
+        // TYPE_ACCESSIBILITY_OVERLAY rather than TYPE_APPLICATION for this one window.
+        Object windowInfo = getFieldRecursive(a11yWindow, "mWindowInfo");
+        setFieldRecursive(windowInfo, "type", Integer.valueOf(typeAccessibilityOverlay));
+    }
+
+    private void hookAgentAccessibilityOverlayClassification(ClassLoader cl) {
+        try {
+            Class<?> a11yWindowClass = XposedHelpers.findClass(
+                    "com.android.server.wm.AccessibilityWindowsPopulator$AccessibilityWindow", cl);
+
+            XposedBridge.hookAllMethods(a11yWindowClass, "initializeData",
+                    new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Object a11yWindow = param.getResult();
+                    if (a11yWindow == null || param.args == null || param.args.length == 0) {
+                        return;
+                    }
+
+                    Object windowManagerService = param.args[0];
+                    if (!isAgentAccessibilityWindow(windowManagerService, a11yWindow)) {
+                        return;
+                    }
+
+                    reclassifyAccessibilityWindow(a11yWindow);
+                    XposedBridge.log(
+                            "[AgentMobileUseHook] Agent window reclassified as TYPE_ACCESSIBILITY_OVERLAY for accessibility only");
+                }
+            });
+
+            XposedBridge.log(
+                    "[AgentMobileUseHook] AccessibilityWindowsPopulator overlay classification hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(
+                    "[AgentMobileUseHook] Failed to hook accessibility overlay classification: " + t);
+        }
     }
 
     private void hookAllMethodsReturningTrue(ClassLoader cl, String className, String methodName) {

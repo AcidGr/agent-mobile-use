@@ -180,6 +180,38 @@ public class ToolMain {
         return false;
     }
 
+    private static final String AGENT_OVERLAY_PACKAGE = "com.agent.mobileuse";
+
+    /**
+     * The DSH control UI stays visible on Display 0, but its own accessibility
+     * window must not be emitted as part of the application's observation tree.
+     */
+    private static boolean isAgentOverlayWindow(Object win, AccessibilityNodeInfo root) {
+        if (root != null) {
+            try {
+                CharSequence pkg = root.getPackageName();
+                if (pkg != null && AGENT_OVERLAY_PACKAGE.equals(pkg.toString())) return true;
+            } catch (Throwable ignored) {}
+        }
+        if (win != null) {
+            try {
+                CharSequence pkg = (CharSequence) win.getClass()
+                        .getMethod("getPackageName").invoke(win);
+                if (pkg != null && AGENT_OVERLAY_PACKAGE.equals(pkg.toString())) return true;
+            } catch (Throwable ignored) {}
+            try {
+                CharSequence title = (CharSequence) win.getClass().getMethod("getTitle").invoke(win);
+                if (title != null) {
+                    String s = title.toString();
+                    if ("AgentMobileEdgeGlow".equals(s) || s.contains(AGENT_OVERLAY_PACKAGE)) {
+                        return true;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
     /**
      * Window titles that WindowManager reports as owned by a system-chrome package,
      * keyed by title and by package.
@@ -784,6 +816,13 @@ public class ToolMain {
                                 AccessibilityNodeInfo rootNode =
                                         (rootObj instanceof AccessibilityNodeInfo)
                                                 ? (AccessibilityNodeInfo) rootObj : null;
+
+                                // In foreground mode the DSH overlay is still physically on top.
+                                // system_server exposes the covered app as an accessibility
+                                // window; omit only the local control overlay from the returned tree.
+                                if (targetDisplayId == 0 && isAgentOverlayWindow(win, rootNode)) {
+                                    continue;
+                                }
 
                                 // The opt-in system-chrome filter. Dropped windows are NOT
                                 // counted in windowCount, so `windows=` keeps describing the
