@@ -1876,21 +1876,19 @@ public class ToolMain {
         long start = System.currentTimeMillis();
 
         try {
-            String cleanSpec = targetSpec != null ? (targetSpec.startsWith("node:") ? targetSpec.substring(5).trim() : targetSpec.trim()) : "";
+            boolean focusMode = targetSpec == null || targetSpec.isEmpty() || "focused".equalsIgnoreCase(targetSpec);
             int targetId = -1;
-            if (cleanSpec.isEmpty()) {
-                error = "missing_target";
-                reason = "Target node ID is required.";
-            } else {
+            if (!focusMode) {
+                String cleanSpec = targetSpec.startsWith("node:") ? targetSpec.substring(5).trim() : targetSpec.trim();
                 try {
                     targetId = Integer.parseInt(cleanSpec);
                 } catch (NumberFormatException nfe) {
                     error = "invalid_target";
-                    reason = "Invalid target '" + targetSpec + "'. Target must be a numeric node ID from dump tree (e.g. '146').";
+                    reason = "Invalid target '" + targetSpec + "'. Target must be a numeric node ID from dump tree (e.g. '146') or omitted for focus mode.";
                 }
             }
 
-            if (targetId >= 0) {
+            if (error == null) {
                 List<AccessibilityNodeInfo> all = new ArrayList<AccessibilityNodeInfo>();
                 List<NodeItem> nodeList = new ArrayList<NodeItem>();
                 boolean dropSystemUi = (targetDisplayId == 0);
@@ -1933,64 +1931,86 @@ public class ToolMain {
                             }
                         }
                     }
-                    if (!nodeList.isEmpty()) break;
+                    if (!all.isEmpty()) break;
                     Thread.sleep(300);
                 }
 
-                NodeItem matchedItem = null;
-                for (NodeItem item : nodeList) {
-                    if (item.id == targetId) {
-                        matchedItem = item;
-                        break;
+                AccessibilityNodeInfo targetNode = null;
+                if (focusMode) {
+                    AccessibilityNodeInfo focusedAny = null;
+                    for (AccessibilityNodeInfo an : all) {
+                        if (an.isFocused() && an.isEditable()) { targetNode = an; break; }
+                        if (focusedAny == null && an.isFocused()) focusedAny = an;
                     }
-                }
-                if (matchedItem == null) {
-                    error = "target_not_found";
-                    reason = "Node " + targetId + " not found on screen.";
-                } else {
-                    AccessibilityNodeInfo raw = matchedItem.rawNode;
-                    AccessibilityNodeInfo targetNode = null;
-                    if (raw != null) {
-                        targetNode = raw.isEditable() ? raw : findFirstEditable(raw);
+                    if (targetNode == null && focusedAny != null) {
+                        targetNode = findFirstEditable(focusedAny);
                     }
                     if (targetNode == null) {
-                        error = "target_not_editable";
-                        reason = "Node " + targetId + " (" + matchedItem.type + ") is not an editable field.";
-                        if (matchedItem.text != null) beforeTxt = matchedItem.text;
+                        error = "no_focused_input";
+                        if (focusedAny != null) {
+                            String fc = focusedAny.getClassName() != null
+                                    ? simplifyType(focusedAny.getClassName().toString()) : "View";
+                            focusHint = fc + "@" + rectStr(focusedAny);
+                        }
+                        reason = "No input field is currently focused.";
+                    }
+                } else {
+                    NodeItem matchedItem = null;
+                    for (NodeItem item : nodeList) {
+                        if (item.id == targetId) {
+                            matchedItem = item;
+                            break;
+                        }
+                    }
+                    if (matchedItem == null) {
+                        error = "target_not_found";
+                        reason = "Node " + targetId + " not found on screen.";
                     } else {
-                        vid = targetNode.getViewIdResourceName();
-                        cls = targetNode.getClassName() != null ? targetNode.getClassName().toString() : null;
-                        boundsStr = rectStr(targetNode);
-                        beforeTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+                        AccessibilityNodeInfo raw = matchedItem.rawNode;
+                        if (raw != null) {
+                            targetNode = raw.isEditable() ? raw : findFirstEditable(raw);
+                        }
+                        if (targetNode == null) {
+                            error = "target_not_editable";
+                            reason = "Node " + targetId + " (" + matchedItem.type + ") is not an editable field.";
+                            if (matchedItem.text != null) beforeTxt = matchedItem.text;
+                        }
+                    }
+                }
 
-                        try { targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS); } catch (Throwable ignored) {}
+                if (targetNode != null && error == null) {
+                    vid = targetNode.getViewIdResourceName();
+                    cls = targetNode.getClassName() != null ? targetNode.getClassName().toString() : null;
+                    boundsStr = rectStr(targetNode);
+                    beforeTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
 
-                        android.os.Bundle args = new android.os.Bundle();
-                        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-                        boolean setOk = false;
-                        try {
-                            setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-                        } catch (Throwable ignored) {}
+                    try { targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS); } catch (Throwable ignored) {}
 
-                        if (!setOk) {
-                            error = "inject_rejected";
+                    android.os.Bundle args = new android.os.Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+                    boolean setOk = false;
+                    try {
+                        setOk = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    } catch (Throwable ignored) {}
+
+                    if (!setOk) {
+                        error = "inject_rejected";
+                    } else {
+                        mode = "action_set_text";
+                        Thread.sleep(60);
+                        boolean fresh = true;
+                        try { fresh = targetNode.refresh(); } catch (Throwable t) { fresh = false; }
+                        afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
+                        if (!fresh) {
+                            ok = true; error = "verify_unavailable"; reason = "stale_node";
+                        } else if (afterTxt == null) {
+                            ok = true; error = "verify_unavailable"; reason = "unreadable";
+                        } else if (afterTxt.equals(text)) {
+                            ok = true;
+                        } else if (isMasked(afterTxt, text)) {
+                            ok = true; error = "verify_unavailable"; reason = "masked";
                         } else {
-                            mode = "action_set_text";
-                            Thread.sleep(60);
-                            boolean fresh = true;
-                            try { fresh = targetNode.refresh(); } catch (Throwable t) { fresh = false; }
-                            afterTxt = targetNode.getText() != null ? targetNode.getText().toString() : null;
-                            if (!fresh) {
-                                ok = true; error = "verify_unavailable"; reason = "stale_node";
-                            } else if (afterTxt == null) {
-                                ok = true; error = "verify_unavailable"; reason = "unreadable";
-                            } else if (afterTxt.equals(text)) {
-                                ok = true;
-                            } else if (isMasked(afterTxt, text)) {
-                                ok = true; error = "verify_unavailable"; reason = "masked";
-                            } else {
-                                error = "verify_mismatch";
-                            }
+                            error = "verify_mismatch";
                         }
                     }
                 }
