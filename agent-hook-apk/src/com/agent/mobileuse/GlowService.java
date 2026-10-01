@@ -31,7 +31,7 @@ import java.util.List;
 public class GlowService extends Service {
     public static final String ACTION_TOUCH = "com.agent.mobileuse.ACTION_TOUCH";
 
-    private static final String CHANNEL_ID = "agent_capsule_channel_v2";
+    private static final String CHANNEL_ID = "agent_capsule_channel_v3";
     private static final int NOTIFICATION_ID = 10086;
     private WindowManager mWindowManager;
     private GlowView mGlowView;
@@ -186,10 +186,22 @@ public class GlowService extends Service {
             }
 
             if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    java.lang.reflect.Method deleteMethod = nm.getClass().getMethod("deleteNotificationChannel", String.class);
+                    deleteMethod.invoke(nm, "agent_capsule_channel_v2");
+                } catch (Throwable ignored) {}
+
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 java.lang.reflect.Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                // IMPORTANCE_DEFAULT = 3 (Displays Fluid Cloud capsule on status bar without noisy audible interrupt)
                 Object channel = ctor.newInstance(CHANNEL_ID, "Agent Foreground Activity", 3);
+                try {
+                    java.lang.reflect.Method setSoundMethod = channelClass.getMethod("setSound", android.net.Uri.class, android.media.AudioAttributes.class);
+                    setSoundMethod.invoke(channel, null, null);
+                } catch (Throwable ignored) {}
+                try {
+                    java.lang.reflect.Method enableVibrationMethod = channelClass.getMethod("enableVibration", boolean.class);
+                    enableVibrationMethod.invoke(channel, false);
+                } catch (Throwable ignored) {}
                 java.lang.reflect.Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
             }
@@ -291,6 +303,10 @@ public class GlowService extends Service {
 
             builder.setOngoing(true);
             builder.setAutoCancel(false);
+            builder.setOnlyAlertOnce(true);
+            builder.setDefaults(0);
+            builder.setSound(null);
+            builder.setVibrate(null);
             builder.setPriority(2); // Notification.PRIORITY_MAX = 2
             builder.setShowWhen(true);
 
