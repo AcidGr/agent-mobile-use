@@ -30,7 +30,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookSelf(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             Class<?> clazz = XposedHelpers.findClass("com.agent.mobileuse.SettingsActivity", lpparam.classLoader);
-            XposedHelpers.findAndHookMethod(clazz, "isModuleActive", XC_MethodReplacement.returnConstant(Boolean.TRUE));
+            XposedBridge.hookAllMethods(clazz, "isModuleActive", XC_MethodReplacement.returnConstant(Boolean.TRUE));
             XposedBridge.log("[AgentMobileUseHook] isModuleActive hooked successfully!");
         } catch (Throwable t) {
             XposedBridge.log("[AgentMobileUseHook] Failed to hook isModuleActive: " + t.getMessage());
@@ -54,6 +54,9 @@ public class HookEntry implements IXposedHookLoadPackage {
 
         // Isolate InputMethodManagerService (IME) to prevent soft keyboard popup on Display 0
         hookImmsDisplayIsolation(cl);
+
+        // Exclude AgentMobileEdgeGlow window from screenshot capture
+        hookEdgeGlowScreenshotExclusion(cl);
 
         // Intercept Action Button on OnePlus 13 (ColorOS) to launch DemoDialogActivity
         hookActionButton(cl);
@@ -82,6 +85,78 @@ public class HookEntry implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {
             XposedBridge.log("[AgentMobileUseHook] Failed to hook IMMS: " + t.getMessage());
+        }
+    }
+
+    private static Object getFieldSafe(Object obj, String fieldName) {
+        if (obj == null) return null;
+        Class<?> cur = obj.getClass();
+        while (cur != null) {
+            try {
+                java.lang.reflect.Field f = cur.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                return f.get(obj);
+            } catch (NoSuchFieldException e) {
+                cur = cur.getSuperclass();
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private void hookEdgeGlowScreenshotExclusion(ClassLoader cl) {
+        try {
+            Class<?> animatorClass = XposedHelpers.findClass("com.android.server.wm.WindowStateAnimator", cl);
+            XposedBridge.hookAllMethods(animatorClass, "createSurfaceLocked", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Object win = getFieldSafe(param.thisObject, "mWin");
+                    if (win == null) return;
+
+                    Object attrsObj = getFieldSafe(win, "mAttrs");
+                    if (!(attrsObj instanceof android.view.WindowManager.LayoutParams)) return;
+                    android.view.WindowManager.LayoutParams attrs = (android.view.WindowManager.LayoutParams) attrsObj;
+
+                    CharSequence title = attrs.getTitle();
+                    if (title == null || !"AgentMobileEdgeGlow".equals(title.toString())) {
+                        return;
+                    }
+
+                    Object sc = param.getResult();
+                    if (sc == null) {
+                        sc = getFieldSafe(param.thisObject, "mSurfaceControl");
+                    }
+                    if (sc == null) {
+                        sc = getFieldSafe(win, "mSurfaceControl");
+                    }
+                    if (sc == null) return;
+
+                    try {
+                        Class<?> scClass = Class.forName("android.view.SurfaceControl");
+                        Class<?> txClass = Class.forName("android.view.SurfaceControl$Transaction");
+                        Object tx = txClass.getConstructor().newInstance();
+                        java.lang.reflect.Method setSkipMethod;
+                        try {
+                            setSkipMethod = txClass.getMethod("setSkipScreenshot", scClass, boolean.class);
+                        } catch (NoSuchMethodException e) {
+                            setSkipMethod = txClass.getDeclaredMethod("setSkipScreenshot", scClass, boolean.class);
+                            setSkipMethod.setAccessible(true);
+                        }
+                        setSkipMethod.invoke(tx, sc, true);
+                        txClass.getMethod("apply").invoke(tx);
+                        try {
+                            txClass.getMethod("close").invoke(tx);
+                        } catch (Throwable ignored) {}
+                        XposedBridge.log("[AgentMobileUseHook] SKIP_SCREENSHOT applied to AgentMobileEdgeGlow successfully!");
+                    } catch (Throwable t) {
+                        XposedBridge.log("[AgentMobileUseHook] Failed to apply SKIP_SCREENSHOT: " + t.getMessage());
+                    }
+                }
+            });
+            XposedBridge.log("[AgentMobileUseHook] hookEdgeGlowScreenshotExclusion installed successfully!");
+        } catch (Throwable t) {
+            XposedBridge.log("[AgentMobileUseHook] Failed to hook hookEdgeGlowScreenshotExclusion: " + t.getMessage());
         }
     }
 
