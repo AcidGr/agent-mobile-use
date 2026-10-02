@@ -86,7 +86,6 @@ public class SettingsActivity extends Activity {
     private EditText mEtSecret;
     private Switch mSwitchTranslucentTheme;
     private Switch mSwitchFloatingWhale;
-    private Switch mSwitchKeyboardAssist;
 
     // Tab 2 Views (Virtual Display & Automation)
     private TextView mTvDisplayResolution;
@@ -94,8 +93,18 @@ public class SettingsActivity extends Activity {
     private TextView mTvDisplayId;
     private Switch mSwitchAudioMute;
     private Switch mSwitchGlowFrame;
-    private Switch mSwitchAutoStandby;
     private boolean mAudioMuted = false;
+
+    private void startGlowService(Intent sIntent) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                java.lang.reflect.Method m = Context.class.getMethod("startForegroundService", Intent.class);
+                m.invoke(this, sIntent);
+                return;
+            } catch (Throwable ignored) {}
+        }
+        startService(sIntent);
+    }
 
     // Switch Listeners
     private final CompoundButton.OnCheckedChangeListener mFluidCloudChangeListener = new CompoundButton.OnCheckedChangeListener() {
@@ -106,16 +115,7 @@ public class SettingsActivity extends Activity {
             try {
                 Intent sIntent = new Intent(SettingsActivity.this, GlowService.class);
                 sIntent.setAction("REFRESH");
-                if (Build.VERSION.SDK_INT >= 26) {
-                    try {
-                        java.lang.reflect.Method m = Context.class.getMethod("startForegroundService", Intent.class);
-                        m.invoke(SettingsActivity.this, sIntent);
-                    } catch (Throwable t) {
-                        startService(sIntent);
-                    }
-                } else {
-                    startService(sIntent);
-                }
+                startGlowService(sIntent);
             } catch (Throwable ignored) {}
             Toast.makeText(SettingsActivity.this, isChecked ? "通知流体云化已开启" : "通知流体云化已关闭 (退回原生通知栏)", Toast.LENGTH_SHORT).show();
         }
@@ -134,14 +134,11 @@ public class SettingsActivity extends Activity {
         public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
             getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
                     .edit().putBoolean("enable_glow_frame", isChecked).commit();
-        }
-    };
-
-    private final CompoundButton.OnCheckedChangeListener mAutoStandbyChangeListener = new CompoundButton.OnCheckedChangeListener() {
-        @Override
-        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-            getSharedPreferences(PREFS_CAPSULE, Context.MODE_PRIVATE)
-                    .edit().putBoolean("enable_auto_standby", isChecked).commit();
+            try {
+                Intent sIntent = new Intent(SettingsActivity.this, GlowService.class);
+                sIntent.setAction(isChecked ? "SHOW_GLOW" : "HIDE_GLOW");
+                startGlowService(sIntent);
+            } catch (Throwable ignored) {}
         }
     };
 
@@ -159,14 +156,6 @@ public class SettingsActivity extends Activity {
         public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
             getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
                     .edit().putBoolean("enable_floating_whale", isChecked).commit();
-        }
-    };
-
-    private final CompoundButton.OnCheckedChangeListener mKeyboardAssistChangeListener = new CompoundButton.OnCheckedChangeListener() {
-        @Override
-        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-            getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
-                    .edit().putBoolean("enable_keyboard_assist", isChecked).commit();
         }
     };
 
@@ -561,12 +550,6 @@ public class SettingsActivity extends Activity {
         LinearLayout rowWhale = createSwitchRow("悬浮控制球与快捷条", mSwitchFloatingWhale);
         mSwitchFloatingWhale.setOnCheckedChangeListener(mFloatingWhaleChangeListener);
         clientPrefsCard.addView(rowWhale);
-        clientPrefsCard.addView(createCardDivider());
-
-        mSwitchKeyboardAssist = new Switch(this);
-        LinearLayout rowKb = createSwitchRow("输入法自适应滚动", mSwitchKeyboardAssist);
-        mSwitchKeyboardAssist.setOnCheckedChangeListener(mKeyboardAssistChangeListener);
-        clientPrefsCard.addView(rowKb);
 
         layout.addView(clientPrefsCard);
 
@@ -610,12 +593,6 @@ public class SettingsActivity extends Activity {
         LinearLayout rowGlow = createSwitchRow("前台接管呼吸光", mSwitchGlowFrame);
         mSwitchGlowFrame.setOnCheckedChangeListener(mGlowFrameChangeListener);
         envCard.addView(rowGlow);
-        envCard.addView(createCardDivider());
-
-        mSwitchAutoStandby = new Switch(this);
-        LinearLayout rowStandby = createSwitchRow("完成后自动待机", mSwitchAutoStandby);
-        mSwitchAutoStandby.setOnCheckedChangeListener(mAutoStandbyChangeListener);
-        envCard.addView(rowStandby);
 
         layout.addView(envCard);
 
@@ -800,12 +777,10 @@ public class SettingsActivity extends Activity {
         setSwitchCheckedSilently(mSwitchFluidCloud, spCapsule.getBoolean("enable_fluid_cloud", true), mFluidCloudChangeListener);
         setSwitchCheckedSilently(mSwitchCompletionAlert, spCapsule.getBoolean("enable_completion_alert", true), mCompletionAlertChangeListener);
         setSwitchCheckedSilently(mSwitchGlowFrame, spCapsule.getBoolean("enable_glow_frame", true), mGlowFrameChangeListener);
-        setSwitchCheckedSilently(mSwitchAutoStandby, spCapsule.getBoolean("enable_auto_standby", true), mAutoStandbyChangeListener);
 
         SharedPreferences spAuth = getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE);
         setSwitchCheckedSilently(mSwitchTranslucentTheme, spAuth.getBoolean("enable_translucent_theme", true), mTranslucentThemeChangeListener);
         setSwitchCheckedSilently(mSwitchFloatingWhale, spAuth.getBoolean("enable_floating_whale", true), mFloatingWhaleChangeListener);
-        setSwitchCheckedSilently(mSwitchKeyboardAssist, spAuth.getBoolean("enable_keyboard_assist", true), mKeyboardAssistChangeListener);
 
         // Launcher Icon
         try {

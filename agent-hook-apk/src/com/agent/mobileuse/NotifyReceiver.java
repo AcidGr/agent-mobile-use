@@ -25,6 +25,7 @@ public class NotifyReceiver extends BroadcastReceiver {
     public static final String ACTION_HANDOFF = "com.agent.mobileuse.ACTION_HANDOFF";
 
     public static final String CHANNEL_ID = "dsh_agent_completed";
+    public static final String CHANNEL_ID_SILENT = "dsh_agent_completed_silent";
     public static final String CHANNEL_NAME = "DeepSeek Agent 任务完成";
     public static final String DEFAULT_TAG = "dsh_agent";
     public static final int DEFAULT_ID = 2020;
@@ -139,35 +140,49 @@ public class NotifyReceiver extends BroadcastReceiver {
     }
 
     public static void ensureChannel(NotificationManager nm) {
+        ensureChannel(nm, false);
+    }
+
+    public static void ensureChannel(NotificationManager nm, boolean silent) {
         if (Build.VERSION.SDK_INT >= 26) {
+            String chId = silent ? CHANNEL_ID_SILENT : CHANNEL_ID;
+            String chName = silent ? (CHANNEL_NAME + " (静音)") : CHANNEL_NAME;
             try {
                 Class<?> channelClass = Class.forName("android.app.NotificationChannel");
                 Constructor<?> ctor = channelClass.getConstructor(String.class, CharSequence.class, int.class);
-                // IMPORTANCE_HIGH = 4 (Heads-up banner notification with sound and vibration)
-                Object channel = ctor.newInstance(CHANNEL_ID, CHANNEL_NAME, 4);
+                // silent: IMPORTANCE_DEFAULT = 3 (Displays banner/fluid cloud without audio/vibration)
+                // non-silent: IMPORTANCE_HIGH = 4 (Heads-up banner notification with sound and vibration)
+                Object channel = ctor.newInstance(chId, chName, silent ? 3 : 4);
 
                 Method setDesc = channelClass.getMethod("setDescription", String.class);
                 setDesc.invoke(channel, "DeepSeek Harness Agent 任务全部完成提醒");
 
                 Method enableLights = channelClass.getMethod("enableLights", boolean.class);
-                enableLights.invoke(channel, true);
+                enableLights.invoke(channel, !silent);
 
                 Method enableVibration = channelClass.getMethod("enableVibration", boolean.class);
-                enableVibration.invoke(channel, true);
+                enableVibration.invoke(channel, !silent);
 
-                try {
-                    AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                        .build();
-                    Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                    Method setSound = channelClass.getMethod("setSound", Uri.class, AudioAttributes.class);
-                    setSound.invoke(channel, soundUri, audioAttributes);
-                } catch (Throwable ignored) {}
+                if (!silent) {
+                    try {
+                        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .build();
+                        Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                        Method setSound = channelClass.getMethod("setSound", Uri.class, AudioAttributes.class);
+                        setSound.invoke(channel, soundUri, audioAttributes);
+                    } catch (Throwable ignored) {}
+                } else {
+                    try {
+                        Method setSound = channelClass.getMethod("setSound", Uri.class, AudioAttributes.class);
+                        setSound.invoke(channel, null, null);
+                    } catch (Throwable ignored) {}
+                }
 
                 Method createMethod = nm.getClass().getMethod("createNotificationChannel", channelClass);
                 createMethod.invoke(nm, channel);
-                Log.d(TAG, "NotificationChannel created/ensured: " + CHANNEL_ID);
+                Log.d(TAG, "NotificationChannel created/ensured: " + chId);
             } catch (Throwable t) {
                 Log.w(TAG, "ensureChannel reflection warning: " + t.getMessage());
             }
@@ -208,7 +223,12 @@ public class NotifyReceiver extends BroadcastReceiver {
                                                  String title, String sessionTitle, String content,
                                                  String sessionId) {
         try {
-            ensureChannel(nm);
+            // Personalization settings
+            android.content.SharedPreferences sp = context.getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            boolean enableFluidCloud = sp.getBoolean("enable_fluid_cloud", true);
+            boolean enableAlert = sp.getBoolean("enable_completion_alert", true);
+
+            ensureChannel(nm, !enableAlert);
 
             // Record completed session ID so running state of same session can auto-dismiss it
             if (sessionId != null && !sessionId.isEmpty()) {
@@ -222,7 +242,7 @@ public class NotifyReceiver extends BroadcastReceiver {
             if (Build.VERSION.SDK_INT >= 26) {
                 try {
                     Method setChannelMethod = builder.getClass().getMethod("setChannelId", String.class);
-                    setChannelMethod.invoke(builder, CHANNEL_ID);
+                    setChannelMethod.invoke(builder, enableAlert ? CHANNEL_ID : CHANNEL_ID_SILENT);
                 } catch (Throwable t) {
                     Log.w(TAG, "setChannelId reflection warning: " + t.getMessage());
                 }
@@ -251,11 +271,6 @@ public class NotifyReceiver extends BroadcastReceiver {
             bigStyle.bigText(parseCleanHtml(cleanContent));
             builder.setStyle(bigStyle);
 
-            // Personalization settings
-            android.content.SharedPreferences sp = context.getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
-            boolean enableFluidCloud = sp.getBoolean("enable_fluid_cloud", true);
-            boolean enableAlert = sp.getBoolean("enable_completion_alert", true);
-
             // Set SmallIcon and LargeIcon to transparent vector Cyber Checkmark
             try {
                 Bitmap checkIcon = createCyberCheckmarkBitmap(192);
@@ -280,6 +295,12 @@ public class NotifyReceiver extends BroadcastReceiver {
                 builder.setDefaults(Notification.DEFAULT_ALL);
             } else {
                 builder.setDefaults(0);
+                builder.setSound(null);
+                builder.setVibrate(null);
+                try {
+                    Method setSilent = builder.getClass().getMethod("setNotificationSilent");
+                    setSilent.invoke(builder);
+                } catch (Throwable ignored) {}
             }
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)

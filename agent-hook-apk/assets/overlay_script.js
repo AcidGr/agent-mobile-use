@@ -236,37 +236,7 @@
     };
     document.addEventListener("click", onSidebarItemClick, false);
 
-    // 5. Scroll chat to bottom on composer focus
-    var onComposerFocus = function (e) {
-      var currentCfg = window.__DSH_MOBILE_CONFIG__ || {};
-      if (currentCfg.enableKeyboardAssist === false) return;
-      var target = e.target;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || (target.closest && target.closest('[data-composer-card], [class*="_card"]')))) {
-        scrollChatToBottom();
-        setTimeout(scrollChatToBottom, 100);
-        setTimeout(scrollChatToBottom, 250);
-        setTimeout(scrollChatToBottom, 400);
-      }
-    };
-    document.addEventListener("focusin", onComposerFocus, true);
-
-    // 6. Viewport resize listener
-    var onViewportResize = function () {
-      var currentCfg = window.__DSH_MOBILE_CONFIG__ || {};
-      if (currentCfg.enableKeyboardAssist === false) return;
-      var active = document.activeElement;
-      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable || (active.closest && active.closest('[data-composer-card], [class*="_card"]')))) {
-        scrollChatToBottom();
-        setTimeout(scrollChatToBottom, 100);
-        setTimeout(scrollChatToBottom, 250);
-      }
-    };
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", onViewportResize);
-    }
-    window.addEventListener("resize", onViewportResize);
-
-    // 7. Periodic session reporting to OverlayBridge
+    // 5. Periodic session reporting to OverlayBridge
     setInterval(function() {
       try {
         var raw = localStorage.getItem('dsh.sessions.current');

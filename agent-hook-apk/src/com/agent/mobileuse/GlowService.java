@@ -390,6 +390,15 @@ public class GlowService extends Service {
                     promoteToForeground(savedMode, savedSid, savedTitle);
                 }
             } catch (Throwable ignored) {}
+        } else if ("SHOW_GLOW".equals(action)) {
+            try {
+                android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+                if ("FOREGROUND".equals(sp.getString("mode", ""))) {
+                    showGlow();
+                }
+            } catch (Throwable ignored) {}
+        } else if ("HIDE_GLOW".equals(action)) {
+            hideGlow();
         } else if ("STOP".equals(action)) {
             try {
                 android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
@@ -409,6 +418,11 @@ public class GlowService extends Service {
 
     private void showGlow() {
         if (mIsShowing) return;
+
+        try {
+            android.content.SharedPreferences sp = getSharedPreferences("agent_capsule_state", Context.MODE_PRIVATE);
+            if (!sp.getBoolean("enable_glow_frame", true)) return;
+        } catch (Throwable ignored) {}
 
         try {
             mWindowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);

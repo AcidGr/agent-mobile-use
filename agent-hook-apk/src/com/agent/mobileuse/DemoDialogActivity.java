@@ -561,7 +561,6 @@ public class DemoDialogActivity extends Activity {
             SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
             boolean enableTranslucent = sp.getBoolean("enable_translucent_theme", true);
             boolean enableWhale = sp.getBoolean("enable_floating_whale", true);
-            boolean enableKbAssist = sp.getBoolean("enable_keyboard_assist", true);
 
             byte[] cssBytes = enableTranslucent ? getOverlayCssBytes() : new byte[0];
             byte[] jsBytes = getOverlayJsBytes();
@@ -574,8 +573,7 @@ public class DemoDialogActivity extends Activity {
             sb.append("  try {");
             sb.append("    window.__DSH_MOBILE_CONFIG__ = {");
             sb.append("      enableTranslucent: ").append(enableTranslucent).append(",");
-            sb.append("      enableWhale: ").append(enableWhale).append(",");
-            sb.append("      enableKeyboardAssist: ").append(enableKbAssist);
+            sb.append("      enableWhale: ").append(enableWhale);
             sb.append("    };");
             if (enableTranslucent) {
                 sb.append("    document.documentElement.setAttribute('data-dsh-overlay', 'true');");
