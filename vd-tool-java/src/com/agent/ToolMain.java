@@ -270,6 +270,20 @@ public class ToolMain {
      */
     private static boolean isSystemUiWindow(Object win, java.util.Set<String> chromeTitles,
                                             AccessibilityNodeInfo root) {
+        // 0. Universal window type classification (indiscriminate non-app window filtering):
+        //    TYPE_APPLICATION = 1, TYPE_INPUT_METHOD = 2 are legitimate interactive windows.
+        //    TYPE_SYSTEM = 3, TYPE_ACCESSIBILITY_OVERLAY = 4, or OEM private overlay types (>= 2000)
+        //    are non-app system chrome / assistive floating panels.
+        if (win != null) {
+            try {
+                int type = (Integer) win.getClass().getMethod("getType").invoke(win);
+                if (type == 3 || type == 4 || type == 5 || type >= 2000) {
+                    return true;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
         // 1. The window's own owner package, where the platform exposes one.
         try {
             CharSequence pkg = (CharSequence) win.getClass()
@@ -626,9 +640,10 @@ public class ToolMain {
                         int displayId = tokens.length > 1 ? Integer.parseInt(tokens[1]) : 0;
                         int budgetOverride = tokens.length > 2 && tokens[2].length() > 0
                                 ? Integer.parseInt(tokens[2]) : 0;
-                        boolean dropSystemUi = false;
+                        boolean dropSystemUi = (displayId == 0);
                         for (int ai = 3; ai < tokens.length; ai++) {
                             if ("--no-system-ui".equals(tokens[ai])) dropSystemUi = true;
+                            if ("--with-system-ui".equals(tokens[ai])) dropSystemUi = false;
                         }
                         dumpTreeWithUi(uiAutomation, uiClass, displayId, budgetOverride, dropSystemUi);
                     } else if ("set_value".equals(action) || "set_value_b64".equals(action)) {
@@ -666,7 +681,7 @@ public class ToolMain {
                                 pt = null;
                             }
                             if (pt == null) {
-                                dumpTreeWithUi(uiAutomation, uiClass, displayId, 0, false, false);
+                                dumpTreeWithUi(uiAutomation, uiClass, displayId, 0, (displayId == 0), false);
                                 pt = sLastTargetCoords.get(targetId);
                             }
                             if (pt != null) {
