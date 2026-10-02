@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -55,7 +56,7 @@ public class SettingsActivity extends Activity {
     private int mCurrentTab = 0;
 
     // Header Views
-    private TextView mTvHeaderSubtitle;
+    private TextView mTvHeaderTitle;
 
     // Tab Icon Views
     private TabIconView mTabIcon0;
@@ -281,19 +282,12 @@ public class SettingsActivity extends Activity {
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
         titleCol.setLayoutParams(titleLp);
 
-        TextView title = new TextView(this);
-        title.setText("Agent Mobile 控制中心");
-        title.setTextSize(15);
-        title.setTextColor(Color.parseColor("#00D2FF"));
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        titleCol.addView(title);
-
-        mTvHeaderSubtitle = new TextView(this);
-        mTvHeaderSubtitle.setText("基本信息 / 监控");
-        mTvHeaderSubtitle.setTextSize(11);
-        mTvHeaderSubtitle.setTextColor(Color.parseColor("#8B949E"));
-        mTvHeaderSubtitle.setPadding(0, dp(1), 0, 0);
-        titleCol.addView(mTvHeaderSubtitle);
+        mTvHeaderTitle = new TextView(this);
+        mTvHeaderTitle.setText("基本信息");
+        mTvHeaderTitle.setTextSize(17);
+        mTvHeaderTitle.setTextColor(Color.parseColor("#00D2FF"));
+        mTvHeaderTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        titleCol.addView(mTvHeaderTitle);
 
         headerContent.addView(titleCol);
 
@@ -389,13 +383,13 @@ public class SettingsActivity extends Activity {
         if (mTab1Container != null) mTab1Container.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
         if (mTab2Container != null) mTab2Container.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
 
-        if (mTvHeaderSubtitle != null) {
+        if (mTvHeaderTitle != null) {
             if (index == 0) {
-                mTvHeaderSubtitle.setText("基本信息 / 监控");
+                mTvHeaderTitle.setText("基本信息");
             } else if (index == 1) {
-                mTvHeaderSubtitle.setText("DSH 设置 / 凭据");
+                mTvHeaderTitle.setText("DSH设置");
             } else {
-                mTvHeaderSubtitle.setText("副屏设置 / 环境");
+                mTvHeaderTitle.setText("副屏设置");
             }
         }
     }
@@ -734,7 +728,28 @@ public class SettingsActivity extends Activity {
         return tvVal;
     }
 
+    private void styleGreenSwitch(Switch sw) {
+        if (sw == null) return;
+        int[][] states = new int[][] {
+            new int[] { android.R.attr.state_checked },
+            new int[] { -android.R.attr.state_checked }
+        };
+        // Thumb: ON is vivid cyber/Android green (#3FB950), OFF is standard light gray (#D1D5DB)
+        int[] thumbColors = new int[] {
+            Color.parseColor("#3FB950"),
+            Color.parseColor("#D1D5DB")
+        };
+        // Track: ON is semi-transparent green (#803FB950), OFF is standard dark gray (#374151)
+        int[] trackColors = new int[] {
+            Color.parseColor("#803FB950"),
+            Color.parseColor("#374151")
+        };
+        sw.setThumbTintList(new ColorStateList(states, thumbColors));
+        sw.setTrackTintList(new ColorStateList(states, trackColors));
+    }
+
     private LinearLayout createSwitchRow(String title, Switch sw) {
+        styleGreenSwitch(sw);
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
