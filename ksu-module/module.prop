@@ -1,6 +1,6 @@
 id=agent_mobile_use
 name=Agent Mobile Sandbox & Tools
-version=0.8.0-alpha
-versionCode=800
+version=0.8.5-alpha
+versionCode=805
 author=酸小明
 description=工业级后台独立虚拟副屏与全能 Mobile Use 最终完全体 (多机型通用适配、下拉控制中心快捷磁贴唤出沉浸Web控制台、动态Cookie免密鉴权、Display状态驱动自愈点灯、前后台无缝切换、REST API、主屏100%隐形静默)

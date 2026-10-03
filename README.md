@@ -12,7 +12,7 @@
 通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度与输入法隔离、以及免软键盘弹窗的确定性无障碍文字注入，为大模型 Agent、自动化测试系统及远程控制脚本提供第一层设备操纵能力。
 
 > ⚠️ **版本说明（SemVer 标准化）**：  
-> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.0-alpha`**（KSU 模块 versionCode: `800`）。全面实装了纯原生极客暗黑风的 **Agent Mobile 控制中心与配置中心 (`SettingsActivity`)**、三栏纯几何矢量底栏、流体云注销撕裂热切换、毛玻璃透明透视/纯黑实色双模主题切换，以及基于 3080 端口 Remote RPC 的 DSH 动态版本握手机制。
+> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.5-alpha`**（KSU 模块 versionCode: `805`）。全面实装了纯原生极客暗黑风的 **Agent Mobile 控制中心与配置中心 (`SettingsActivity`)**、三栏纯几何矢量底栏、流体云注销撕裂热切换、毛玻璃透明透视/纯黑实色双模主题切换，以及基于 3080 端口 Remote RPC 的 DSH 动态版本握手机制。
 
 ---
 
@@ -159,7 +159,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载最新的刷机包：
-   **`agent-mobile-use-ksu-v0.8.0-alpha.zip`**
+   **`agent-mobile-use-ksu-v0.8.5-alpha.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -184,8 +184,8 @@
 
 By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, this project provides a clean foundation for LLM Agents and automated systems.
 
-> ⚠️ **Release Notice (v0.8.0-alpha)**:  
-> Current active release is **`v0.8.0-alpha`** (KSU module versionCode: `800`). Features the brand new **Agent Mobile Control & Settings Center (`SettingsActivity`)**, 3-tab vector bottom navigation, fluid cloud lifecycle teardown toggle, translucent blur vs. pure black theme switcher, and network-based DSH version RPC discovery.
+> ⚠️ **Release Notice (v0.8.5-alpha)**:  
+> Current active release is **`v0.8.5-alpha`** (KSU module versionCode: `805`). Features the brand new **Agent Mobile Control & Settings Center (`SettingsActivity`)**, 3-tab vector bottom navigation, fluid cloud lifecycle teardown toggle, translucent blur vs. pure black theme switcher, and network-based DSH version RPC discovery.
 
 ---
 
