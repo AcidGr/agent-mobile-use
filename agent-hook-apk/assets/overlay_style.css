@@ -850,9 +850,18 @@ html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] > div > [cl
   word-break: break-word !important;
   box-sizing: border-box !important;
 }
-/* When inside a collapsed turn-process, hide the process member completely so no hollow artifacts appear */
-html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"][data-turn-process-hidden] {
+/* When inside a collapsed turn-process, hide all process members completely so no hollow artifacts appear */
+html[data-dsh-overlay="true"] [hidden],
+html[data-dsh-overlay="true"] [data-turn-process-hidden],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"][data-turn-process-hidden],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"][data-turn-process-hidden],
+html[data-dsh-overlay="true"] [data-step-process][hidden],
+html[data-dsh-overlay="true"] [data-step-process][data-turn-process-hidden] {
   display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
 }
 /* If assistant-step contains ONLY a thinking block (no dialogue text), strip the giant bubble wrapping so it becomes a sleek pill */
 html[data-dsh-overlay="true"] [data-chat-flow-kind="assistant-step"] [class*="_root"]:has(> [class*="_body"] > [data-variant="think"]:only-child),
@@ -1138,6 +1147,17 @@ html[data-dsh-overlay="true"] [data-step-process-body] {
   max-width: 100% !important;
   padding: 0 !important;
   margin-top: 4px !important;
+}
+/* Guarantee collapsed step-process and tool-call containers are fully collapsed */
+html[data-dsh-overlay="true"] [data-step-process][hidden],
+html[data-dsh-overlay="true"] [data-step-process][data-turn-process-hidden],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"][data-turn-process-hidden],
+html[data-dsh-overlay="true"] [data-chat-flow-kind="tool-call"][hidden] {
+  display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
 }
 /* Thinking status: clean and visible */
 html[data-dsh-overlay="true"] [class*="_turnStatus"] {
