@@ -770,6 +770,12 @@ func switchModeWithMigration(target string) map[string]interface{} {
 		reconcileVdAudio(vdDid)
 	} else if newMode == "foreground" || newMode == "idle" {
 		unmuteAllAudio()
+		if newMode == "idle" && vdDid > 0 {
+			baseW, baseH, baseDpi := detectScreenMetrics()
+			if st.Width > st.Height {
+				_ = resizeVirtualDisplay(baseW, baseH, baseDpi)
+			}
+		}
 	}
 
 	msg := fmt.Sprintf("Current mode is %s (Target Display %d)", newMode, targetDid)
@@ -942,7 +948,84 @@ func detectScreenMetrics() (int, int, int) {
 			}
 		}
 	}
+	// 强制：默认基准规格永远是标准竖屏 (width < height)，且按 16 字节硬件编码安全对齐
+	if w > h {
+		w, h = h, w
+	}
+	if w > 16 {
+		w = (w / 16) * 16
+	}
+	if h > 16 {
+		h = (h / 16) * 16
+	}
 	return w, h, dpi
+}
+
+func resizeVirtualDisplay(targetW, targetH, targetDpi int) error {
+	if targetW <= 0 || targetH <= 0 {
+		return fmt.Errorf("invalid dimensions: %dx%d", targetW, targetH)
+	}
+	if targetW > 16 {
+		targetW = (targetW / 16) * 16
+	}
+	if targetH > 16 {
+		targetH = (targetH / 16) * 16
+	}
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:3072", 1*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect daemon ctrl on 3072: %v", err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "resize %d %d %d\n", targetW, targetH, targetDpi)
+	reader := bufio.NewReader(conn)
+	resp, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read resize response: %v", err)
+	}
+	trimmed := strings.TrimSpace(resp)
+	if !strings.HasPrefix(trimmed, "OK") && !strings.HasPrefix(trimmed, "ALREADY_SET") {
+		return fmt.Errorf("daemon error: %s", trimmed)
+	}
+	return nil
+}
+
+func isKnownLandscapeApp(pkg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(pkg))
+	if strings.Contains(lower, "sgame") || strings.Contains(lower, "mihoyo") ||
+		strings.Contains(lower, "genshin") || strings.Contains(lower, "pubg") ||
+		strings.Contains(lower, "peace") || strings.Contains(lower, "netease") ||
+		strings.Contains(lower, "game") || strings.Contains(lower, "unity") {
+		return true
+	}
+	return false
+}
+
+func ensureAppOrientation(pkg string) {
+	st := getStatus()
+	if st.Status != "running" || st.Width <= 0 || st.Height <= 0 {
+		return
+	}
+	baseW, baseH, baseDpi := detectScreenMetrics()
+	portraitW, portraitH := baseW, baseH
+	landscapeW, landscapeH := baseH, baseW
+	dpi := st.DPI
+	if dpi <= 0 {
+		dpi = baseDpi
+	}
+
+	if isKnownLandscapeApp(pkg) {
+		if st.Width < st.Height {
+			log.Printf("[OrientationGuard] Launching landscape app '%s', resizing display to %dx%d", pkg, landscapeW, landscapeH)
+			_ = resizeVirtualDisplay(landscapeW, landscapeH, dpi)
+			time.Sleep(150 * time.Millisecond)
+		}
+	} else {
+		if st.Width > st.Height {
+			log.Printf("[OrientationGuard] Launching portrait app '%s', resizing display to %dx%d", pkg, portraitW, portraitH)
+			_ = resizeVirtualDisplay(portraitW, portraitH, dpi)
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
 }
 
 type StartOptions struct {
@@ -1926,6 +2009,54 @@ func main() {
 		json.NewEncoder(w).Encode(stopVirtualDisplay())
 	})
 
+	mux.HandleFunc("/api/resize", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		st := getStatus()
+		if st.Status != "running" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Virtual display not running"})
+			return
+		}
+		baseW, baseH, baseDpi := detectScreenMetrics()
+		reqW, reqH, reqDpi := baseW, baseH, baseDpi
+		q := r.URL.Query()
+		ori := strings.ToLower(strings.TrimSpace(q.Get("orientation")))
+		if r.Body != nil {
+			var p struct {
+				Width       *int   `json:"width"`
+				Height      *int   `json:"height"`
+				Dpi         *int   `json:"dpi"`
+				Orientation string `json:"orientation"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
+				if p.Orientation != "" {
+					ori = strings.ToLower(strings.TrimSpace(p.Orientation))
+				}
+				if p.Width != nil && *p.Width > 0 {
+					reqW = *p.Width
+				}
+				if p.Height != nil && *p.Height > 0 {
+					reqH = *p.Height
+				}
+				if p.Dpi != nil && *p.Dpi > 0 {
+					reqDpi = *p.Dpi
+				}
+			}
+		}
+		if ori == "landscape" {
+			reqW, reqH = baseH, baseW
+		} else if ori == "portrait" {
+			reqW, reqH = baseW, baseH
+		}
+		err := resizeVirtualDisplay(reqW, reqH, reqDpi)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "width": reqW, "height": reqH, "dpi": reqDpi})
+	})
+
 	mux.HandleFunc("/api/mode", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -2271,6 +2402,9 @@ func main() {
 			if strings.TrimSpace(rawPkg) == "" {
 				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'launch_app' requires a package name"})
 				return
+			}
+			if targetDid > 0 {
+				ensureAppOrientation(rawPkg)
 			}
 			out, err := executeLaunch(targetDid, rawPkg, p.Activity, p.User)
 			if err != nil {

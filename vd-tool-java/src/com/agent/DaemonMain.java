@@ -146,6 +146,8 @@ public class DaemonMain {
             }
             System.out.println("[AgentDaemon] Stream server ready on 127.0.0.1:3071");
 
+            startCtrlServer(vd);
+
             // Publish status only after the encoder pipeline can accept clients.
             int pid = android.os.Process.myPid();
             writeStatus("running", displayId, pid, sWidth, sHeight, sDpi);
@@ -195,6 +197,76 @@ public class DaemonMain {
     }
 
     private static ServerSocket sStreamServer = null;
+    private static ServerSocket sCtrlServer = null;
+    private static volatile Socket sCurrentStreamClient = null;
+
+    private static void startCtrlServer(final VirtualDisplay vd) {
+        try {
+            sCtrlServer = new ServerSocket();
+            sCtrlServer.setReuseAddress(true);
+            sCtrlServer.bind(new InetSocketAddress("127.0.0.1", 3072));
+            Thread t = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    System.out.println("[AgentDaemon] Control server listening on 127.0.0.1:3072");
+                    while (!sCtrlServer.isClosed()) {
+                        try {
+                            Socket sock = sCtrlServer.accept();
+                            handleCtrlClient(vd, sock);
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }, "CtrlServerThread");
+            t.setDaemon(true);
+            t.start();
+        } catch (Throwable t) {
+            System.err.println("[AgentDaemon] Failed to bind ctrl server on 3072: " + t.getMessage());
+        }
+    }
+
+    private static void handleCtrlClient(VirtualDisplay vd, Socket sock) {
+        try {
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(sock.getInputStream()));
+            java.io.PrintWriter pw = new java.io.PrintWriter(sock.getOutputStream(), true);
+            String line = br.readLine();
+            if (line != null && line.startsWith("resize ")) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length >= 4) {
+                    int newW = Integer.parseInt(parts[1]);
+                    int newH = Integer.parseInt(parts[2]);
+                    int newDpi = Integer.parseInt(parts[3]);
+                    if (newW > 16) newW = (newW / 16) * 16;
+                    if (newH > 16) newH = (newH / 16) * 16;
+
+                    if (newW == sWidth && newH == sHeight && newDpi == sDpi) {
+                        pw.println("ALREADY_SET " + sWidth + " " + sHeight + " " + sDpi);
+                    } else {
+                        System.out.println("[AgentDaemon] Resizing VirtualDisplay to " + newW + "x" + newH + " @ " + newDpi);
+                        sWidth = newW;
+                        sHeight = newH;
+                        sDpi = newDpi;
+                        vd.resize(sWidth, sHeight, sDpi);
+                        int did = vd.getDisplay() != null ? vd.getDisplay().getDisplayId() : -1;
+                        writeStatus("running", did, android.os.Process.myPid(), sWidth, sHeight, sDpi);
+
+                        // Close active stream client so encoder cleanly restarts with new dimensions
+                        Socket cur = sCurrentStreamClient;
+                        if (cur != null && !cur.isClosed()) {
+                            try { cur.close(); } catch (Throwable ignored) {}
+                        }
+                        pw.println("OK " + sWidth + " " + sHeight + " " + sDpi);
+                    }
+                } else {
+                    pw.println("ERR bad args");
+                }
+            } else {
+                pw.println("ERR unknown command");
+            }
+            sock.close();
+        } catch (Throwable err) {
+            try { sock.close(); } catch (Throwable ignored) {}
+        }
+    }
 
     /**
      * Binds the internal stream listener on 127.0.0.1:3071 and starts the accept loop.
@@ -260,6 +332,11 @@ public class DaemonMain {
     }
 
     private static void stopStreamServer() {
+        if (sCtrlServer != null) {
+            try {
+                sCtrlServer.close();
+            } catch (Throwable ignored) {}
+        }
         if (sStreamServer != null) {
             try {
                 sStreamServer.close();
@@ -268,6 +345,7 @@ public class DaemonMain {
     }
 
     private static void handleStreamClient(VirtualDisplay vd, ImageReader reader, Socket client) throws Exception {
+        sCurrentStreamClient = client;
         MediaCodec codec = null;
         Surface encoderSurface = null;
         try {
@@ -316,6 +394,9 @@ public class DaemonMain {
                 }
             }
         } finally {
+            if (sCurrentStreamClient == client) {
+                sCurrentStreamClient = null;
+            }
             // Restore surface back to ImageReader
             try {
                 vd.setSurface(reader.getSurface());
