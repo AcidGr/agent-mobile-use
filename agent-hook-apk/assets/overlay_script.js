@@ -1,4 +1,5 @@
 (function() {
+  if (window.location.port === "3070") return;
   if (window.__DSH_MOBILE_OVERLAY_INITIALIZED__) return;
   window.__DSH_MOBILE_OVERLAY_INITIALIZED__ = true;
 

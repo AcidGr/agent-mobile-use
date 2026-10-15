@@ -891,11 +891,115 @@ func getSfDisplayID() string {
 	return ""
 }
 
-func startVirtualDisplay() StatusResp {
-	st := getStatus()
-	if st.Status == "running" {
-		return st
+func detectScreenMetrics() (int, int, int) {
+	w, h, dpi := 1080, 2400, 420
+	outSize, err := exec.Command("/system/bin/wm", "size").Output()
+	if err == nil {
+		lines := strings.Split(string(outSize), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "Physical size:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					wh := strings.Split(parts[2], "x")
+					if len(wh) == 2 {
+						pw, _ := strconv.Atoi(wh[0])
+						ph, _ := strconv.Atoi(wh[1])
+						if pw > 0 && ph > 0 {
+							w, h = pw, ph
+						}
+					}
+				}
+			}
+		}
 	}
+	outDpi, err := exec.Command("/system/bin/wm", "density").Output()
+	if err == nil {
+		lines := strings.Split(string(outDpi), "\n")
+		hasOverride := false
+		for _, line := range lines {
+			if strings.Contains(line, "Override density:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					pd, _ := strconv.Atoi(parts[2])
+					if pd > 0 {
+						dpi = pd
+						hasOverride = true
+					}
+				}
+			}
+		}
+		if !hasOverride {
+			for _, line := range lines {
+				if strings.Contains(line, "Physical density:") {
+					parts := strings.Fields(line)
+					if len(parts) >= 3 {
+						pd, _ := strconv.Atoi(parts[2])
+						if pd > 0 {
+							dpi = pd
+						}
+					}
+				}
+			}
+		}
+	}
+	return w, h, dpi
+}
+
+type StartOptions struct {
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Dpi         int    `json:"dpi"`
+	Orientation string `json:"orientation"`
+}
+
+func startVirtualDisplay(opts ...StartOptions) StatusResp {
+	st := getStatus()
+
+	baseW, baseH, baseDpi := detectScreenMetrics()
+	reqW, reqH, reqDpi := baseW, baseH, baseDpi
+
+	var opt StartOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	if opt.Width > 0 {
+		reqW = opt.Width
+	}
+	if opt.Height > 0 {
+		reqH = opt.Height
+	}
+	if opt.Dpi > 0 {
+		reqDpi = opt.Dpi
+	}
+
+	ori := strings.ToLower(strings.TrimSpace(opt.Orientation))
+	if ori == "landscape" {
+		if reqW < reqH {
+			reqW, reqH = reqH, reqW
+		}
+	} else if ori == "portrait" {
+		if reqW > reqH {
+			reqW, reqH = reqH, reqW
+		}
+	}
+
+	if reqW > 16 {
+		reqW = (reqW / 16) * 16
+	}
+	if reqH > 16 {
+		reqH = (reqH / 16) * 16
+	}
+
+	if st.Status == "running" {
+		if st.Width == reqW && st.Height == reqH && (reqDpi == 0 || st.DPI == reqDpi) {
+			return st
+		}
+		log.Printf("[start] Restarting virtual display to apply new metrics: %dx%d @ %d (was %dx%d @ %d)",
+			reqW, reqH, reqDpi, st.Width, st.Height, st.DPI)
+		stopVirtualDisplay()
+	}
+
 	_ = os.Remove(stopSignal)
 
 	runScript := "/data/adb/modules/agent_mobile_use/bin/run_daemon.sh"
@@ -904,7 +1008,7 @@ func startVirtualDisplay() StatusResp {
 	}
 
 	logFile, _ := os.OpenFile("/data/local/tmp/daemon.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	cmd := exec.Command("/system/bin/sh", runScript)
+	cmd := exec.Command("/system/bin/sh", runScript, strconv.Itoa(reqW), strconv.Itoa(reqH), strconv.Itoa(reqDpi))
 	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -1774,7 +1878,46 @@ func main() {
 	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(startVirtualDisplay())
+
+		var opt StartOptions
+		q := r.URL.Query()
+		if v := q.Get("width"); v != "" {
+			opt.Width, _ = strconv.Atoi(v)
+		}
+		if v := q.Get("height"); v != "" {
+			opt.Height, _ = strconv.Atoi(v)
+		}
+		if v := q.Get("dpi"); v != "" {
+			opt.Dpi, _ = strconv.Atoi(v)
+		}
+		if v := q.Get("orientation"); v != "" {
+			opt.Orientation = v
+		}
+
+		if r.Body != nil {
+			var bodyOpt struct {
+				Width       *int   `json:"width"`
+				Height      *int   `json:"height"`
+				Dpi         *int   `json:"dpi"`
+				Orientation string `json:"orientation"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&bodyOpt); err == nil {
+				if bodyOpt.Width != nil && *bodyOpt.Width > 0 {
+					opt.Width = *bodyOpt.Width
+				}
+				if bodyOpt.Height != nil && *bodyOpt.Height > 0 {
+					opt.Height = *bodyOpt.Height
+				}
+				if bodyOpt.Dpi != nil && *bodyOpt.Dpi > 0 {
+					opt.Dpi = *bodyOpt.Dpi
+				}
+				if bodyOpt.Orientation != "" {
+					opt.Orientation = bodyOpt.Orientation
+				}
+			}
+		}
+
+		json.NewEncoder(w).Encode(startVirtualDisplay(opt))
 	})
 
 	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {

@@ -373,6 +373,9 @@ public class DemoDialogActivity extends Activity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 Log.i(TAG, "onPageStarted: " + url);
+                if (url != null && url.contains(":3070")) {
+                    return;
+                }
                 SharedPreferences spTheme = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
                 boolean isTrans = spTheme.getBoolean("enable_translucent_theme", true);
                 if (isTrans) {
@@ -402,6 +405,12 @@ public class DemoDialogActivity extends Activity {
                 super.onPageFinished(view, url);
                 Log.i(TAG, "onPageFinished: " + url);
                 view.clearHistory();
+                if (url != null && url.contains(":3070")) {
+                    if (mWebView != null && mWebView.getAlpha() < 1f) {
+                        mWebView.setAlpha(1f);
+                    }
+                    return;
+                }
                 injectMobileOverlay(view);
 
                 // Diagnostic: inspect document title and body child count
@@ -558,6 +567,13 @@ public class DemoDialogActivity extends Activity {
     private void injectMobileOverlay(WebView view) {
         if (view == null) return;
         try {
+            String curUrl = view.getUrl();
+            if (curUrl != null && curUrl.contains(":3070")) {
+                if (mWebView != null && mWebView.getAlpha() < 1f) {
+                    mWebView.setAlpha(1f);
+                }
+                return;
+            }
             SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
             boolean enableTranslucent = sp.getBoolean("enable_translucent_theme", true);
             boolean enableWhale = sp.getBoolean("enable_floating_whale", true);

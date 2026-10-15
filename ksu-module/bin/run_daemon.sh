@@ -24,15 +24,23 @@ if [ -n "$PHYS_SIZE" ]; then
     fi
 fi
 
-PHYS_DPI=$(/system/bin/wm density 2>/dev/null | grep "Physical density:" | awk '{print $3}')
-if [ -n "$PHYS_DPI" ]; then
-    DPI="$PHYS_DPI"
+# Fix Issue #14: Prefer Override density over Physical density
+OVERRIDE_DPI=$(/system/bin/wm density 2>/dev/null | grep "Override density:" | awk '{print $3}')
+if [ -n "$OVERRIDE_DPI" ]; then
+    DPI="$OVERRIDE_DPI"
+else
+    PHYS_DPI=$(/system/bin/wm density 2>/dev/null | grep "Physical density:" | awk '{print $3}')
+    if [ -n "$PHYS_DPI" ]; then
+        DPI="$PHYS_DPI"
+    fi
 fi
 
 # Allow override from CLI args if provided
-if [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ]; then
+if [ -n "$1" ] && [ -n "$2" ]; then
     WIDTH="$1"
     HEIGHT="$2"
+fi
+if [ -n "$3" ]; then
     DPI="$3"
 fi
 

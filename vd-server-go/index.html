@@ -34,6 +34,18 @@
             display: none;
             pointer-events: none;
         }
+        #stream-canvas.rotated-landscape {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100vh !important;
+            height: 100vw !important;
+            max-width: none !important;
+            max-height: none !important;
+            transform: translate(-50%, -50%) rotate(90deg);
+            transform-origin: center center;
+            object-fit: contain;
+        }
         #empty-tip {
             color: #484f58;
             font-size: 0.95rem;
@@ -51,6 +63,21 @@
             align-items: center;
             gap: 32px;
             pointer-events: auto;
+        }
+        body.mode-rotated .controls {
+            bottom: auto;
+            right: calc(env(safe-area-inset-right, 0px) + 16px);
+            top: 50%;
+            left: auto;
+            transform: translateY(-50%) rotate(90deg);
+            transform-origin: center center;
+            gap: 24px;
+            opacity: 0.35;
+            transition: opacity 0.3s ease;
+        }
+        body.mode-rotated .controls:hover,
+        body.mode-rotated .controls:active {
+            opacity: 0.95;
         }
         .btn-icon {
             width: 44px;
@@ -118,6 +145,16 @@
             color: #3fb950;
             filter: drop-shadow(0 0 10px rgba(63, 185, 80, 0.95)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
         }
+
+        /* 4. 旋转铺满按钮开启态: 天蓝荧光 */
+        .btn-rotate-auto {
+            color: #388bfd;
+            filter: drop-shadow(0 0 10px rgba(56, 139, 253, 0.9)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+        }
+        .btn-rotate-off {
+            color: rgba(255, 255, 255, 0.28);
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+        }
     </style>
 </head>
 <body>
@@ -162,6 +199,13 @@
                 <line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
             </svg>
         </button>
+        <button id="btn-rotate" class="btn-icon btn-rotate-auto" onclick="toggleRotateMode()" title="旋转铺满: 开启 (点击关闭/切换)">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
+                <path d="M4 12a8 8 0 0 1 14.93-4M20 12a8 8 0 0 1-14.93 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <polyline points="19 4 19 8 15 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="5 20 5 16 9 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
     </div>
 
     <script>
@@ -171,6 +215,40 @@
         const toggleEl = document.getElementById('btn-toggle');
         const streamBtn = document.getElementById('btn-stream');
         const audioBtn = document.getElementById('btn-audio');
+        const rotateBtn = document.getElementById('btn-rotate');
+
+        let autoRotate = true;
+        let currentVideoWidth = 0;
+        let currentVideoHeight = 0;
+
+        function toggleRotateMode() {
+            autoRotate = !autoRotate;
+            if (autoRotate) {
+                rotateBtn.className = 'btn-icon btn-rotate-auto';
+                rotateBtn.title = '旋转铺满: 开启 (点击关闭/切换)';
+            } else {
+                rotateBtn.className = 'btn-icon btn-rotate-off';
+                rotateBtn.title = '旋转铺满: 关闭 (点击开启)';
+            }
+            updateOrientation();
+        }
+
+        function updateOrientation() {
+            if (!currentVideoWidth || !currentVideoHeight) return;
+            const isPhonePortrait = window.innerWidth < window.innerHeight;
+            const isVideoLandscape = currentVideoWidth > currentVideoHeight;
+
+            if (autoRotate && isPhonePortrait && isVideoLandscape) {
+                canvasEl.classList.add('rotated-landscape');
+                document.body.classList.add('mode-rotated');
+            } else {
+                canvasEl.classList.remove('rotated-landscape');
+                document.body.classList.remove('mode-rotated');
+            }
+        }
+
+        window.addEventListener('resize', updateOrientation);
+        window.addEventListener('orientationchange', updateOrientation);
 
         let screenState = 'unreachable';
         let toggling = false;
@@ -314,6 +392,9 @@
                     if (canvasEl.width !== frame.displayWidth || canvasEl.height !== frame.displayHeight) {
                         canvasEl.width = frame.displayWidth;
                         canvasEl.height = frame.displayHeight;
+                        currentVideoWidth = frame.displayWidth;
+                        currentVideoHeight = frame.displayHeight;
+                        updateOrientation();
                     }
                     ctx.drawImage(frame, 0, 0);
                     frame.close();
