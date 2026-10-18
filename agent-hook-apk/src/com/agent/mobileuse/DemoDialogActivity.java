@@ -191,6 +191,12 @@ public class DemoDialogActivity extends Activity {
     private ValueAnimator mGlowAnimator;
     private boolean mGlowFinished = false;
     private boolean mPageReady = false;
+    // Set when the Activity is opened from a notification tap. ColorOS plays its capsule-expand
+    // remote transition for that launch, scaling the window up from the notification's position.
+    // The glow is drawn full-screen from frame one, so during that scale-up it looks like a
+    // small rim being stretched instead of light appearing at the screen edges. Skipping the
+    // glow on this path is better than showing it distorted.
+    private boolean mSkipGlow = false;
     private static final long GLOW_DURATION_MS = 1000L;
     private static final long REVEAL_FADE_MS = 240L;
 
@@ -204,6 +210,7 @@ public class DemoDialogActivity extends Activity {
             mTargetUrl = intent.getStringExtra("target_url");
             mTargetSessionId = intent.getStringExtra("session_id");
             if (mTargetSessionId == null) mTargetSessionId = intent.getStringExtra("session");
+            mSkipGlow = intent.getBooleanExtra("skip_glow", false);
         }
 
         mMainHandler = new Handler(Looper.getMainLooper());
@@ -245,7 +252,18 @@ public class DemoDialogActivity extends Activity {
         }
 
         initBaseUI();
-        startEntranceGlow();
+        if (mSkipGlow) {
+            // Opened from a notification tap: ColorOS is about to scale the window out of the
+            // notification, so the glow would be visibly stretched. Mark the entrance as
+            // already finished and let the page reveal as soon as it is ready.
+            mGlowFinished = true;
+            mPageReady = false;
+            if (mGlowOverlay != null) {
+                mGlowOverlay.setVisibility(View.GONE);
+            }
+        } else {
+            startEntranceGlow();
+        }
         loadWebConsole();
     }
 
@@ -260,6 +278,17 @@ public class DemoDialogActivity extends Activity {
                 sid = intent.getStringExtra("session");
             }
             mTargetSessionId = sid;
+            // A notification tap re-targets an already-open console. There is no entrance
+            // animation on this path (the window is already up), so the glow must not replay.
+            if (intent.getBooleanExtra("skip_glow", false)) {
+                mSkipGlow = true;
+                mGlowFinished = true;
+                if (mGlowOverlay != null) mGlowOverlay.setVisibility(View.GONE);
+                if (mGlowAnimator != null) {
+                    mGlowAnimator.cancel();
+                    mGlowAnimator = null;
+                }
+            }
         } else {
             mTargetUrl = null;
             mTargetSessionId = null;

@@ -281,7 +281,11 @@ public class GlowService extends Service {
             } else if ("BACKGROUND".equals(mode)) {
                 // Background: Click pendingIntent -> Open DemoDialogActivity loading http://127.0.0.1:3070/
                 Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
-                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                // NO_ANIMATION is best-effort only; ColorOS runs its capsule-expand remote
+                // transition regardless. skip_glow is what actually avoids the stretched rim.
+                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                consoleIntent.putExtra("skip_glow", true);
                 consoleIntent.putExtra("target_url", "http://127.0.0.1:3070/");
                 if (sid != null && !sid.isEmpty()) {
                     consoleIntent.putExtra("session_id", sid);
@@ -292,7 +296,10 @@ public class GlowService extends Service {
             } else {
                 // Running (idle session active, etc.): Click pendingIntent -> Open DemoDialogActivity (Web Console) targeting specific session!
                 Intent consoleIntent = new Intent(this, DemoDialogActivity.class);
-                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                // NO_ANIMATION: see the BACKGROUND branch above.
+                consoleIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                consoleIntent.putExtra("skip_glow", true);
                 if (sid != null && !sid.isEmpty()) {
                     consoleIntent.putExtra("session_id", sid);
                 }

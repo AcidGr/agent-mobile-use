@@ -305,7 +305,15 @@ public class NotifyReceiver extends BroadcastReceiver {
 
             // Click Jump PendingIntent -> Launch DemoDialogActivity (Action Button Overlay / 灵动坞)
             Intent overlayIntent = new Intent(context, DemoDialogActivity.class);
-            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            // NO_ANIMATION is a best-effort hint; ColorOS still runs its capsule-expand remote
+            // transition on notification taps and the flag does not reach WindowManager. The
+            // real fix is skip_glow below, which stops the full-screen rim from being scaled
+            // up out of the notification.
+            overlayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            // Tapped from a notification: ColorOS animates the window open from the capsule,
+            // so suppress the entrance glow for this launch.
+            overlayIntent.putExtra("skip_glow", true);
             if (sessionId != null && !sessionId.isEmpty()) {
                 overlayIntent.putExtra("session_id", sessionId);
             }
