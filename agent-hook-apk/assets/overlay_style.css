@@ -1,22 +1,15 @@
-@keyframes dsh-edge-breathe-once {
-  0% { box-shadow: inset 0 0 16px 2px rgba(0,210,255,0.15), inset 0 0 4px 1px rgba(0,210,255,0.3); opacity: 0; }
-  20% { opacity: 0.85; }
-  50% { box-shadow: inset 0 0 52px 6px rgba(0,210,255,0.85), inset 0 0 22px 3px rgba(110,70,255,0.9), inset 0 0 6px 2px #fff; opacity: 1; }
-  80% { opacity: 0.75; }
-  100% { box-shadow: inset 0 0 16px 2px rgba(0,210,255,0.1), inset 0 0 4px 1px rgba(0,210,255,0.2); opacity: 0; visibility: hidden; }
-}
+/* The entrance edge glow used to live here as a ::before pseudo-element driven by an
+   @keyframes dsh-edge-breathe-once animation. It was removed because a CSS animation can
+   only start once this stylesheet has been injected — which happens after DSH has loaded
+   past 50% — so the glow always arrived *after* the boot screen instead of covering it.
+   The glow is now drawn natively by DemoDialogActivity.GlowOverlayView, which is visible
+   from the Activity's very first frame and can therefore cover the load.
+   Do NOT reintroduce a ::before glow here: it would play a second time on top of the
+   native one, producing two consecutive flashes. */
 html[data-dsh-overlay="true"],
 html[data-dsh-overlay="true"] body {
   background: transparent !important;
   background-color: transparent !important;
-}
-html[data-dsh-overlay="true"]::before {
-  content: "" !important;
-  position: fixed !important;
-  inset: 0 !important;
-  pointer-events: none !important;
-  z-index: 99999 !important;
-  animation: dsh-edge-breathe-once 1.4s cubic-bezier(0.4, 0, 0.2, 1) 1 forwards !important;
 }
 html[data-dsh-overlay="true"] [class*="_boot"] {
   background: transparent !important;

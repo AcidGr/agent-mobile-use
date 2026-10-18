@@ -1,6 +1,7 @@
 package com.agent.mobileuse;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
@@ -8,7 +9,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -177,6 +181,19 @@ public class DemoDialogActivity extends Activity {
     private String mTargetSessionId = null;
     private String mTargetUrl = null;
 
+    // ── Entrance glow overlay ────────────────────────────────────────────────────
+    // A native edge-glow drawn above the WebView. It exists so the summon animation is
+    // visible from the very first frame of the Activity: the old CSS implementation lived
+    // inside the page and could only start once the WebView had loaded 50% of DSH, which
+    // is why the ugly boot screen appeared first and the glow came last. The centre stays
+    // fully transparent on purpose — whatever is behind the window shows through.
+    private GlowOverlayView mGlowOverlay;
+    private ValueAnimator mGlowAnimator;
+    private boolean mGlowFinished = false;
+    private boolean mPageReady = false;
+    private static final long GLOW_DURATION_MS = 1000L;
+    private static final long REVEAL_FADE_MS = 240L;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -228,6 +245,7 @@ public class DemoDialogActivity extends Activity {
         }
 
         initBaseUI();
+        startEntranceGlow();
         loadWebConsole();
     }
 
@@ -255,6 +273,273 @@ public class DemoDialogActivity extends Activity {
             dp,
             getResources().getDisplayMetrics()
         );
+    }
+
+    // ── Entrance glow lifecycle ──────────────────────────────────────────────────
+
+    /**
+     * Starts the rim glow immediately, before the page has loaded anything.
+     *
+     * The WebView stays at alpha 0 for the whole animation, so the centre of the screen
+     * keeps showing whatever is behind the translucent window (launcher, previous app —
+     * whatever happens to be there). Only the edges light up.
+     */
+    private void startEntranceGlow() {
+        mGlowFinished = false;
+        mPageReady = false;
+        if (mGlowOverlay == null) {
+            mGlowFinished = true;
+            maybeRevealWebView();
+            return;
+        }
+        mGlowOverlay.setVisibility(View.VISIBLE);
+        mGlowOverlay.setAlpha(1f);
+
+        if (mGlowAnimator != null) {
+            mGlowAnimator.cancel();
+            mGlowAnimator = null;
+        }
+        // Mirrors the old CSS keyframes dsh-edge-breathe-once: fade in, peak at the
+        // halfway mark, settle back out.
+        mGlowAnimator = ValueAnimator.ofFloat(0f, 1f);
+        mGlowAnimator.setDuration(GLOW_DURATION_MS);
+        mGlowAnimator.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        mGlowAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator animation) {
+                float p = (float) animation.getAnimatedValue();
+                if (mGlowOverlay != null) {
+                    mGlowOverlay.setProgress(p);
+                }
+            }
+        });
+        mGlowAnimator.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                mGlowFinished = true;
+                if (mGlowOverlay != null) {
+                    mGlowOverlay.setVisibility(View.GONE);
+                }
+                maybeRevealWebView();
+            }
+        });
+        mGlowAnimator.start();
+    }
+
+    /**
+     * Fades the WebView in, but only once both the glow has finished and the page is
+     * actually ready. Whichever is slower wins — that way a slow page never exposes a
+     * half-rendered screen, and a fast page still gets the full glow.
+     */
+    private void maybeRevealWebView() {
+        if (!mGlowFinished || !mPageReady) return;
+        if (mWebView == null) return;
+        if (mWebView.getAlpha() >= 1f) return;
+        mWebView.animate()
+                .alpha(1f)
+                .setDuration(REVEAL_FADE_MS)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .start();
+    }
+
+    /**
+     * The rim glow. Draws three stacked rounded-rect strokes with a blur mask so the
+     * light bleeds inward from the edge, matching the previous CSS inset box-shadow.
+     * The interior is never painted, which is what keeps the middle transparent.
+     */
+    private static class GlowOverlayView extends View {
+        private final Paint mBitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        private final Rect mDstRect = new Rect();
+        private float mProgress = 0f;
+        private float mBand;
+        private float mCorner;
+        private int mW, mH;
+        private Bitmap mGlowBitmap;
+
+        // The CSS being replaced:
+        //   ::before { inset: 0 }
+        //   box-shadow: inset 0 0 52px 6px cyan
+        //               inset 0 0 22px 3px indigo
+        //               inset 0 0  6px 2px white
+        //
+        // An inset box-shadow is, mathematically, "distance from the box edge mapped to a
+        // colour ramp". So the glow is baked into a bitmap by evaluating a signed distance
+        // field per pixel and ramping on it. Two earlier approaches were tried and rejected:
+        //   * four straight bands  -> their ends cross at the corners, giving bright crosses
+        //   * stacked thin strokes -> each stroke's anti-aliased edge shows up as a
+        //                             concentric ring, i.e. visible contour banding
+        // The SDF bitmap has neither problem: one continuous racetrack, smooth falloff.
+        private static final float CORNER_DP = 44f;
+        private static final int DOWNSCALE = 3; // bake at 1/3 resolution, upscale on draw
+        // The rounded rect is inflated past the screen bounds so the glow's own outer edge
+        // never lands inside the visible area. Without this the brightest part of the ramp
+        // sits exactly on the rim, and at the corners the curve cuts inward — leaving thin
+        // uncovered wedges where the screen edge shows through. Overshooting means the light
+        // is already at full strength before it reaches the visible pixels, so every edge and
+        // every corner is covered all the way to the glass.
+        private static final float OVERSHOOT_DP = 16f;
+
+        // Band is measured on the inflated rect, so the part that lies outside the screen
+        // (OVERSHOOT_DP) is never seen. Keeping the band at visible-reach + overshoot means
+        // the on-screen falloff keeps the same length it had before the overshoot existed.
+        private static final float VISIBLE_BAND_DP = 44f;
+
+        GlowOverlayView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        private float dp(float v) {
+            return v * getResources().getDisplayMetrics().density;
+        }
+
+        void setProgress(float p) {
+            mProgress = p;
+            invalidate();
+        }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+            super.onSizeChanged(w, h, oldw, oldh);
+            mW = w;
+            mH = h;
+            mBand = Math.min(dp(VISIBLE_BAND_DP + OVERSHOOT_DP), Math.min(w, h) / 6f);
+            mCorner = Math.min(dp(CORNER_DP), Math.min(w, h) / 2f);
+            bakeGlow();
+        }
+
+        /**
+         * Bakes the rim glow into a bitmap once per size change. Ramp colour at normalised
+         * depth {@code t}: 0 = the screen rim, 1 = the inner edge of the band.
+         */
+        private void bakeGlow() {
+            if (mW <= 0 || mH <= 0 || mBand <= 0f) return;
+
+            int sw = Math.max(1, mW / DOWNSCALE);
+            int sh = Math.max(1, mH / DOWNSCALE);
+            float band = mBand / DOWNSCALE;
+            float radius = Math.max(0f, mCorner / DOWNSCALE);
+            float over = dp(OVERSHOOT_DP) / DOWNSCALE;
+
+            int[] pixels = new int[sw * sh];
+            float hw = sw / 2f;
+            float hh = sh / 2f;
+            // Inflate the rounded rect by `over` so its boundary lies outside the bitmap.
+            // The corner radius grows by the same amount, keeping the curve concentric.
+            float halfW = hw + over;
+            float halfH = hh + over;
+            float rr = Math.min(radius + over, Math.min(halfW, halfH));
+
+            for (int y = 0; y < sh; y++) {
+                float py = y + 0.5f;
+                float dy = Math.abs(py - hh) - (halfH - rr);
+                float oy = dy > 0f ? dy : 0f;
+                for (int x = 0; x < sw; x++) {
+                    float px = x + 0.5f;
+                    float dx = Math.abs(px - hw) - (halfW - rr);
+                    float ox = dx > 0f ? dx : 0f;
+
+                    // Signed distance to the (inflated) rounded-rect boundary: 0 on the
+                    // edge, negative inside, positive outside.
+                    float outside = (float) Math.sqrt(ox * ox + oy * oy);
+                    float inside = Math.min(Math.max(dx, dy), 0f);
+                    float d = outside + inside - rr;
+
+                    // d is negative everywhere inside the inflated rect, so t starts at
+                    // over/band (already partway up the ramp) at the visible rim and only
+                    // reaches 0 outside the screen. The visible result: full-strength light
+                    // right at the glass, decaying inward.
+                    float t = -d / band;
+                    if (t < 0f) t = 0f;
+                    if (t > 1f) t = 1f;
+                    pixels[y * sw + x] = rampColor(t);
+                }
+            }
+
+            Bitmap bmp = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888);
+            bmp.setPixels(pixels, 0, sw, 0, 0, sw, sh);
+            if (mGlowBitmap != null && !mGlowBitmap.isRecycled()) {
+                mGlowBitmap.recycle();
+            }
+            mGlowBitmap = bmp;
+        }
+
+        /** Hot white rim -> cyan halo -> blue -> indigo tail -> transparent. */
+        private static int rampColor(float t) {
+            float a, r, g, b;
+            if (t < 0.05f) {
+                float k = t / 0.05f;
+                a = lerp(255f, 245f, k);
+                r = lerp(250f, 210f, k);
+                g = lerp(254f, 248f, k);
+                b = 255f;
+            } else if (t < 0.22f) {
+                float k = (t - 0.05f) / 0.17f;
+                a = lerp(245f, 220f, k);
+                r = lerp(210f, 120f, k);
+                g = lerp(248f, 228f, k);
+                b = 255f;
+            } else if (t < 0.52f) {
+                float k = (t - 0.22f) / 0.30f;
+                a = lerp(220f, 155f, k);
+                r = lerp(120f, 30f, k);
+                g = lerp(228f, 200f, k);
+                b = 255f;
+            } else if (t < 0.80f) {
+                float k = (t - 0.52f) / 0.28f;
+                a = lerp(155f, 70f, k);
+                r = lerp(30f, 80f, k);
+                g = lerp(200f, 110f, k);
+                b = lerp(255f, 250f, k);
+            } else {
+                float k = (t - 0.80f) / 0.20f;
+                a = lerp(70f, 0f, k);
+                r = 80f;
+                g = 110f;
+                b = 250f;
+            }
+            if (a < 0f) a = 0f;
+            return Color.argb((int) a, (int) r, (int) g, (int) b);
+        }
+
+        private static float lerp(float a, float b, float k) {
+            return a + (b - a) * k;
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (mGlowBitmap == null || mGlowBitmap.isRecycled()) return;
+
+            // Envelope: 0 -> 0.85 -> 1 -> 0.75 -> 0 across the animation, same rhythm as
+            // the old keyframes. The glow dims out at the very end so the reveal reads as
+            // one continuous motion.
+            float env;
+            if (mProgress < 0.2f) {
+                env = mProgress / 0.2f * 0.85f;
+            } else if (mProgress < 0.5f) {
+                env = 0.85f + (mProgress - 0.2f) / 0.3f * 0.15f;
+            } else if (mProgress < 0.8f) {
+                env = 1.0f - (mProgress - 0.5f) / 0.3f * 0.25f;
+            } else {
+                env = 0.75f * (1.0f - (mProgress - 0.8f) / 0.2f);
+            }
+            if (env < 0f) env = 0f;
+            if (env <= 0.001f) return;
+
+            mDstRect.set(0, 0, mW, mH);
+            mBitmapPaint.setAlpha((int) (255 * env));
+            canvas.drawBitmap(mGlowBitmap, null, mDstRect, mBitmapPaint);
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            if (mGlowBitmap != null && !mGlowBitmap.isRecycled()) {
+                mGlowBitmap.recycle();
+                mGlowBitmap = null;
+            }
+        }
     }
 
     private void initBaseUI() {
@@ -336,6 +621,16 @@ public class DemoDialogActivity extends Activity {
         mCard.addView(mWebView);
 
         mRootLayout.addView(mCard);
+
+        // Edge glow sits above everything (including the WebView) but draws only the rim,
+        // so the middle of the screen stays see-through for the whole entrance.
+        mGlowOverlay = new GlowOverlayView(this);
+        mGlowOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        mRootLayout.addView(mGlowOverlay);
+
         setContentView(mRootLayout);
     }
 
@@ -406,12 +701,18 @@ public class DemoDialogActivity extends Activity {
                 Log.i(TAG, "onPageFinished: " + url);
                 view.clearHistory();
                 if (url != null && url.contains(":3070")) {
+                    // The 3070 console is a plain page with no entrance treatment.
+                    mPageReady = true;
+                    mGlowFinished = true;
+                    if (mGlowOverlay != null) mGlowOverlay.setVisibility(View.GONE);
                     if (mWebView != null && mWebView.getAlpha() < 1f) {
                         mWebView.setAlpha(1f);
                     }
                     return;
                 }
                 injectMobileOverlay(view);
+                mPageReady = true;
+                maybeRevealWebView();
 
                 // Diagnostic: inspect document title and body child count
                 view.evaluateJavascript("(function(){ return 'title=' + document.title + ' | bodyChildren=' + (document.body ? document.body.children.length : -1) + ' | url=' + location.href; })()", new ValueCallback<String>() {
@@ -569,9 +870,10 @@ public class DemoDialogActivity extends Activity {
         try {
             String curUrl = view.getUrl();
             if (curUrl != null && curUrl.contains(":3070")) {
-                if (mWebView != null && mWebView.getAlpha() < 1f) {
-                    mWebView.setAlpha(1f);
-                }
+                // 3070 console: no overlay styling needed, and the entrance glow does not
+                // apply here — let the reveal path handle visibility.
+                mPageReady = true;
+                maybeRevealWebView();
                 return;
             }
             SharedPreferences sp = getSharedPreferences("agent_auth_prefs", Context.MODE_PRIVATE);
@@ -624,21 +926,10 @@ public class DemoDialogActivity extends Activity {
 
             view.evaluateJavascript(sb.toString(), null);
 
-            // Smooth fade-in once styles and controls are injected
-            if (mWebView != null && mWebView.getAlpha() < 1f) {
-                mWebView.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (mWebView != null && mWebView.getAlpha() < 1f) {
-                            mWebView.animate()
-                                    .alpha(1f)
-                                    .setDuration(240)
-                                    .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                                    .start();
-                        }
-                    }
-                });
-            }
+            // Reveal is no longer driven from here. The WebView stays hidden until the
+            // entrance glow has finished AND the page has reported ready — see
+            // maybeRevealWebView(). Fading in at injection time is what used to expose the
+            // bare boot screen while the glow was still playing.
         } catch (Throwable t) {
             Log.e(TAG, "injectMobileOverlay error: " + t.getMessage(), t);
         }
@@ -907,7 +1198,12 @@ public class DemoDialogActivity extends Activity {
                 mWebView.setBackgroundColor(winBg);
                 mWebView.clearFocus();
                 mWebView.onResume();
-                injectMobileOverlay(mWebView);
+                // Re-injecting during the entrance glow would race the first injection and
+                // is pointless while the page is still hidden. The glow's completion path
+                // (or onPageFinished) injects on its own.
+                if (mGlowFinished) {
+                    injectMobileOverlay(mWebView);
+                }
             }
         } catch (Throwable ignored) {
             if (mWebView != null) {
@@ -916,7 +1212,6 @@ public class DemoDialogActivity extends Activity {
             }
         }
     }
-
     @Override
     protected void onPause() {
         super.onPause();
