@@ -7,16 +7,16 @@
 <a name="中文说明"></a>
 ## 中文说明
 
-本项目提供一套针对 Android 深度定制的 **完全静默、后台独立运行、与物理主屏完全解耦** 的工业级系统控制底座。
+本项目是供 **DeepSeek Harness (DSH)** 使用的 Mobile Use 工具，提供一套 Android 设备控制能力：在后台独立虚拟副屏中运行应用，与物理主屏互不干扰。
 
-通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度与输入法隔离、以及免软键盘弹窗的确定性无障碍文字注入，为大模型 Agent、自动化测试系统及远程控制脚本提供第一层设备操纵能力。
+通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度与输入法隔离、以及免软键盘弹窗的文字注入，让 Agent 能够操作手机上的应用。
 
 > ⚠️ **版本说明（SemVer 标准化）**：  
-> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.7-alpha`**（KSU 模块 versionCode: `807`）。全面实装了纯原生极客暗黑风的 **Agent Mobile 控制中心与配置中心 (`SettingsActivity`)**、三栏纯几何矢量底栏、流体云注销撕裂热切换、毛玻璃透明透视/纯黑实色双模主题切换，以及基于 3080 端口 Remote RPC 的 DSH 动态版本握手机制。
+> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.7-alpha`**（KSU 模块 versionCode: `807`）。包含原生控制中心（`SettingsActivity`）、流体云通知胶囊，以及基于 3080 端口 Remote RPC 的 DSH 版本握手。
 
 ---
 
-### 实测实录：纯手绘作画实机效果展示（物理触控含金量）
+### 实测记录：用系统画笔手绘一幅画
 
 📺 **B站高清实机演示视频**：[https://www.bilibili.com/video/BV1WYeS6YEwt](https://www.bilibili.com/video/BV1WYeS6YEwt)
 
@@ -180,12 +180,12 @@
 <a name="english"></a>
 ## English Description
 
-`agent-mobile-use` provides an industrial-grade, fully silent, background headless virtual display and low-level control substrate for Android (tested on ColorOS 16 / Android 15-16).
+`agent-mobile-use` is the Mobile Use tool for **DeepSeek Harness (DSH)**. It gives an agent the ability to operate apps on an Android device, running them on a background virtual display so the physical screen stays untouched (tested on ColorOS 16 / Android 15-16).
 
-By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, this project provides a clean foundation for LLM Agents and automated systems.
+By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, it lets the agent drive apps while you keep using the phone.
 
 > ⚠️ **Release Notice (v0.8.7-alpha)**:  
-> Current active release is **`v0.8.7-alpha`** (KSU module versionCode: `807`). Features the brand new **Agent Mobile Control & Settings Center (`SettingsActivity`)**, 3-tab vector bottom navigation, fluid cloud lifecycle teardown toggle, translucent blur vs. pure black theme switcher, and network-based DSH version RPC discovery.
+> Current active release is **`v0.8.7-alpha`** (KSU module versionCode: `807`). Includes the native control center (`SettingsActivity`), the fluid-cloud notification capsule, and DSH version handshake over the 3080 Remote RPC.
 
 ---
 
