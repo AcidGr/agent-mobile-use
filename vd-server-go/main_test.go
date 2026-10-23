@@ -113,3 +113,29 @@ func TestTypeBase64EncodingForMultilineCode(t *testing.T) {
 		t.Fatalf("decoded code mismatch:\ngot:\n%s\nwant:\n%s", string(decodedBytes), multilineCode)
 	}
 }
+
+func TestIsTransientTornSlidingAndDialogs(t *testing.T) {
+	// Centered dialog (minX=156, maxX=1108 on 1264w screen) must NOT be treated as torn.
+	dialogDump := "ok display=6 width=1264 height=2800 windows=1 total=7 returned=7 act_sent=5 act_total=5 x_extent=156,1108\n# c\n"
+	if isTransientTorn(dialogDump, 6, 1264) {
+		t.Fatal("centered modal dialog falsely classified as transient torn")
+	}
+
+	// Right-edge popup menu (410..1250 < 1264) must NOT be treated as torn.
+	menuDump := "ok display=6 width=1264 height=2800 windows=1 total=1 returned=1 act_sent=1 act_total=1 x_extent=410,1250\n# c\n"
+	if isTransientTorn(menuDump, 6, 1264) {
+		t.Fatal("popup menu falsely classified as transient torn")
+	}
+
+	// Page sliding in from right clipped at dispW (minX=351, maxX=1264) MUST be treated as torn.
+	slidingIn := "ok display=6 width=1264 height=2800 windows=1 total=15 returned=15 act_sent=10 act_total=10 x_extent=351,1264\n# c\n"
+	if !isTransientTorn(slidingIn, 6, 1264) {
+		t.Fatal("right-sliding page clipped at dispW was not detected as transient torn")
+	}
+
+	// Page sliding out to left (minX=-120, maxX=900) MUST be treated as torn.
+	slidingOut := "ok display=6 width=1264 height=2800 windows=1 total=15 returned=15 act_sent=10 act_total=10 x_extent=-120,900\n# c\n"
+	if !isTransientTorn(slidingOut, 6, 1264) {
+		t.Fatal("left-sliding page was not detected as transient torn")
+	}
+}

@@ -1,10 +1,12 @@
 package com.agent;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.app.UiAutomation;
 import android.graphics.Rect;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import android.content.Context;
@@ -51,6 +53,7 @@ public class ToolMain {
         public String desc;
         public String hint;
         public String tooltip;
+        public String stateDesc;
         public String viewId;
         public int left, top, right, bottom;
         public int centerX, centerY;
@@ -68,35 +71,27 @@ public class ToolMain {
         public boolean selected;
         public boolean scrollable;
         public boolean folded;
+        public boolean degenerateBounds; // clipped to 0-width/height inside a valid card; hoist-only
 
         // ---- resolved click target ----
-        public int targetId = -1;      // self if clickable, else nearest clickable ancestor
+        public int clickableAncestorId = -1; // nearest clickable/checkable DOM parent ID
+        public int targetId = -1;      // self if clickable/checkable, else nearest clickable ancestor
         public int targetCenterX, targetCenterY;
         public int targetRatio = 1;    // ancestor area / self area; 1 when target is self
         public String tapReason;       // set when an inherited target was suppressed
 
         // ---- budget ranking (filled by rankForBudget) ----
         public int priority;
-
-        /**
-         * Whether this node does something the model cares about: navigate, open a
-         * submenu, show a destination. A pure checkbox or a decorative toggle ranks below
-         * a control that changes where you are, which is the difference that cost Amap
-         * its 查路线 button when the budget ran out inside one priority tier.
-         */
         public boolean actionBearing;
 
         // ---- window provenance ----
         /**
-         * Index of the window this node came from, in the z-order returned by
-         * getWindowsOnAllDisplays (0 = bottom-most).
-         *
-         * All windows used to be flattened into one list, which meant a modal dialog's
-         * nodes sat interleaved with the activity underneath it and the model had no way
-         * to tell that the lower ones were covered. Taobao's 闪购外卖红包 poplayer is
-         * exactly this case.
+         * Index of the window this node came from, in descending Z-order
+         * (0 = top-most foreground window; >0 = underlying lower window).
          */
         public int windowIndex;
+        /** True when a higher-layer TYPE_APPLICATION modal/dialog window sits above this app window. */
+        public boolean coveredByAppWindow;
     }
 
     /** A clickable node offered as an ancestor target to non-clickable children. */
@@ -333,7 +328,7 @@ public class ToolMain {
             + " offscreen-actionable, disabled, label-only, offscreen\n"
             + "# columns: id type name x1,y1,x2,y2 flags"
             + " | flags: c=clickable e=editable s=scrollable k+=checked-or-selected k-=unchecked"
-            + " off=disabled gone=offscreen focus=focused wN=window dN=depth"
+            + " off=disabled gone=offscreen focus=focused wN=under-window(0=top) dN=depth"
             + " | optional: d= extra-desc id= resource how= why-unnamed target= ancestorId@x,y"
             + " hint= input-hint tip= tooltip";
 
@@ -379,18 +374,24 @@ public class ToolMain {
      */
     private static final int WEBVIEW_WAKE_SLEEP_MS = 600;
 
-    /** In-memory cache of target coordinates from the most recent tree dump (ID -> [x, y]). */
+    /** In-memory cache of target coordinates and focus/editable state from the most recent tree dump. */
     private static final java.util.Map<String, int[]> sLastTargetCoords =
             new java.util.concurrent.ConcurrentHashMap<String, int[]>();
+    private static final java.util.Map<String, boolean[]> sLastTargetMeta =
+            new java.util.concurrent.ConcurrentHashMap<String, boolean[]>();
 
     private static void updateTargetCoords(List<NodeItem> list) {
         if (list == null) return;
         sLastTargetCoords.clear();
+        sLastTargetMeta.clear();
         for (int i = 0; i < list.size(); i++) {
             NodeItem n = list.get(i);
+            if (n.degenerateBounds) continue;
             int x = (n.targetId > 0 && n.targetId != n.id) ? n.targetCenterX : (n.left + n.right) / 2;
             int y = (n.targetId > 0 && n.targetId != n.id) ? n.targetCenterY : (n.top + n.bottom) / 2;
-            sLastTargetCoords.put(String.valueOf(n.id), new int[] { x, y });
+            String key = String.valueOf(n.id);
+            sLastTargetCoords.put(key, new int[] { x, y });
+            sLastTargetMeta.put(key, new boolean[] { n.focused, n.editableFlag });
         }
     }
 
@@ -562,7 +563,73 @@ public class ToolMain {
     // Persistent Daemon Mode (zero ART cold-start overhead)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static void clearAicCache() {
+    private static final java.util.Map<Integer, Long> sLastDisplayEventUptimeMs =
+            new java.util.concurrent.ConcurrentHashMap<Integer, Long>();
+    private static final Object sEventWaitLock = new Object();
+    private static Method sEventGetDisplayIdMethod = null;
+    private static boolean sEventGetDisplayIdResolved = false;
+
+    private static int getEventDisplayId(AccessibilityEvent event) {
+        if (event == null) return 0;
+        if (!sEventGetDisplayIdResolved) {
+            sEventGetDisplayIdResolved = true;
+            try {
+                sEventGetDisplayIdMethod = AccessibilityEvent.class.getMethod("getDisplayId");
+            } catch (Throwable ignored) {}
+        }
+        if (sEventGetDisplayIdMethod != null) {
+            try {
+                return (Integer) sEventGetDisplayIdMethod.invoke(event);
+            } catch (Throwable ignored) {}
+        }
+        return 0;
+    }
+
+    /**
+     * If a layout/window transition event fired on {@code displayId} within the last
+     * {@code quietWindowMs}, wait up to {@code maxWaitMs} for the animation burst to settle.
+     * Costs 0ms when the display is already quiet.
+     */
+    private static void awaitDisplayQuiet(int displayId, long quietWindowMs, long maxWaitMs) {
+        Long lastObj = sLastDisplayEventUptimeMs.get(displayId);
+        if (lastObj == null) return;
+        long start = SystemClock.uptimeMillis();
+        if (start - lastObj.longValue() >= quietWindowMs) return;
+
+        synchronized (sEventWaitLock) {
+            while (true) {
+                long now = SystemClock.uptimeMillis();
+                long elapsed = now - start;
+                if (elapsed >= maxWaitMs) break;
+                Long curObj = sLastDisplayEventUptimeMs.get(displayId);
+                long sinceLast = (curObj != null) ? (now - curObj.longValue()) : quietWindowMs;
+                if (sinceLast >= quietWindowMs) break;
+                long waitMs = Math.min(quietWindowMs - sinceLast, maxWaitMs - elapsed);
+                if (waitMs <= 0) break;
+                try {
+                    sEventWaitLock.wait(waitMs);
+                } catch (InterruptedException ie) {
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Clear the client-side AccessibilityCache for this UiAutomation connection.
+     *
+     * On Android 13–16, AccessibilityInteractionClient.clearCache(int connectionId) is
+     * keyed by UiAutomation's dynamic mConnectionId (never 0 when another accessibility
+     * service is bound). UiAutomation.clearCache() resolves its own mConnectionId directly.
+     */
+    private static void clearUiCache(Object uiAutomation) {
+        if (uiAutomation != null) {
+            try {
+                Method uiClear = uiAutomation.getClass().getMethod("clearCache");
+                uiClear.invoke(uiAutomation);
+                return;
+            } catch (Throwable ignored) {}
+        }
         try {
             Class<?> aicClass = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
             Method getInstance = aicClass.getMethod("getInstance");
@@ -570,18 +637,16 @@ public class ToolMain {
             try {
                 Method clear = aicClass.getMethod("clearCache");
                 clear.invoke(aic);
+                return;
             } catch (NoSuchMethodException e) {
-                for (Method m : aicClass.getMethods()) {
-                    if ("clearCache".equals(m.getName())) {
-                        if (m.getParameterTypes().length == 0) {
-                            m.invoke(aic);
-                            break;
-                        } else if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0] == int.class) {
-                            m.invoke(aic, 0);
-                            break;
-                        }
-                    }
+                int connId = 0;
+                if (uiAutomation != null) {
+                    try {
+                        connId = (Integer) uiAutomation.getClass().getMethod("getConnectionId").invoke(uiAutomation);
+                    } catch (Throwable ignored) {}
                 }
+                Method clearById = aicClass.getMethod("clearCache", int.class);
+                clearById.invoke(aic, connId);
             }
         } catch (Throwable ignored) {}
     }
@@ -614,6 +679,27 @@ public class ToolMain {
             // 0x2 (INCLUDE_NOT_IMPORTANT) | 0x8 (WEB_ACCESSIBILITY) | 0x10 (VIEW_IDS) | 0x40 (RETRIEVE_INTERACTIVE_WINDOWS)
             info.flags = 0x2 | 0x8 | 0x10 | 0x40;
             uiClass.getMethod("setServiceInfo", AccessibilityServiceInfo.class).invoke(uiAutomation, info);
+
+            try {
+                ((UiAutomation) uiAutomation).setOnAccessibilityEventListener(
+                        new UiAutomation.OnAccessibilityEventListener() {
+                            @Override
+                            public void onAccessibilityEvent(AccessibilityEvent event) {
+                                if (event == null) return;
+                                int et = event.getEventType();
+                                if (et == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                                        || et == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                                        || et == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+                                        || et == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+                                    int dId = getEventDisplayId(event);
+                                    sLastDisplayEventUptimeMs.put(dId, SystemClock.uptimeMillis());
+                                    synchronized (sEventWaitLock) {
+                                        sEventWaitLock.notifyAll();
+                                    }
+                                }
+                            }
+                        });
+            } catch (Throwable ignored) {}
 
             // Signal to parent process that daemon is fully ready
             System.out.println("READY");
@@ -685,7 +771,12 @@ public class ToolMain {
                                 pt = sLastTargetCoords.get(targetId);
                             }
                             if (pt != null) {
-                                System.out.print("{\"ok\":true,\"x\":" + pt[0] + ",\"y\":" + pt[1] + ",\"id\":\"" + targetId + "\"}");
+                                boolean[] meta = sLastTargetMeta.get(targetId);
+                                boolean focused = (meta != null && meta.length > 0 && meta[0]);
+                                boolean editable = (meta != null && meta.length > 1 && meta[1]);
+                                System.out.print("{\"ok\":true,\"x\":" + pt[0] + ",\"y\":" + pt[1]
+                                        + ",\"focused\":" + focused + ",\"editable\":" + editable
+                                        + ",\"id\":\"" + targetId + "\"}");
                             } else {
                                 System.out.print("{\"ok\":false,\"error\":\"target_not_found\",\"id\":\"" + targetId + "\"}");
                             }
@@ -724,7 +815,7 @@ public class ToolMain {
                     System.out.println();
                     System.out.println("<<<END_OF_DUMP>>>");
                     System.out.flush();
-                    clearAicCache();
+                    clearUiCache(uiAutomation);
                 }
             }
         } catch (Throwable t) {
@@ -753,10 +844,155 @@ public class ToolMain {
         return dumpTreeWithUi(uiAutomation, uiClass, targetDisplayId, budgetOverride, dropSystemUi, true);
     }
 
+    private static int getWindowLayer(Object win) {
+        if (win == null) return 0;
+        try {
+            return (Integer) win.getClass().getMethod("getLayer").invoke(win);
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    private static int getWindowType(Object win) {
+        if (win == null) return -1;
+        try {
+            return (Integer) win.getClass().getMethod("getType").invoke(win);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    /** Ensure top-most windows come first (index 0 = highest Z-layer). */
+    private static List<Object> sortWindowsTopFirst(List<?> rawWins) {
+        List<Object> ordered = new ArrayList<Object>(rawWins.size());
+        for (Object w : rawWins) ordered.add(w);
+        if (ordered.size() > 1) {
+            Collections.sort(ordered, new Comparator<Object>() {
+                @Override
+                public int compare(Object a, Object b) {
+                    return Integer.compare(getWindowLayer(b), getWindowLayer(a));
+                }
+            });
+        }
+        return ordered;
+    }
+
+    private static class ScanSnapshot {
+        List<NodeItem> list = new ArrayList<NodeItem>();
+        int windowCount = 0;
+        int appNodeCount = 0;
+        int droppedSystemUi = 0;
+    }
+
+    private static ScanSnapshot scanDisplayOnce(Object uiAutomation, Class<?> uiClass,
+                                                int targetDisplayId, boolean dropSystemUi,
+                                                java.util.Set<String> chromeTitles) throws Exception {
+        clearUiCache(uiAutomation);
+        ScanSnapshot snap = new ScanSnapshot();
+        int winIndex = 0;
+
+        Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
+        if (displays != null) {
+            Class<?> saClass = displays.getClass();
+            int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
+            Method keyAt = saClass.getMethod("keyAt", int.class);
+            Method valueAt = saClass.getMethod("valueAt", int.class);
+
+            for (int i = 0; i < sizeN; i++) {
+                int dId = (Integer) keyAt.invoke(displays, i);
+                if (dId != targetDisplayId) continue;
+                List<?> rawWins = (List<?>) valueAt.invoke(displays, i);
+                if (rawWins == null) continue;
+                List<Object> wins = sortWindowsTopFirst(rawWins);
+                int[] idCounter = new int[] { 1 };
+                boolean seenPopulatedAppWindow = false;
+                for (Object win : wins) {
+                    Object rootObj;
+                    try {
+                        rootObj = win.getClass().getMethod("getRoot").invoke(win);
+                    } catch (Throwable t) {
+                        rootObj = null;
+                    }
+                    AccessibilityNodeInfo rootNode =
+                            (rootObj instanceof AccessibilityNodeInfo)
+                                    ? (AccessibilityNodeInfo) rootObj : null;
+
+                    if (dropSystemUi && isSystemUiWindow(win, chromeTitles, rootNode)) {
+                        snap.droppedSystemUi++;
+                        continue;
+                    }
+                    snap.windowCount++;
+                    if (rootNode != null) {
+                        boolean isSys = isSystemWindow(win, rootNode);
+                        int winType = getWindowType(win);
+                        boolean isAppWin = (!isSys && (winType == 1 || winType == -1));
+                        boolean coveredAppWin = isAppWin && seenPopulatedAppWindow;
+                        int beforeSize = snap.list.size();
+                        collectInteractiveNodes(rootNode, 0,
+                                null, snap.list, idCounter, winIndex, coveredAppWin);
+                        int added = snap.list.size() - beforeSize;
+                        if (!isSys) {
+                            snap.appNodeCount += added;
+                        }
+                        if (isAppWin && added > 0) {
+                            seenPopulatedAppWindow = true;
+                        }
+                    }
+                    winIndex++;
+                }
+            }
+        }
+        return snap;
+    }
+
+    /**
+     * Detect geometry shapes characteristic of an in-flight GPU/Compose slide transition
+     * (which interpolates RenderNode translationX without firing per-frame a11y events).
+     */
+    private static boolean isSuspectTransitionFrame(List<NodeItem> list, int dispW, int dispH) {
+        if (list == null || list.isEmpty() || dispW <= 0 || dispH <= 0) return false;
+        int narrowClippedClickables = 0;
+        for (int i = 0; i < list.size(); i++) {
+            NodeItem n = list.get(i);
+            if (n.degenerateBounds) continue;
+            if (n.left < -20 || n.right > dispW + 20) return true;
+            int w = n.right - n.left;
+            int h = n.bottom - n.top;
+            if (n.scrollable && h > dispH / 2 && w < dispW * 9 / 10) {
+                return true;
+            }
+            if ((n.clickable || n.checkable) && !nonEmpty(n.text) && !nonEmpty(n.desc)
+                    && (n.left == 0 || n.right == dispW) && w > 0 && w < dispW * 4 / 5) {
+                narrowClippedClickables++;
+            }
+        }
+        return narrowClippedClickables >= 2;
+    }
+
+    private static long computeGeometryHash(List<NodeItem> list) {
+        long h = 1125899906842597L;
+        if (list == null) return h;
+        for (int i = 0; i < list.size(); i++) {
+            NodeItem n = list.get(i);
+            if (n.degenerateBounds) continue;
+            h = h * 31 + n.left;
+            h = h * 31 + n.top;
+            h = h * 31 + n.right;
+            h = h * 31 + n.bottom;
+        }
+        return h;
+    }
+
     private static boolean dumpTreeWithUi(Object uiAutomation, Class<?> uiClass,
                                            int targetDisplayId, int budgetOverride,
                                            boolean dropSystemUi, boolean emitOutput) {
         try {
+            // If an animation or layout burst is actively firing right now on this display,
+            // wait briefly for a 100ms quiet gap (capped at 350ms; 0ms when already settled).
+            if (emitOutput) {
+                awaitDisplayQuiet(targetDisplayId, 100L, 350L);
+            }
+
             // Display geometry: an observation without it leaves the model unable to judge
             // whether a coordinate is even inside the screen.
             int[] size = queryDisplaySize(targetDisplayId);
@@ -770,20 +1006,10 @@ public class ToolMain {
             int firstSize = 0;
             int firstAppSize = 0;
             int lastAppSize = 0;
-            // Windows removed by the opt-in --no-system-ui filter, reported as sys_dropped.
             int droppedSystemUi = 0;
-            // Resolved once, and only when the filter is on: WindowManager's attribution of
-            // which window titles belong to system chrome. Empty when the switch is off, so
-            // the default path pays nothing.
             java.util.Set<String> chromeTitles = dropSystemUi
                     ? systemChromeTitles() : java.util.Collections.<String>emptySet();
-            // How many attempts the FIRST scan needed. The rescue loop below can push the
-            // raw counter much higher, and reporting that as `retries` would make a normal
-            // screen look like a struggling one.
             int scanAttempts = 0;
-            // Set when a rescue scan is what finally produced nodes. The caller is told,
-            // because a payload that needed rescue means the tree was not ready yet — a
-            // model that knows this will not conclude the screen is empty.
             boolean recovered = false;
             int attempt = 0;
 
@@ -792,70 +1018,13 @@ public class ToolMain {
             for (int pass = 0; pass < 2; pass++) {
                 int appNodeCount = 0;
                 for (attempt = 0; attempt < DUMP_ATTEMPTS; attempt++) {
-                    list = new ArrayList<NodeItem>();
-                    windowCount = 0;
-                    appNodeCount = 0;
-                    int winIndex = 0;
+                    ScanSnapshot snap = scanDisplayOnce(uiAutomation, uiClass, targetDisplayId, dropSystemUi, chromeTitles);
+                    list = snap.list;
+                    windowCount = snap.windowCount;
+                    appNodeCount = snap.appNodeCount;
+                    droppedSystemUi = snap.droppedSystemUi;
 
-                    Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
-                    if (displays != null) {
-                        Class<?> saClass = displays.getClass();
-                        int sizeN = (Integer) saClass.getMethod("size").invoke(displays);
-                        Method keyAt = saClass.getMethod("keyAt", int.class);
-                        Method valueAt = saClass.getMethod("valueAt", int.class);
-
-                        for (int i = 0; i < sizeN; i++) {
-                            int dId = (Integer) keyAt.invoke(displays, i);
-                            if (dId != targetDisplayId) continue;
-                            List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                            if (wins == null) continue;
-                            int[] idCounter = new int[] { 1 };
-                            for (Object win : wins) {
-                                // Root first: the system-chrome test needs it (see
-                                // isSystemUiWindow), and the same lookup below reuses it.
-                                Object rootObj;
-                                try {
-                                    rootObj = win.getClass().getMethod("getRoot").invoke(win);
-                                } catch (Throwable t) {
-                                    rootObj = null;
-                                }
-                                AccessibilityNodeInfo rootNode =
-                                        (rootObj instanceof AccessibilityNodeInfo)
-                                                ? (AccessibilityNodeInfo) rootObj : null;
-
-                                // The opt-in system-chrome filter. Dropped windows are NOT
-                                // counted in windowCount, so `windows=` keeps describing the
-                                // tree the caller actually receives rather than the raw
-                                // enumeration; sys_dropped carries the count that was removed.
-                                if (dropSystemUi && isSystemUiWindow(win, chromeTitles, rootNode)) {
-                                    droppedSystemUi++;
-                                    continue;
-                                }
-                                windowCount++;
-                                if (rootNode != null) {
-                                    boolean isSys = isSystemWindow(win, rootNode);
-                                    int beforeSize = list.size();
-                                    collectInteractiveNodes(rootNode, 0,
-                                            null, list, idCounter, winIndex);
-                                    // appNodeCount keeps its ORIGINAL meaning — "nodes from
-                                    // non-system windows" — even when the filter is on. Letting
-                                    // it drift to "nodes from every window" the moment a flag
-                                    // was passed made app_nodes silently change meaning with
-                                    // that flag, and `tree_blocked` is derived from it
-                                    // (appNodeCount == 0), so a screen could start reporting
-                                    // tree_blocked purely because the flag was present.
-                                    if (!isSys) {
-                                        appNodeCount += (list.size() - beforeSize);
-                                    }
-                                }
-                                winIndex++;
-                            }
-                        }
-                    }
                     if (pass == 0) scanAttempts = attempt + 1;
-                    // Zero windows is a scan failure and is worth retrying fast; a window
-                    // with no nodes is NOT retried here, because the thing that fixes it is
-                    // time, not repetition — pass 1 owns that case.
                     if (windowCount > 0) break;
                     if (attempt < DUMP_ATTEMPTS - 1) {
                         try { Thread.sleep(DUMP_RETRY_SLEEP_MS); } catch (InterruptedException ignored) {}
@@ -869,42 +1038,52 @@ public class ToolMain {
                     firstList = list;
                     firstWindows = windowCount;
 
-                    // Fast-path: if the screen already yielded a populated node tree and does
-                    // not contain a dormant WebView awaiting accessibility initialization,
-                    // return immediately without paying the 600ms wake sleep and duplicate scan.
-                    // CRITICAL FIX: On the foreground physical display (Display 0), SystemUI's
-                    // status bar contributes ~5-10 permanent nodes. If firstAppSize == 0, the
-                    // main application window is empty or still transitioning!
                     boolean needWakePass = false;
                     if (firstWindows > 0 && firstAppSize == 0) {
-                        needWakePass = true; // App window empty or only status bar present: retry with sleep
+                        needWakePass = true;
                     } else if (hasDormantWebView(list, firstSize)) {
-                        needWakePass = true; // Dormant Chromium WebView: wake and rescan
+                        needWakePass = true;
                     }
 
                     if (!needWakePass) {
                         break;
                     }
 
-                    // Give a not-yet-ready tree time to appear: a WebView's page content, or
-                    // WeChat's intermittently empty window. The second read is the difference
-                    // between a blank tree and the real one.
                     try { Thread.sleep(WEBVIEW_WAKE_SLEEP_MS); } catch (InterruptedException ignored) {}
                 } else {
                     lastAppSize = appNodeCount;
-                    // Keep whichever pass saw more. A thin second pass must not replace a
-                    // thin first one, and a richer second pass is exactly the wake.
                     if (list.size() <= firstSize) {
                         list = firstList;
                         windowCount = firstWindows;
                         lastAppSize = firstAppSize;
                     } else if (appNodeCount > firstAppSize) {
-                        // Recovered: second pass found more app content from non-system windows
                         recovered = true;
                     }
                 }
             }
             if (list == null) list = new ArrayList<NodeItem>();
+
+            // Motion-verified stabilization: GPU/Compose slide transitions interpolate
+            // translationX without emitting a11y events. If geometry looks mid-slide,
+            // verify whether bounds are actively changing; static sidebars (0px delta)
+            // exit after a single 75ms check, while active slides settle cleanly.
+            if (emitOutput && isSuspectTransitionFrame(list, dispW, dispH)) {
+                long prevHash = computeGeometryHash(list);
+                for (int step = 0; step < 5; step++) {
+                    try { Thread.sleep(75); } catch (InterruptedException ie) { break; }
+                    ScanSnapshot next = scanDisplayOnce(uiAutomation, uiClass, targetDisplayId, dropSystemUi, chromeTitles);
+                    if (next.windowCount == 0 || next.list.isEmpty()) break;
+                    long nextHash = computeGeometryHash(next.list);
+                    list = next.list;
+                    windowCount = next.windowCount;
+                    lastAppSize = next.appNodeCount;
+                    droppedSystemUi = next.droppedSystemUi;
+                    if (nextHash == prevHash || !isSuspectTransitionFrame(list, dispW, dispH)) {
+                        break;
+                    }
+                    prevHash = nextHash;
+                }
+            }
 
             // Order matters all the way through: dedup -> semantic hoisting/folding -> tap suppression -> ranking.
             // Each stage removes or reorders nodes, so it has to see the output of the
@@ -975,16 +1154,43 @@ public class ToolMain {
      * whole dump on an OEM build that hides these APIs.
      */
     private static int[] queryDisplaySize(int displayId) {
-        // A DisplayManager instance gives the reliable answer, but app_process has no
-        // Context. Try, in order: the instrumentation application, then the app-globals
-        // application, then the process's own DisplayManagerGlobal.
+        // 1. Primary: DisplayManagerGlobal.getDisplayInfo(displayId) works directly in
+        //    app_process on Android 8–16 without needing an Application/Context, and
+        //    tracks live VirtualDisplay resizes immediately.
+        try {
+            Class<?> dmgClass = Class.forName("android.hardware.display.DisplayManagerGlobal");
+            Object dmg = dmgClass.getMethod("getInstance").invoke(null);
+            if (dmg != null) {
+                try {
+                    dmgClass.getMethod("invalidateLocalDisplayInfoCaches").invoke(dmg);
+                } catch (Throwable ignored) {}
+                Object info = dmgClass.getMethod("getDisplayInfo", int.class).invoke(dmg, displayId);
+                if (info != null) {
+                    Class<?> infoClass = info.getClass();
+                    int w = infoClass.getField("logicalWidth").getInt(info);
+                    int h = infoClass.getField("logicalHeight").getInt(info);
+                    if (w > 0 && h > 0) return new int[] { w, h };
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // 2. Fallback: Context-backed DisplayManager (including ActivityThread.systemMain)
         Object dm = null;
         try {
-            Object app = Class.forName("android.app.ActivityThread")
-                    .getMethod("currentApplication").invoke(null);
+            Class<?> atClass = Class.forName("android.app.ActivityThread");
+            Object app = atClass.getMethod("currentApplication").invoke(null);
             if (app == null) {
                 app = Class.forName("android.app.AppGlobals")
                         .getMethod("getInitialApplication").invoke(null);
+            }
+            if (app == null) {
+                Object at = atClass.getMethod("currentActivityThread").invoke(null);
+                if (at == null) {
+                    at = atClass.getMethod("systemMain").invoke(null);
+                }
+                if (at != null) {
+                    app = atClass.getMethod("getSystemContext").invoke(at);
+                }
             }
             if (app != null) {
                 dm = Class.forName("android.content.Context")
@@ -993,13 +1199,6 @@ public class ToolMain {
         } catch (Throwable ignored) {}
 
         try {
-            if (dm == null) {
-                Object global = Class.forName("android.hardware.display.DisplayManagerGlobal")
-                        .getMethod("getInstance").invoke(null);
-                dm = Class.forName("android.hardware.display.DisplayManager")
-                        .getConstructor(Class.forName("android.hardware.display.DisplayManagerGlobal"))
-                        .newInstance(global);
-            }
             if (dm == null) return new int[] { 0, 0 };
 
             Object display = Class.forName("android.hardware.display.DisplayManager")
@@ -1042,10 +1241,15 @@ public class ToolMain {
      */
     private static int dedupeIdenticalNodes(List<NodeItem> list) {
         Map<String, Integer> firstSeen = new HashMap<String, Integer>();
+        Map<Integer, Integer> mergedIds = new HashMap<Integer, Integer>();
         List<NodeItem> out = new ArrayList<NodeItem>(list.size());
         int dropped = 0;
         for (NodeItem n : list) {
-            String key = n.left + ":" + n.top + ":" + n.right + ":" + n.bottom
+            if (n.degenerateBounds) {
+                out.add(n);
+                continue;
+            }
+            String key = n.windowIndex + "@" + n.left + ":" + n.top + ":" + n.right + ":" + n.bottom
                     + "|" + norm(n.text) + "|" + norm(n.desc);
             Integer at = firstSeen.get(key);
             if (at == null) {
@@ -1055,17 +1259,35 @@ public class ToolMain {
             }
             NodeItem keep = out.get(at);
             boolean keepHasOwnSemantic = nonEmpty(keep.text) || nonEmpty(keep.desc)
-                    || nonEmpty(keep.hint) || nonEmpty(keep.tooltip);
-            if (keep.clickable || !keepHasOwnSemantic) {
+                    || nonEmpty(keep.hint) || nonEmpty(keep.tooltip) || nonEmpty(keep.stateDesc);
+            if (keep.clickable || keep.checkable || !keepHasOwnSemantic) {
                 mergeInto(keep, n);
+                mergedIds.put(n.id, keep.id);
                 dropped++;
             } else {
                 // The earlier node is only a label holder; this one carries the
                 // interaction. Fold the label forward and drop the earlier node.
                 mergeInto(n, keep);
+                mergedIds.put(keep.id, n.id);
                 out.set(at, n);
                 dropped++;
             }
+        }
+        if (dropped > 0) {
+            for (NodeItem item : out) {
+                Integer anc = mergedIds.get(item.clickableAncestorId);
+                while (anc != null) {
+                    item.clickableAncestorId = anc.intValue();
+                    anc = mergedIds.get(item.clickableAncestorId);
+                }
+                Integer tgt = mergedIds.get(item.targetId);
+                while (tgt != null) {
+                    item.targetId = tgt.intValue();
+                    tgt = mergedIds.get(item.targetId);
+                }
+            }
+            list.clear();
+            list.addAll(out);
         }
         return dropped;
     }
@@ -1087,8 +1309,9 @@ public class ToolMain {
         if (!nonEmpty(keep.desc) && nonEmpty(from.desc)) keep.desc = from.desc;
         if (!nonEmpty(keep.hint) && nonEmpty(from.hint)) keep.hint = from.hint;
         if (!nonEmpty(keep.tooltip) && nonEmpty(from.tooltip)) keep.tooltip = from.tooltip;
+        if (!nonEmpty(keep.stateDesc) && nonEmpty(from.stateDesc)) keep.stateDesc = from.stateDesc;
         if (!nonEmpty(keep.viewId) && nonEmpty(from.viewId)) keep.viewId = from.viewId;
-        if (from.clickable) {
+        if (from.clickable || from.checkable) {
             // A self-target always beats an inherited one.
             keep.targetId = keep.id;
             keep.targetCenterX = keep.centerX;
@@ -1190,6 +1413,9 @@ public class ToolMain {
 
         public int compareTo(Ranked o) {
             if (node.priority != o.node.priority) return node.priority - o.node.priority;
+            if (node.coveredByAppWindow != o.node.coveredByAppWindow) {
+                return node.coveredByAppWindow ? 1 : -1;
+            }
             if (node.actionBearing != o.node.actionBearing) return node.actionBearing ? -1 : 1;
             if (seq != o.seq) return seq - o.seq;
             return node.id - o.node.id;
@@ -1354,7 +1580,10 @@ public class ToolMain {
         } else {
             label = nonEmpty(text) ? text : desc;
         }
-        // An icon-only control often explains itself in one of the two fields the tool
+        if (!nonEmpty(label) && !nonEmpty(n.hint) && !nonEmpty(n.tooltip) && nonEmpty(n.stateDesc)) {
+            label = n.stateDesc;
+        }
+        // An icon-only control often explains itself in one of the fields the tool
         // used to never read, so a node that is silent everywhere else is not yet silent.
         boolean hasLabel = nonEmpty(label) || nonEmpty(n.hint) || nonEmpty(n.tooltip);
         String how = null;
@@ -1362,7 +1591,7 @@ public class ToolMain {
 
         StringBuilder row = new StringBuilder();
         row.append(n.id).append(' ').append(simplifyType(n.type));
-        if (hasLabel) row.append(" \"").append(oneLine(label)).append('"');
+        if (nonEmpty(label)) row.append(" \"").append(oneLine(label)).append('"');
         row.append(' ').append(n.left).append(',').append(n.top).append(',')
            .append(n.right).append(',').append(n.bottom);
 
@@ -1467,7 +1696,8 @@ public class ToolMain {
 
         for (int i = 0; i < list.size(); i++) {
             NodeItem parent = list.get(i);
-            if (!parent.clickable) continue;
+            if (parent.degenerateBounds) continue;
+            if (!parent.clickable && !parent.checkable) continue;
             if (parent.scrollable) continue;
             if (nonEmpty(parent.text) || nonEmpty(parent.desc)) continue;
 
@@ -1475,51 +1705,66 @@ public class ToolMain {
             if (screenArea > 0 && parentArea > screenArea * 2 / 5) continue;
             if (parent.bottom - parent.top > 900) continue;
 
-            List<NodeItem> textChildren = new ArrayList<NodeItem>();
+            List<NodeItem> directTextChildren = new ArrayList<NodeItem>();
+            List<NodeItem> geomCandidates = new ArrayList<NodeItem>();
             boolean hasSubClickable = false;
 
             for (int j = 0; j < list.size(); j++) {
                 if (i == j) continue;
                 NodeItem child = list.get(j);
+                if (child.folded) continue;
                 if (child.windowIndex != parent.windowIndex) continue;
-                if (child.left < parent.left || child.top < parent.top
-                        || child.right > parent.right || child.bottom > parent.bottom) {
-                    continue;
-                }
                 if (child.depth <= parent.depth) continue;
 
+                boolean directDomChild = (child.clickableAncestorId == parent.id);
+                boolean geomInside = !child.degenerateBounds
+                        && child.left >= parent.left && child.top >= parent.top
+                        && child.right <= parent.right && child.bottom <= parent.bottom;
+
+                if (!directDomChild && !geomInside) {
+                    continue;
+                }
+
                 if (child.clickable || child.checkable || child.editableFlag) {
-                    long childArea = Math.max(1L, (long) (child.right - child.left) * (child.bottom - child.top));
-                    if (childArea * 10L < parentArea * 9L) {
+                    if (directDomChild) {
                         hasSubClickable = true;
+                    } else if (!child.degenerateBounds) {
+                        long childArea = Math.max(1L, (long) (child.right - child.left) * (child.bottom - child.top));
+                        if (childArea * 10L < parentArea * 9L) {
+                            hasSubClickable = true;
+                        }
                     }
                     continue;
                 }
 
                 if (nonEmpty(child.text) || nonEmpty(child.desc)) {
-                    textChildren.add(child);
+                    if (directDomChild) {
+                        directTextChildren.add(child);
+                    } else {
+                        geomCandidates.add(child);
+                    }
                 }
             }
 
-            if (textChildren.isEmpty()) continue;
-
-            List<NodeItem> directTextChildren = new ArrayList<NodeItem>();
-            for (NodeItem tc : textChildren) {
-                boolean insideSub = false;
-                if (hasSubClickable) {
-                    for (int j = 0; j < list.size(); j++) {
-                        if (i == j) continue;
-                        NodeItem mid = list.get(j);
-                        if (!mid.clickable && !mid.checkable) continue;
-                        if (mid.depth <= parent.depth || tc.depth <= mid.depth) continue;
-                        if (tc.left >= mid.left && tc.top >= mid.top && tc.right <= mid.right && tc.bottom <= mid.bottom) {
-                            insideSub = true;
-                            break;
+            if (!geomCandidates.isEmpty()) {
+                for (NodeItem tc : geomCandidates) {
+                    boolean insideSub = false;
+                    if (hasSubClickable) {
+                        for (int j = 0; j < list.size(); j++) {
+                            if (i == j) continue;
+                            NodeItem mid = list.get(j);
+                            if (mid.degenerateBounds) continue;
+                            if (!mid.clickable && !mid.checkable) continue;
+                            if (mid.depth <= parent.depth || tc.depth <= mid.depth) continue;
+                            if (tc.left >= mid.left && tc.top >= mid.top && tc.right <= mid.right && tc.bottom <= mid.bottom) {
+                                insideSub = true;
+                                break;
+                            }
                         }
                     }
-                }
-                if (!insideSub) {
-                    directTextChildren.add(tc);
+                    if (!insideSub) {
+                        directTextChildren.add(tc);
+                    }
                 }
             }
 
@@ -1576,7 +1821,8 @@ public class ToolMain {
 
         Iterator<NodeItem> it = list.iterator();
         while (it.hasNext()) {
-            if (it.next().folded) {
+            NodeItem item = it.next();
+            if (item.folded || item.degenerateBounds) {
                 it.remove();
             }
         }
@@ -1714,8 +1960,10 @@ public class ToolMain {
      * disagree about what counts as content.
      */
     private static boolean isEmittable(NodeItem n, int dispW, int dispH) {
+        if (n.degenerateBounds) return false;
         // A node with no semantics AND no interaction is noise for the model.
-        boolean hasSemantic = nonEmpty(n.text) || nonEmpty(n.desc);
+        boolean hasSemantic = nonEmpty(n.text) || nonEmpty(n.desc)
+                || nonEmpty(n.hint) || nonEmpty(n.tooltip) || nonEmpty(n.stateDesc);
         boolean interactive = n.clickable || n.checkable || n.scrollable || n.editableFlag;
         if (!hasSemantic && !interactive) return false;
 
@@ -1767,7 +2015,7 @@ public class ToolMain {
     private static void collectInteractiveNodes(AccessibilityNodeInfo node, int depth,
                                                 Candidate ancestor,
                                                 List<NodeItem> list, int[] idCounter,
-                                                int winIndex) {
+                                                int winIndex, boolean coveredAppWin) {
         if (node == null) return;
 
         CharSequence text = node.getText();
@@ -1780,25 +2028,20 @@ public class ToolMain {
         boolean checkable = node.isCheckable();
         boolean checked = node.isChecked();
         boolean scrollable = node.isScrollable();
+        boolean interactive = clickable || editable || checkable || scrollable;
 
-        // Fields the tree carries but this tool used to never read. Each of the three is
-        // the ONLY semantics an element has when its text and content-desc are empty:
-        //   hintText     an empty search box is anonymous without it
-        //   tooltipText  an icon-only button explains itself here
-        //   isSelected   which tab of a tab bar is the current one
-        // Read through reflection for the same reason the whole file is: this is compiled
-        // against android-23, where getHintText() (API 26) and getTooltipText() (API 24)
-        // do not exist yet, while the device runs Android 15/16. `isSelected` is old
-        // enough to call directly, but one style for all three is easier to verify.
         String hintStr = reflectString(node, "getHintText");
         String tooltipStr = reflectString(node, "getTooltipText");
+        String stateDescStr = reflectString(node, "getStateDescription");
         boolean selected = false;
         try { selected = node.isSelected(); } catch (Throwable ignored) {}
 
-        boolean hasTextOrDesc = (text != null && text.length() > 0)
-                || (desc != null && desc.length() > 0)
+        boolean hasCoreLabel = (text != null && text.length() > 0)
+                || (desc != null && desc.length() > 0);
+        boolean hasTextOrDesc = hasCoreLabel
                 || nonEmpty(hintStr)
-                || nonEmpty(tooltipStr);
+                || nonEmpty(tooltipStr)
+                || nonEmpty(stateDescStr);
 
         Rect bounds = new Rect();
         node.getBoundsInScreen(bounds);
@@ -1806,9 +2049,12 @@ public class ToolMain {
         // child is reported with bottom < top, which would yield a nonsense center.
         boolean sane = bounds.width() > 0 && bounds.height() > 0
                 && bounds.right > bounds.left && bounds.bottom > bounds.top;
+        // Preserve viewport-clipped text leaves inside a valid clickable/checkable card so
+        // hoistAndFoldCards can rescue their labels instead of degrading the card to unlabeled.
+        boolean clippedLeafUnderCard = !sane && !interactive && ancestor != null && hasCoreLabel;
 
         NodeItem item = null;
-        if (sane) {
+        if (sane || clippedLeafUnderCard) {
             item = new NodeItem();
             item.id = idCounter[0]++;
             item.rawNode = node;
@@ -1818,6 +2064,7 @@ public class ToolMain {
             item.desc = desc != null ? desc.toString() : null;
             item.hint = hintStr;
             item.tooltip = tooltipStr;
+            item.stateDesc = stateDescStr;
             item.viewId = viewId;
             item.left = bounds.left; item.top = bounds.top;
             item.right = bounds.right; item.bottom = bounds.bottom;
@@ -1831,20 +2078,27 @@ public class ToolMain {
             item.selected = selected;
             item.scrollable = scrollable;
             item.windowIndex = winIndex;
+            item.coveredByAppWindow = coveredAppWin;
+            item.clickableAncestorId = (ancestor != null) ? ancestor.id : -1;
+            item.degenerateBounds = clippedLeafUnderCard;
             try { item.enabled = node.isEnabled(); } catch (Throwable ignored) { item.enabled = true; }
             try { item.focusable = node.isFocusable(); } catch (Throwable ignored) {}
             try { item.focused = node.isFocused(); } catch (Throwable ignored) {}
-            try { item.visibleToUser = node.isVisibleToUser(); } catch (Throwable ignored) { item.visibleToUser = true; }
+            if (clippedLeafUnderCard) {
+                item.visibleToUser = false;
+            } else {
+                try { item.visibleToUser = node.isVisibleToUser(); } catch (Throwable ignored) { item.visibleToUser = true; }
+            }
 
             // Resolve the tap target. Keep textless clickable containers: they are
             // exactly the rows the model needs to tap, and dropping them was the reason
             // "the row is clickable but nothing says so" kept biting.
-            if (clickable) {
+            if (sane && (clickable || checkable)) {
                 item.targetId = item.id;
                 item.targetCenterX = item.centerX;
                 item.targetCenterY = item.centerY;
                 item.targetRatio = 1;
-            } else if (ancestor != null) {
+            } else if (sane && ancestor != null) {
                 int selfArea = Math.max(1, (item.right - item.left) * (item.bottom - item.top));
                 int ratio = Math.max(1, Math.round((float) ancestor.area / selfArea));
                 if (ratio <= MAX_ANCESTOR_RATIO) {
@@ -1855,12 +2109,12 @@ public class ToolMain {
                 }
             }
 
-            boolean kept = hasTextOrDesc || clickable || editable || checkable || scrollable;
+            boolean kept = hasTextOrDesc || interactive;
             if (kept) list.add(item);
         }
 
         Candidate childAncestor = ancestor;
-        if (item != null && clickable) {
+        if (item != null && sane && (clickable || checkable)) {
             childAncestor = Candidate.of(item);
         }
 
@@ -1869,7 +2123,7 @@ public class ToolMain {
             AccessibilityNodeInfo child = null;
             try { child = node.getChild(i); } catch (Throwable ignored) {}
             if (child != null) {
-                collectInteractiveNodes(child, depth + 1, childAncestor, list, idCounter, winIndex);
+                collectInteractiveNodes(child, depth + 1, childAncestor, list, idCounter, winIndex, coveredAppWin);
             }
         }
     }
@@ -1934,6 +2188,7 @@ public class ToolMain {
                         ? systemChromeTitles() : java.util.Collections.<String>emptySet();
 
                 for (int scanPass = 0; scanPass < 3; scanPass++) {
+                    clearUiCache(uiAutomation);
                     all.clear();
                     nodeList.clear();
                     Object displays = uiClass.getMethod("getWindowsOnAllDisplays").invoke(uiAutomation);
@@ -1945,8 +2200,9 @@ public class ToolMain {
                         for (int i = 0; i < sizeN; i++) {
                             int dId = (Integer) keyAt.invoke(displays, i);
                             if (dId != targetDisplayId) continue;
-                            List<?> wins = (List<?>) valueAt.invoke(displays, i);
-                            if (wins == null) continue;
+                            List<?> rawWins = (List<?>) valueAt.invoke(displays, i);
+                            if (rawWins == null) continue;
+                            List<Object> wins = sortWindowsTopFirst(rawWins);
                             int winIndex = 0;
                             int[] idCounter = new int[] { 1 };
                             for (Object win : wins) {
@@ -1963,7 +2219,7 @@ public class ToolMain {
                                 }
                                 if (rootNode != null) {
                                     collectAll(rootNode, 0, all);
-                                    collectInteractiveNodes(rootNode, 0, null, nodeList, idCounter, winIndex);
+                                    collectInteractiveNodes(rootNode, 0, null, nodeList, idCounter, winIndex, false);
                                 }
                                 winIndex++;
                             }

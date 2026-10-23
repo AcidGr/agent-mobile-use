@@ -1785,7 +1785,7 @@ func isTransientTorn(treeText string, targetDid int, dispW int) bool {
 			minX, err1 := strconv.Atoi(parts[0])
 			maxX, err2 := strconv.Atoi(parts[1])
 			if err1 == nil && err2 == nil {
-				if minX > 50 && (dispW <= 0 || maxX > dispW) {
+				if minX > 50 && (dispW <= 0 || maxX >= dispW) {
 					return true // still sliding in from right
 				}
 				if maxX < 0 || (minX < -50 && maxX < dispW) {
@@ -1813,36 +1813,58 @@ func captureUiDumpWithRetry(targetDid int, st StatusResp, noSystemUi bool, maxRe
 	return lastStatus, lastText, lastErr
 }
 
-func resolveTarget(targetDid int, targetSpec string) (int, int, error) {
+type ResolvedTargetInfo struct {
+	X        int
+	Y        int
+	Focused  bool
+	Editable bool
+}
+
+func resolveTargetInfo(targetDid int, targetSpec string) (ResolvedTargetInfo, error) {
 	clean := strings.TrimSpace(targetSpec)
 	clean = strings.TrimPrefix(clean, "node:")
 	clean = strings.TrimPrefix(clean, "NODE:")
 	clean = strings.TrimSpace(clean)
 	if clean == "" {
-		return 0, 0, fmt.Errorf("empty target specifier")
+		return ResolvedTargetInfo{}, fmt.Errorf("empty target specifier")
 	}
 
 	req := fmt.Sprintf("resolve %d %s", targetDid, clean)
 	out, err := globalDumpDaemon.Request(req)
 	if err != nil {
-		return 0, 0, fmt.Errorf("daemon resolve failed: %w", err)
+		return ResolvedTargetInfo{}, fmt.Errorf("daemon resolve failed: %w", err)
 	}
 
 	var res struct {
-		OK    bool   `json:"ok"`
-		X     int    `json:"x"`
-		Y     int    `json:"y"`
-		ID    string `json:"id"`
-		Error string `json:"error"`
+		OK       bool   `json:"ok"`
+		X        int    `json:"x"`
+		Y        int    `json:"y"`
+		Focused  bool   `json:"focused"`
+		Editable bool   `json:"editable"`
+		ID       string `json:"id"`
+		Error    string `json:"error"`
 	}
 	trimmed := strings.TrimSpace(out)
 	if err := json.Unmarshal([]byte(trimmed), &res); err != nil {
-		return 0, 0, fmt.Errorf("invalid resolve response: %s", trimmed)
+		return ResolvedTargetInfo{}, fmt.Errorf("invalid resolve response: %s", trimmed)
 	}
 	if !res.OK {
-		return 0, 0, fmt.Errorf("target '%s' not found: %s", clean, res.Error)
+		return ResolvedTargetInfo{}, fmt.Errorf("target '%s' not found: %s", clean, res.Error)
 	}
-	return res.X, res.Y, nil
+	return ResolvedTargetInfo{
+		X:        res.X,
+		Y:        res.Y,
+		Focused:  res.Focused,
+		Editable: res.Editable,
+	}, nil
+}
+
+func resolveTarget(targetDid int, targetSpec string) (int, int, error) {
+	info, err := resolveTargetInfo(targetDid, targetSpec)
+	if err != nil {
+		return 0, 0, err
+	}
+	return info.X, info.Y, nil
 }
 
 func executeLaunch(targetDid int, rawPackage, activity string, user *int) (string, error) {
@@ -2366,14 +2388,28 @@ func main() {
 				targetDesc = fmt.Sprintf(" at (%d, %d)", x, y)
 				time.Sleep(150 * time.Millisecond)
 			} else if targetStr != "" {
-				tx, ty, err := resolveTarget(targetDid, targetStr)
-				if err == nil {
+				info, err := resolveTargetInfo(targetDid, targetStr)
+				if err != nil {
+					_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 1, 200)
+					json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Target '%s' not found: %v", targetStr, err), Data: textStr})
+					return
+				}
+				if info.Focused {
+					// Already focused: avoid tapping geometric center, which moves the caret into
+					// the middle of existing text and splits words upon paste.
+					targetDesc = fmt.Sprintf(" on focused target %s", targetStr)
+				} else {
 					if targetDid == 0 {
-						broadcastTouch(1, tx, ty, 0, 0, 0, 0, 0)
+						broadcastTouch(1, info.X, info.Y, 0, 0, 0, 0, 0)
 					}
-					exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(tx), strconv.Itoa(ty)).Run()
-					targetDesc = fmt.Sprintf(" on target %s at (%d, %d)", targetStr, tx, ty)
+					exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(info.X), strconv.Itoa(info.Y)).Run()
+					targetDesc = fmt.Sprintf(" on target %s at (%d, %d)", targetStr, info.X, info.Y)
 					time.Sleep(150 * time.Millisecond)
+					if info.Editable {
+						// Move caret to end of existing text (KEYCODE_MOVE_END = 123) so center-tap
+						// never pastes into the middle of residual content.
+						exec.Command("/system/bin/input", "-d", did, "keyevent", "123").Run()
+					}
 				}
 			}
 
