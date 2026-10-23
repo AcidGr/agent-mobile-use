@@ -43,7 +43,8 @@ public class HookEntry implements IXposedHookLoadPackage {
 
         // Force allow hosting tasks on virtual display
         hookAllMethodsReturningTrue(cl, "android.view.Display", "canHostTasks");
-        hookAllMethodsReturningTrue(cl, "com.android.server.wm.LogicalDisplay", "canHostTasksLocked");
+        hookAllMethodsReturningTrue(cl, "com.android.server.display.LogicalDisplay", "canHostTasksLocked");
+        hookAllMethodsReturningTrue(cl, "com.android.server.display.LogicalDisplay", "canHostTasks");
         hookAllMethodsReturningTrue(cl, "com.android.server.wm.ActivityTaskSupervisor", "isCallerAllowedToLaunchOnDisplay");
         hookAllMethodsReturningTrue(cl, "com.android.server.wm.ActivityTaskSupervisor", "isCallerAllowedToLaunchOnTaskDisplayArea");
         hookAllMethodsReturningTrue(cl, "com.android.server.wm.ActivityTaskSupervisor", "canPlaceEntityOnDisplay");

@@ -23,13 +23,47 @@ if [ ! -x "$SERVER_BIN" ]; then
     SERVER_BIN="$(cd "$(dirname "$0")/../.." && pwd)/bin/vd_server"
 fi
 
+# Zero-dependency HTTP helper: prefers vd_server -req (static Go binary, works on stock
+# Android without curl or broken LD_LIBRARY_PATH), falling back to curl if needed.
+http_get() {
+    if [ -x "$SERVER_BIN" ]; then
+        "$SERVER_BIN" -req GET "$1"
+    else
+        curl -s "$BASE_URL$1"
+    fi
+}
+
+http_post() {
+    if [ -x "$SERVER_BIN" ]; then
+        if [ -n "$2" ]; then
+            "$SERVER_BIN" -req POST "$1" "$2"
+        else
+            "$SERVER_BIN" -req POST "$1"
+        fi
+    else
+        if [ -n "$2" ]; then
+            curl -s -X POST "$BASE_URL$1" -H "Content-Type: application/json" -d "$2"
+        else
+            curl -s -X POST "$BASE_URL$1"
+        fi
+    fi
+}
+
+http_download() {
+    if [ -x "$SERVER_BIN" ]; then
+        "$SERVER_BIN" -req GET "$1" -o "$2"
+    else
+        curl -s -f "$BASE_URL$1" -o "$2"
+    fi
+}
+
 ensure_server() {
-    if ! curl -s --max-time 1 "$BASE_URL/api/status" >/dev/null 2>&1; then
+    if ! http_get "/api/status" >/dev/null 2>&1; then
         if [ -x "$SERVER_BIN" ]; then
             nohup "$SERVER_BIN" > /data/local/tmp/vd_server.log 2>&1 &
-            for i in $(seq 1 20); do
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
                 sleep 0.1
-                curl -s --max-time 1 "$BASE_URL/api/status" >/dev/null 2>&1 && break
+                http_get "/api/status" >/dev/null 2>&1 && break
             done
         fi
     fi
@@ -38,48 +72,48 @@ ensure_server() {
 case "$1" in
     start)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/start"
+        http_post "/api/start"
         echo ""
         ;;
     stop)
-        curl -s -X POST "$BASE_URL/api/stop"
+        http_post "/api/stop"
         echo ""
         ;;
     restart)
-        curl -s -X POST "$BASE_URL/api/stop" >/dev/null 2>&1
+        http_post "/api/stop" >/dev/null 2>&1
         sleep 0.5
         ensure_server
-        curl -s -X POST "$BASE_URL/api/start"
+        http_post "/api/start"
         echo ""
         ;;
     status)
-        curl -s "$BASE_URL/api/status"
+        http_get "/api/status"
         echo ""
         ;;
     mode)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/mode?mode=$2"
+        http_post "/api/mode?mode=$2"
         echo ""
         ;;
     launch)
         ensure_server
         shift
         pkg=$(json_escape "$*")
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"launch_app\", \"package\": \"$pkg\"}"
+        http_post "/api/action" "{\"action\": \"launch_app\", \"package\": \"$pkg\"}"
         echo ""
         ;;
     tree|dump)
         ensure_server
-        curl -s "$BASE_URL/api/dump_ui?raw=1"
+        http_get "/api/dump_ui?raw=1"
         ;;
     tap)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"click\", \"coordinate\": [$2, $3]}"
+        http_post "/api/action" "{\"action\": \"click\", \"coordinate\": [$2, $3]}"
         echo ""
         ;;
     swipe)
         ensure_server
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"swipe\", \"coordinate\": [$2, $3], \"end_coordinate\": [$4, $5], \"duration_ms\": ${6:-300}}"
+        http_post "/api/action" "{\"action\": \"swipe\", \"coordinate\": [$2, $3], \"end_coordinate\": [$4, $5], \"duration_ms\": ${6:-300}}"
         echo ""
         ;;
     set_value)
@@ -88,10 +122,10 @@ case "$1" in
             target=$(json_escape "$2")
             shift 2
             text=$(json_escape "$*")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"set_value\", \"target\": \"$target\", \"text\": \"$text\"}"
+            http_post "/api/action" "{\"action\": \"set_value\", \"target\": \"$target\", \"text\": \"$text\"}"
         else
             text=$(json_escape "$2")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"set_value\", \"text\": \"$text\"}"
+            http_post "/api/action" "{\"action\": \"set_value\", \"text\": \"$text\"}"
         fi
         echo ""
         ;;
@@ -101,23 +135,23 @@ case "$1" in
             target=$(json_escape "$2")
             shift 2
             text=$(json_escape "$*")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"target\": \"$target\", \"text\": \"$text\"}"
+            http_post "/api/action" "{\"action\": \"type\", \"target\": \"$target\", \"text\": \"$text\"}"
         else
             text=$(json_escape "$2")
-            curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"type\", \"text\": \"$text\"}"
+            http_post "/api/action" "{\"action\": \"type\", \"text\": \"$text\"}"
         fi
         echo ""
         ;;
     key)
         ensure_server
         key=$(json_escape "$2")
-        curl -s -X POST "$BASE_URL/api/action" -H "Content-Type: application/json" -d "{\"action\": \"key\", \"key\": \"$key\"}"
+        http_post "/api/action" "{\"action\": \"key\", \"key\": \"$key\"}"
         echo ""
         ;;
     screenshot)
         ensure_server
         out="${2:-/data/local/tmp/vd_screenshot.jpg}"
-        if curl -s -f "$BASE_URL/api/screenshot" -o "$out"; then
+        if http_download "/api/screenshot" "$out"; then
             echo "[vd] 快照已保存至: $out"
         else
             echo "[vd] 截图失败"
@@ -126,7 +160,7 @@ case "$1" in
         ;;
     apps|list_apps)
         ensure_server
-        curl -s "$BASE_URL/api/apps?raw=1&query=$2"
+        http_get "/api/apps?raw=1&query=$2"
         ;;
     *)
         echo "Agent Mobile Use - 虚拟副屏控制 CLI"

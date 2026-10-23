@@ -848,13 +848,50 @@ func getStatus() StatusResp {
 }
 
 func isLsposedActive() bool {
-	out, err := exec.Command("/system/bin/pidof", "lspd").Output()
-	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+	// 1. Verify at least one Xposed/LSPosed/Vector daemon process is alive
+	daemonAlive := false
+	for _, procName := range []string{"lspd", "vectord"} {
+		out, err := exec.Command("/system/bin/pidof", procName).Output()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			daemonAlive = true
+			break
+		}
+	}
+	if !daemonAlive {
 		return false
 	}
-	matches, _ := filepath.Glob("/data/adb/lspd/log/modules_*.log")
-	for _, m := range matches {
-		data, err := os.ReadFile(m)
+
+	// 2. Check active module logs across both LSPosed 1.x (/data/adb/lspd) and Vector 2.x (/data/adb/vector)
+	for _, pattern := range []string{
+		"/data/adb/lspd/log/modules_*.log",
+		"/data/adb/lspd/log/verbose_*.log",
+		"/data/adb/vector/log/modules_*.log",
+		"/data/adb/vector/log/verbose_*.log",
+	} {
+		matches, _ := filepath.Glob(pattern)
+		for _, m := range matches {
+			data, err := os.ReadFile(m)
+			if err == nil && bytes.Contains(data, []byte("com.agent.mobileuse")) {
+				return true
+			}
+		}
+	}
+
+	// 3. Fallback for setups with module file logging disabled or Vector 2.x SQLite config DB (WAL-aware)
+	for _, dbBase := range []string{
+		"/data/adb/lspd/config/modules_config.db",
+		"/data/adb/vector/config/modules_config.db",
+	} {
+		if hasModuleInConfigDB(dbBase) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasModuleInConfigDB(dbBase string) bool {
+	for _, p := range []string{dbBase, dbBase + "-wal"} {
+		data, err := os.ReadFile(p)
 		if err == nil && bytes.Contains(data, []byte("com.agent.mobileuse")) {
 			return true
 		}
@@ -1986,7 +2023,86 @@ type CompositeActionRequest struct {
 	NoSystemUI    bool   `json:"no_system_ui"`
 }
 
+func runCliHttpHelper(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: vd_server -req <GET|POST> <path_or_url> [body] [-o output_file]")
+		return 1
+	}
+	method := strings.ToUpper(strings.TrimSpace(args[0]))
+	target := strings.TrimSpace(args[1])
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "3070"
+		}
+		if !strings.HasPrefix(target, "/") {
+			target = "/" + target
+		}
+		target = "http://127.0.0.1:" + port + target
+	}
+
+	bodyStr := ""
+	outFile := ""
+	for i := 2; i < len(args); i++ {
+		if args[i] == "-o" && i+1 < len(args) {
+			outFile = args[i+1]
+			i++
+		} else if bodyStr == "" {
+			bodyStr = args[i]
+		}
+	}
+
+	var bodyReader io.Reader
+	if bodyStr != "" {
+		bodyReader = strings.NewReader(bodyStr)
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Request error: %v\n", err)
+		return 1
+	}
+	if bodyStr != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	timeout := 30 * time.Second
+	if strings.HasSuffix(target, "/api/status") {
+		timeout = 2 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 1
+	}
+
+	if outFile != "" {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 || len(data) == 0 {
+			return 1
+		}
+		if err := os.WriteFile(outFile, data, 0644); err != nil {
+			return 1
+		}
+		return 0
+	}
+
+	_, _ = os.Stdout.Write(data)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 1
+	}
+	return 0
+}
+
 func main() {
+	if len(os.Args) >= 2 && (os.Args[1] == "-req" || os.Args[1] == "--req") {
+		os.Exit(runCliHttpHelper(os.Args[2:]))
+	}
+
 	thawAppProcess()
 	initDshSecret()
 	startCapsuleWatchdog()

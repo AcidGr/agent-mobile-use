@@ -1,11 +1,11 @@
 SKIPUNZIP=0
 
 ui_print "**********************************************"
-ui_print "* Agent Mobile Sandbox & Tools v0.8.10-alpha *"
+ui_print "*    Agent Mobile Sandbox & Tools v0.8.10    *"
 ui_print "*               作者：酸小明                 *"
 ui_print "**********************************************"
 
-ui_print "- 正在安装纯隐形 LSPosed 跨屏路由与输入法隔离补丁 (v0.8.10-alpha)..."
+ui_print "- 正在安装纯隐形 LSPosed 跨屏路由与输入法隔离补丁 (v0.8.10)..."
 pm install -r "$MODPATH/apk/agent_hook.apk" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
     ui_print "- Hook 补丁安装成功"
@@ -14,24 +14,25 @@ else
     ui_print "! 警告: APK 安装失败，请检查系统环境"
 fi
 
-# Configure LSPosed scope DB
-LSP_DB="/data/adb/lspd/config/modules_config.db"
+# Configure LSPosed / Vector 2.x scope DB (Issue #13)
 SQLITE_BIN="$MODPATH/bin/sqlite3"
 chmod 755 "$SQLITE_BIN" 2>/dev/null
 
-if [ -f "$LSP_DB" ] && [ -x "$SQLITE_BIN" ]; then
-    ui_print "- 正在自动配置 LSPosed 模块作用域..."
-    APK_PATH=$(pm path com.agent.mobileuse 2>/dev/null | head -n 1 | cut -d':' -f2)
-    if [ -n "$APK_PATH" ]; then
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO modules (module_pkg_name, apk_path) VALUES ('com.agent.mobileuse', '$APK_PATH');" 2>/dev/null
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO modules_state (module_pkg_name, user_id, enabled) VALUES ('com.agent.mobileuse', 0, 1);" 2>/dev/null
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'android', 0);" 2>/dev/null
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'system', 0);" 2>/dev/null
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'com.android.systemui', 0);" 2>/dev/null
-        "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'com.agent.mobileuse', 0);" 2>/dev/null
-        ui_print "- LSPosed 作用域配置完成: $APK_PATH"
+for LSP_DB in "/data/adb/lspd/config/modules_config.db" "/data/adb/vector/config/modules_config.db"; do
+    if [ -f "$LSP_DB" ] && [ -x "$SQLITE_BIN" ]; then
+        ui_print "- 正在自动配置模块作用域 ($LSP_DB)..."
+        APK_PATH=$(pm path com.agent.mobileuse 2>/dev/null | head -n 1 | cut -d':' -f2)
+        if [ -n "$APK_PATH" ]; then
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO modules (module_pkg_name, apk_path) VALUES ('com.agent.mobileuse', '$APK_PATH');" 2>/dev/null
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO modules_state (module_pkg_name, user_id, enabled) VALUES ('com.agent.mobileuse', 0, 1);" 2>/dev/null
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'android', 0);" 2>/dev/null
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'system', 0);" 2>/dev/null
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'com.android.systemui', 0);" 2>/dev/null
+            "$SQLITE_BIN" "$LSP_DB" "INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES ('com.agent.mobileuse', 'com.agent.mobileuse', 0);" 2>/dev/null
+            ui_print "- 模块作用域配置完成: $APK_PATH"
+        fi
     fi
-fi
+done
 
 ui_print "- 设置可执行权限..."
 set_perm_recursive "$MODPATH" 0 0 0755 0644
@@ -40,6 +41,14 @@ set_perm "$MODPATH/bin/run_daemon.sh" 0 0 0755
 set_perm "$MODPATH/bin/vd_server" 0 0 0755
 set_perm "$MODPATH/bin/sqlite3" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
+
+# Create global CLI symlinks for APatch / KernelSU / Magisk environments without system overlay (Issue #11)
+LIVE_MODDIR="/data/adb/modules/agent_mobile_use"
+for BIN_DIR in "/data/adb/ap/bin" "/data/adb/ksu/bin" "/data/adb/magisk"; do
+    if [ -d "$BIN_DIR" ]; then
+        ln -sf "$LIVE_MODDIR/system/bin/vd" "$BIN_DIR/vd" 2>/dev/null || true
+    fi
+done
 
 # Instant activation without waiting for reboot
 cp -f "$MODPATH/bin/agent_vd.dex" /data/local/tmp/agent_vd.dex

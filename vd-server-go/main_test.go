@@ -3,6 +3,11 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -160,5 +165,55 @@ func TestIsAppsToolFailure(t *testing.T) {
 	}
 	if !isAppsToolFailure(emptyMatch, fmt.Errorf("exit status 1")) {
 		t.Fatal("non-zero exit error must be classified as failure even when output is non-empty")
+	}
+}
+
+func TestHasModuleInConfigDB(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "modules_config.db")
+	if err := os.WriteFile(dbPath, []byte("header without module"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if hasModuleInConfigDB(dbPath) {
+		t.Fatal("expected false before module entry exists")
+	}
+	// Simulate SQLite WAL file containing com.agent.mobileuse (Vector 2.x / LSPosed WAL mode)
+	if err := os.WriteFile(dbPath+"-wal", []byte("sqlite-wal-frame com.agent.mobileuse enabled"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasModuleInConfigDB(dbPath) {
+		t.Fatal("expected true when com.agent.mobileuse is present in WAL file")
+	}
+}
+
+func TestRunCliHttpHelper(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/status":
+			w.Write([]byte(`{"status":"running"}`))
+		case "/api/action":
+			b, _ := io.ReadAll(r.Body)
+			w.Write([]byte("echo:" + string(b)))
+		case "/api/screenshot":
+			w.Write([]byte("\xff\xd8\xff\xe0jpegdata"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	if code := runCliHttpHelper([]string{"GET", srv.URL + "/api/status"}); code != 0 {
+		t.Fatalf("expected GET /api/status to return 0, got %d", code)
+	}
+	if code := runCliHttpHelper([]string{"POST", srv.URL + "/api/action", `{"action":"click"}`}); code != 0 {
+		t.Fatalf("expected POST /api/action to return 0, got %d", code)
+	}
+	outImg := filepath.Join(t.TempDir(), "shot.jpg")
+	if code := runCliHttpHelper([]string{"GET", srv.URL + "/api/screenshot", "-o", outImg}); code != 0 {
+		t.Fatalf("expected screenshot download to return 0, got %d", code)
+	}
+	data, err := os.ReadFile(outImg)
+	if err != nil || !strings.HasPrefix(string(data), "\xff\xd8\xff\xe0") {
+		t.Fatalf("unexpected downloaded screenshot bytes: %v", err)
 	}
 }

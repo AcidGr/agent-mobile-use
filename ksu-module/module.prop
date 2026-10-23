@@ -1,6 +1,6 @@
 id=agent_mobile_use
 name=Agent Mobile Sandbox & Tools
-version=0.8.10-alpha
+version=0.8.10
 versionCode=810
 author=酸小明
 description=供 DeepSeek Harness 使用的 Mobile Use 工具。提供后台虚拟副屏与屏幕控制能力。

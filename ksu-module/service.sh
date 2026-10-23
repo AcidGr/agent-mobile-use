@@ -18,6 +18,13 @@ chmod 755 "$MODDIR/bin/vd_server" 2>/dev/null
 chmod 755 "$MODDIR/bin/run_daemon.sh" 2>/dev/null
 chmod 755 "$MODDIR/system/bin/vd" 2>/dev/null
 
+# Ensure vd CLI is linked in APatch / KernelSU / Magisk PATH directories (Issue #11)
+for BIN_DIR in "/data/adb/ap/bin" "/data/adb/ksu/bin" "/data/adb/magisk"; do
+    if [ -d "$BIN_DIR" ]; then
+        ln -sf "$MODDIR/system/bin/vd" "$BIN_DIR/vd" 2>/dev/null || true
+    fi
+done
+
 cp -f "$MODDIR/bin/agent_vd.dex" /data/local/tmp/agent_vd.dex 2>/dev/null
 cp -f "$MODDIR/bin/agent_tools.dex" /data/local/tmp/agent_tools.dex 2>/dev/null
 cp -f "$MODDIR/bin/run_daemon.sh" /data/local/tmp/run_daemon.sh 2>/dev/null

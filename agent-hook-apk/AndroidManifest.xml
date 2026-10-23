@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.agent.mobileuse"
     android:versionCode="810"
-    android:versionName="0.8.10-alpha">
+    android:versionName="0.8.10">
 
     <uses-sdk
         android:minSdkVersion="26"
