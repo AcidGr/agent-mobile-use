@@ -2,22 +2,46 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"os/signal"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 )
 
+type mutedAppKey struct {
+	Pkg    string
+	UserID int
+}
+
+func formatMutedAppKey(k mutedAppKey) string {
+	if k.UserID == 0 {
+		return k.Pkg
+	}
+	return fmt.Sprintf("%s (user %d)", k.Pkg, k.UserID)
+}
+
 var (
+	// audioOpMu serializes shell-level `cmd appops` mutations so an in-flight mute
+	// during app launch cannot interleave after unmuteAllAudio() on stop/idle.
+	audioOpMu          sync.Mutex
 	audioMu            sync.Mutex
 	vdAudioMuteEnabled = true
-	// mutedPackages tracks package -> userId for apps silenced on the virtual display
-	mutedPackages = make(map[string]int)
+	// mutedPackages tracks (package, userId) pairs silenced on the virtual display
+	mutedPackages = make(map[mutedAppKey]struct{})
 )
+
+func listMutedApps() []string {
+	audioMu.Lock()
+	list := make([]string, 0, len(mutedPackages))
+	for k := range mutedPackages {
+		list = append(list, formatMutedAppKey(k))
+	}
+	audioMu.Unlock()
+	sort.Strings(list)
+	return list
+}
 
 func isAudioMuteEnabled() bool {
 	audioMu.Lock()
@@ -44,6 +68,17 @@ func setPackageMuted(pkg string, userId int, mute bool) {
 	if pkg == "" || strings.Contains(pkg, "launcher") || strings.Contains(pkg, "systemui") || pkg == "android" {
 		return
 	}
+
+	audioOpMu.Lock()
+	defer audioOpMu.Unlock()
+
+	if mute {
+		st := getStatus()
+		if !isAudioMuteEnabled() || getCurrentMode() != "background" || st.Status != "running" || st.DisplayID <= 0 {
+			return
+		}
+	}
+
 	mode := "allow"
 	if mute {
 		mode = "ignore"
@@ -57,11 +92,12 @@ func setPackageMuted(pkg string, userId int, mute bool) {
 	}
 	fmt.Printf("[audio] %s (user %d) PLAY_AUDIO -> %s\n", pkg, userId, mode)
 
+	key := mutedAppKey{Pkg: pkg, UserID: userId}
 	audioMu.Lock()
 	if mute {
-		mutedPackages[pkg] = userId
+		mutedPackages[key] = struct{}{}
 	} else {
-		delete(mutedPackages, pkg)
+		delete(mutedPackages, key)
 	}
 	audioMu.Unlock()
 }
@@ -93,17 +129,20 @@ func parseUserIDs() []int {
 
 // unmuteAllAudio restores all muted packages and sweeps system AppOps to prevent stuck silence
 func unmuteAllAudio() {
+	audioOpMu.Lock()
+	defer audioOpMu.Unlock()
+
 	audioMu.Lock()
-	toUnmute := make(map[string]int, len(mutedPackages))
-	for k, v := range mutedPackages {
-		toUnmute[k] = v
+	toUnmute := make([]mutedAppKey, 0, len(mutedPackages))
+	for k := range mutedPackages {
+		toUnmute = append(toUnmute, k)
 	}
-	mutedPackages = make(map[string]int)
+	mutedPackages = make(map[mutedAppKey]struct{})
 	audioMu.Unlock()
 
-	for pkg, uId := range toUnmute {
-		uStr := strconv.Itoa(uId)
-		_ = exec.Command("/system/bin/cmd", "appops", "set", "--user", uStr, pkg, "PLAY_AUDIO", "allow").Run()
+	for _, k := range toUnmute {
+		uStr := strconv.Itoa(k.UserID)
+		_ = exec.Command("/system/bin/cmd", "appops", "set", "--user", uStr, k.Pkg, "PLAY_AUDIO", "allow").Run()
 	}
 
 	// Defensive sweep: scan all users for any orphaned PLAY_AUDIO ignore
@@ -136,52 +175,42 @@ func reconcileVdAudio(vdDid int) {
 	}
 
 	stacks := getStackList()
-	vdPkgs := make(map[string]int)
+	vdPkgs := make(map[mutedAppKey]struct{})
 	for _, s := range stacks {
 		if s.DisplayID == vdDid {
 			for _, pkg := range s.Packages {
 				if strings.Contains(pkg, "launcher") || strings.Contains(pkg, "systemui") || pkg == "android" {
 					continue
 				}
-				vdPkgs[pkg] = s.UserID
+				vdPkgs[mutedAppKey{Pkg: pkg, UserID: s.UserID}] = struct{}{}
 			}
 		}
 	}
 
 	audioMu.Lock()
-	currentMuted := make(map[string]int, len(mutedPackages))
-	for k, v := range mutedPackages {
-		currentMuted[k] = v
+	currentMuted := make(map[mutedAppKey]struct{}, len(mutedPackages))
+	for k := range mutedPackages {
+		currentMuted[k] = struct{}{}
 	}
 	audioMu.Unlock()
 
 	// 1. Mute apps now on VD
-	for pkg, uId := range vdPkgs {
-		if _, ok := currentMuted[pkg]; !ok {
-			setPackageMuted(pkg, uId, true)
+	for k := range vdPkgs {
+		if _, ok := currentMuted[k]; !ok {
+			setPackageMuted(k.Pkg, k.UserID, true)
 		}
 	}
 
 	// 2. Unmute apps that left VD
-	for pkg, uId := range currentMuted {
-		if _, ok := vdPkgs[pkg]; !ok {
-			setPackageMuted(pkg, uId, false)
+	for k := range currentMuted {
+		if _, ok := vdPkgs[k]; !ok {
+			setPackageMuted(k.Pkg, k.UserID, false)
 		}
 	}
 }
 
-// initAudioGuard sets up fail-safe sweeps and signal handlers
+// initAudioGuard performs a startup self-healing sweep to clear any previous crash remnants.
+// Process termination cleanup is coordinated in main()'s unified signal handler.
 func initAudioGuard() {
-	// 1. Startup self-healing sweep to clear any previous crash remnants
 	unmuteAllAudio()
-
-	// 2. Trap process termination signals to guarantee clean audio restoration
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	go func() {
-		sig := <-sigChan
-		fmt.Printf("[audio] caught signal %v, restoring audio for all apps...\n", sig)
-		unmuteAllAudio()
-		os.Exit(0)
-	}()
 }

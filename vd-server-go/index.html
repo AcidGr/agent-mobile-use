@@ -254,6 +254,7 @@
         let toggling = false;
         let isStreaming = false;
         let audioMuteEnabled = true;
+        let mutedApps = [];
         let ws = null;
         let decoder = null;
 
@@ -271,6 +272,7 @@
                 if (res.ok) {
                     const data = await res.json();
                     audioMuteEnabled = data.enabled;
+                    mutedApps = Array.isArray(data.muted) ? data.muted : [];
                     updateAudioBtn();
                 }
             } catch (e) {}
@@ -278,12 +280,13 @@
 
         function updateAudioBtn() {
             if (!audioBtn) return;
+            const mutedSuffix = mutedApps.length > 0 ? ` [当前静音 ${mutedApps.length}: ${mutedApps.join(', ')}]` : '';
             if (audioMuteEnabled) {
                 audioBtn.className = 'btn-icon btn-audio-on';
-                audioBtn.title = '副屏静音: 开 (点击切换 / 双击一键全解)';
+                audioBtn.title = `副屏静音: 开${mutedSuffix} (点击切换 / 双击一键全解)`;
             } else {
                 audioBtn.className = 'btn-icon btn-audio-off';
-                audioBtn.title = '副屏静音: 关 (点击切换 / 双击一键全解)';
+                audioBtn.title = `副屏静音: 关${mutedSuffix} (点击切换 / 双击一键全解)`;
             }
         }
 

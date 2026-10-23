@@ -139,3 +139,26 @@ func TestIsTransientTornSlidingAndDialogs(t *testing.T) {
 		t.Fatal("left-sliding page was not detected as transient torn")
 	}
 }
+
+func TestIsAppsToolFailure(t *testing.T) {
+	// Issue #1: Java `fail error=...` output must be classified as failure even if exit error is nil or non-empty
+	failLine := `fail error="failed to get SystemContext: java.lang.reflect.InvocationTargetException"`
+	if !isAppsToolFailure(failLine, nil) {
+		t.Fatal("fail error=... output with nil err must be classified as failure")
+	}
+	if !isAppsToolFailure(failLine, fmt.Errorf("exit status 1")) {
+		t.Fatal("fail error=... output with non-zero exit must be classified as failure")
+	}
+	if !isAppsToolFailure("", nil) {
+		t.Fatal("empty output must be classified as failure")
+	}
+
+	// Healthy empty query result prints `total=0 ...` and exits 0 -> must succeed
+	emptyMatch := `total=0 users=[0] query="nonexistent"`
+	if isAppsToolFailure(emptyMatch, nil) {
+		t.Fatal("healthy zero-match apps output falsely classified as failure")
+	}
+	if !isAppsToolFailure(emptyMatch, fmt.Errorf("exit status 1")) {
+		t.Fatal("non-zero exit error must be classified as failure even when output is non-empty")
+	}
+}

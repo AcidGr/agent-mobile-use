@@ -25,27 +25,32 @@ func TestParseUserIDsFromOutput(t *testing.T) {
 
 func TestMutedPackagesTracking(t *testing.T) {
 	audioMu.Lock()
-	mutedPackages = make(map[string]int)
+	mutedPackages = make(map[mutedAppKey]struct{})
 	audioMu.Unlock()
 
-	if len(mutedPackages) != 0 {
+	if len(listMutedApps()) != 0 {
 		t.Fatal("expected empty mutedPackages initially")
 	}
 
-	// Verify state mutation under lock
+	// Verify dual-app (same package across user 0 and user 999) does NOT overwrite each other
 	audioMu.Lock()
-	mutedPackages["com.test.app"] = 0
-	mutedPackages["com.test.clone"] = 999
+	mutedPackages[mutedAppKey{Pkg: "com.tencent.mm", UserID: 0}] = struct{}{}
+	mutedPackages[mutedAppKey{Pkg: "com.tencent.mm", UserID: 999}] = struct{}{}
+	mutedPackages[mutedAppKey{Pkg: "com.test.app", UserID: 0}] = struct{}{}
 	audioMu.Unlock()
 
+	got := listMutedApps()
+	want := []string{
+		"com.tencent.mm",
+		"com.tencent.mm (user 999)",
+		"com.test.app",
+	}
+
 	audioMu.Lock()
-	count := len(mutedPackages)
-	u0 := mutedPackages["com.test.app"]
-	u999 := mutedPackages["com.test.clone"]
-	mutedPackages = make(map[string]int)
+	mutedPackages = make(map[mutedAppKey]struct{})
 	audioMu.Unlock()
 
-	if count != 2 || u0 != 0 || u999 != 999 {
-		t.Fatalf("mutedPackages tracking error: count=%d, u0=%d, u999=%d", count, u0, u999)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mutedPackages tracking mismatch: got %v, want %v", got, want)
 	}
 }

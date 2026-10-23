@@ -418,7 +418,6 @@ func setSessionActive(active bool, sid string, title string) {
 		modeMu.Lock()
 		currentMode = "idle"
 		modeMu.Unlock()
-		syncA11yWithTargetDisplay(-1)
 	}
 
 	sessionMetaMu.Lock()
@@ -442,6 +441,11 @@ func setSessionActive(active bool, sid string, title string) {
 	sessionMetaMu.Unlock()
 
 	go updateCapsuleState()
+
+	if remaining == 0 {
+		syncA11yWithTargetDisplay(-1)
+		unmuteAllAudio()
+	}
 }
 
 func getSessionActive() bool {
@@ -1092,6 +1096,11 @@ func startVirtualDisplay(opts ...StartOptions) StatusResp {
 
 	logFile, _ := os.OpenFile("/data/local/tmp/daemon.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	cmd := exec.Command("/system/bin/sh", runScript, strconv.Itoa(reqW), strconv.Itoa(reqH), strconv.Itoa(reqDpi))
+	bcp, dex2oatBcp := resolveBootClasspath()
+	cmd.Env = append(os.Environ(),
+		"BOOTCLASSPATH="+bcp,
+		"DEX2OATBOOTCLASSPATH="+dex2oatBcp,
+	)
 	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -1117,6 +1126,7 @@ func stopVirtualDisplay() StatusResp {
 		st := getStatus()
 		if st.Status == "stopped" {
 			syncA11yWithTargetDisplay(getTargetDisplayID(st))
+			unmuteAllAudio()
 			return st
 		}
 	}
@@ -1129,6 +1139,7 @@ func stopVirtualDisplay() StatusResp {
 	}
 	_ = os.WriteFile(statusFile, []byte(`{"status":"stopped","display_id":-1}`), 0644)
 	syncA11yWithTargetDisplay(getTargetDisplayID(getStatus()))
+	unmuteAllAudio()
 	return getStatus()
 }
 
@@ -1325,6 +1336,29 @@ func initDshSecret() {
 			dshAuthSecret = s
 			dshAuthSecretMu.Unlock()
 		}
+	}
+}
+
+func isAppsToolFailure(trimmed string, err error) bool {
+	if err != nil || trimmed == "" {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "fail ") || strings.HasPrefix(trimmed, "fail\t") || trimmed == "fail" {
+		return true
+	}
+	return false
+}
+
+func formatAppsToolError(trimmed string, err error) string {
+	switch {
+	case trimmed != "" && err != nil:
+		return fmt.Sprintf("Failed to list apps: %s (%v)", trimmed, err)
+	case trimmed != "":
+		return fmt.Sprintf("Failed to list apps: %s", trimmed)
+	case err != nil:
+		return fmt.Sprintf("Failed to list apps: %v", err)
+	default:
+		return "Failed to list apps: empty output from tool"
 	}
 }
 
@@ -1891,6 +1925,11 @@ func executeLaunch(targetDid int, rawPackage, activity string, user *int) (strin
 				return fmt.Sprintf("Smoothly moved existing stack %d of %s%s to display %d", existingStack.StackID, pkg, userDesc, targetDid), nil
 			}
 		} else {
+			if targetDid > 0 && isAudioMuteEnabled() {
+				setPackageMuted(pkg, userId, true)
+			} else if targetDid == 0 {
+				setPackageMuted(pkg, userId, false)
+			}
 			if existingStack.Visible && act == "" {
 				userDesc := ""
 				if userId != 0 {
@@ -1957,11 +1996,13 @@ func main() {
 	st := getStatus()
 	syncA11yWithTargetDisplay(getTargetDisplayID(st))
 
-	// Clean up a11y service on graceful termination
+	// Clean up audio mute state, a11y service, and dump daemon on graceful termination
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		<-sigCh
+		sig := <-sigCh
+		fmt.Printf("[shutdown] caught signal %v, restoring audio and detaching services...\n", sig)
+		unmuteAllAudio()
 		ensureA11yServiceDetached()
 		globalDumpDaemon.Stop()
 		os.Exit(0)
@@ -2615,11 +2656,11 @@ func main() {
 
 		out, err := runTool(args...)
 		trimmed := strings.TrimSpace(out)
-		if err != nil && trimmed == "" {
+		if isAppsToolFailure(trimmed, err) {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(ActionResponse{
 				Success: false,
-				Message: fmt.Sprintf("Failed to list apps: %v", err),
+				Message: formatAppsToolError(trimmed, err),
 			})
 			return
 		}
@@ -2906,13 +2947,8 @@ func main() {
 	mux.HandleFunc("/api/audio/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		audioMu.Lock()
-		mutedList := make([]string, 0, len(mutedPackages))
-		for p := range mutedPackages {
-			mutedList = append(mutedList, p)
-		}
-		enabled := vdAudioMuteEnabled
-		audioMu.Unlock()
+		mutedList := listMutedApps()
+		enabled := isAudioMuteEnabled()
 		json.NewEncoder(w).Encode(map[string]any{
 			"enabled": enabled,
 			"muted":   mutedList,
