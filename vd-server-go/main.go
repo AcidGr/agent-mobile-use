@@ -2320,7 +2320,9 @@ func main() {
 				if tp.Reason != "" {
 					errMsg = fmt.Sprintf("%s (%s)", tp.Error, tp.Reason)
 				}
-				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Set value failed: %s", errMsg)})
+				time.Sleep(100 * time.Millisecond)
+				_, textStr, _ := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 1, 200)
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("Set value failed: %s", errMsg), Data: textStr})
 				return
 			}
 
@@ -2332,8 +2334,76 @@ func main() {
 			if tp.VerifiedText != "" {
 				actionDesc += fmt.Sprintf(" | after=\"%s\"", tp.VerifiedText)
 			}
+			if tp.Error == "verify_mismatch" {
+				actionDesc += " (notice: readback differs from input)"
+			}
 
 			// Restore text input settling buffer (350ms) + 2x 200ms backoff retry
+			time.Sleep(350 * time.Millisecond)
+			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
+			if err != nil && textStr == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: fmt.Sprintf("%s, but UI dump failed: %v", actionDesc, err)})
+				return
+			}
+			json.NewEncoder(w).Encode(ActionResponse{Success: true, Message: actionDesc, Data: textStr})
+
+		case "type":
+			if p.Text == "" {
+				json.NewEncoder(w).Encode(ActionResponse{Success: false, Message: "Action 'type' requires text to type"})
+				return
+			}
+
+			var targetDesc string
+			hasCoord := len(p.Coordinate) >= 2
+			// 1. Optional focus: tap coordinate or resolved target ID
+			if hasCoord {
+				x := p.Coordinate[0]
+				y := p.Coordinate[1]
+				if targetDid == 0 {
+					broadcastTouch(1, x, y, 0, 0, 0, 0, 0)
+				}
+				exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(x), strconv.Itoa(y)).Run()
+				targetDesc = fmt.Sprintf(" at (%d, %d)", x, y)
+				time.Sleep(150 * time.Millisecond)
+			} else if targetStr != "" {
+				tx, ty, err := resolveTarget(targetDid, targetStr)
+				if err == nil {
+					if targetDid == 0 {
+						broadcastTouch(1, tx, ty, 0, 0, 0, 0, 0)
+					}
+					exec.Command("/system/bin/input", "-d", did, "tap", strconv.Itoa(tx), strconv.Itoa(ty)).Run()
+					targetDesc = fmt.Sprintf(" on target %s at (%d, %d)", targetStr, tx, ty)
+					time.Sleep(150 * time.Millisecond)
+				}
+			}
+
+			// 2. Set clipboard via daemon and send paste keyevent (279)
+			b64 := base64.StdEncoding.EncodeToString([]byte(p.Text))
+			clipOut, clipErr := globalDumpDaemon.Request(fmt.Sprintf("clip_b64 %s", b64))
+			clipSuccess := false
+			if clipErr == nil && strings.Contains(clipOut, `"ok":true`) {
+				clipSuccess = true
+			}
+
+			if clipSuccess {
+				// KEYCODE_PASTE = 279
+				exec.Command("/system/bin/input", "-d", did, "keyevent", "279").Run()
+			} else {
+				// Fallback to input text for single-line ASCII if clipboard IPC fails
+				exec.Command("/system/bin/input", "-d", did, "text", p.Text).Run()
+			}
+
+			actionTarget := targetStr
+			if actionTarget == "" {
+				if hasCoord {
+					actionTarget = fmt.Sprintf("(%d, %d)", p.Coordinate[0], p.Coordinate[1])
+				} else {
+					actionTarget = "focused"
+				}
+			}
+			actionDesc := fmt.Sprintf("OK: Typed text into %s%s [len=%d]", actionTarget, targetDesc, len(p.Text))
+
+			// 3. Settling buffer (350ms) + closed-loop UI dump
 			time.Sleep(350 * time.Millisecond)
 			_, textStr, err := captureUiDumpWithRetry(targetDid, st, p.NoSystemUI, 2, 200)
 			if err != nil && textStr == "" {

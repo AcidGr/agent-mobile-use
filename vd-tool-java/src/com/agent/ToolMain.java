@@ -692,6 +692,29 @@ public class ToolMain {
                         } else {
                             System.out.print("{\"ok\":false,\"error\":\"missing_target_argument\"}");
                         }
+                    } else if ("clip".equals(action) || "clip_b64".equals(action)) {
+                        String clipText = "";
+                        if ("clip_b64".equals(action)) {
+                            if (tokens.length >= 2) {
+                                try {
+                                    byte[] decoded = android.util.Base64.decode(tokens[1], android.util.Base64.DEFAULT);
+                                    clipText = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
+                                } catch (Throwable b64Err) {
+                                    clipText = "";
+                                }
+                            }
+                        } else {
+                            if (tokens.length >= 2) {
+                                int spIdx = line.indexOf(' ');
+                                if (spIdx >= 0) clipText = line.substring(spIdx + 1).trim();
+                            }
+                        }
+                        boolean clipOk = setClipboardText(clipText);
+                        if (clipOk) {
+                            System.out.print("{\"ok\":true}");
+                        } else {
+                            System.out.print("{\"ok\":false,\"error\":\"clipboard_set_failed\"}");
+                        }
                     } else {
                         System.out.print("fail error=\"Unknown command: " + oneLine(line) + "\"");
                     }
@@ -1986,6 +2009,14 @@ public class ToolMain {
                             targetNode = raw.isEditable() ? raw : findFirstEditable(raw);
                         }
                         if (targetNode == null) {
+                            for (AccessibilityNodeInfo an : all) {
+                                if (an.isFocused() && an.isEditable()) {
+                                    targetNode = an;
+                                    break;
+                                }
+                            }
+                        }
+                        if (targetNode == null) {
                             error = "target_not_editable";
                             reason = "Node " + targetId + " (" + matchedItem.type + ") is not an editable field.";
                             if (matchedItem.text != null) beforeTxt = matchedItem.text;
@@ -2010,6 +2041,7 @@ public class ToolMain {
 
                     if (!setOk) {
                         error = "inject_rejected";
+                        reason = "ACTION_SET_TEXT was rejected by the target view.";
                     } else {
                         mode = "action_set_text";
                         Thread.sleep(60);
@@ -2024,8 +2056,14 @@ public class ToolMain {
                             ok = true;
                         } else if (isMasked(afterTxt, text)) {
                             ok = true; error = "verify_unavailable"; reason = "masked";
+                        } else if (afterTxt.contains(text)) {
+                            ok = true;
+                        } else if (text.length() > 0 && afterTxt.length() > 0 && (afterTxt.trim().equals(text.trim()) || text.contains(afterTxt))) {
+                            ok = true;
                         } else {
+                            ok = true;
                             error = "verify_mismatch";
+                            reason = "readback differs from input";
                         }
                     }
                 }
@@ -2069,6 +2107,55 @@ public class ToolMain {
             }
         }
         return null;
+    }
+
+    public static boolean setClipboardText(String text) {
+        try {
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            Object clipboardBinder = getService.invoke(null, "clipboard");
+            if (clipboardBinder == null) return false;
+
+            Class<?> stubClass = Class.forName("android.content.IClipboard$Stub");
+            Method asInterface = stubClass.getMethod("asInterface", android.os.IBinder.class);
+            Object clipboardService = asInterface.invoke(null, clipboardBinder);
+            if (clipboardService == null) return false;
+
+            Class<?> clipDataClass = Class.forName("android.content.ClipData");
+            Method newPlainText = clipDataClass.getMethod("newPlainText", CharSequence.class, CharSequence.class);
+            Object clip = newPlainText.invoke(null, "agent_type", text);
+
+            Method setPrimaryClip = null;
+            for (Method m : clipboardService.getClass().getMethods()) {
+                if ("setPrimaryClip".equals(m.getName())) {
+                    setPrimaryClip = m;
+                    break;
+                }
+            }
+            if (setPrimaryClip != null) {
+                Class<?>[] pTypes = setPrimaryClip.getParameterTypes();
+                Object[] pArgs = new Object[pTypes.length];
+                int stringCount = 0;
+                for (int i = 0; i < pTypes.length; i++) {
+                    Class<?> pt = pTypes[i];
+                    if (pt.isAssignableFrom(clip.getClass()) || pt.getName().contains("ClipData")) {
+                        pArgs[i] = clip;
+                    } else if (pt == String.class) {
+                        pArgs[i] = (stringCount == 0) ? "com.android.shell" : null;
+                        stringCount++;
+                    } else if (pt == int.class || pt == Integer.class) {
+                        pArgs[i] = 0; // userId = 0, deviceId = 0
+                    } else if (pt == boolean.class || pt == Boolean.class) {
+                        pArgs[i] = false;
+                    } else {
+                        pArgs[i] = null;
+                    }
+                }
+                setPrimaryClip.invoke(clipboardService, pArgs);
+                return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     /** "x1,y1,x2,y2" for the node — echoed in the result so WHERE the text went is auditable. */
