@@ -199,6 +199,7 @@ public class DaemonMain {
     private static ServerSocket sStreamServer = null;
     private static ServerSocket sCtrlServer = null;
     private static volatile Socket sCurrentStreamClient = null;
+    private static final Object sStreamSessionLock = new Object();
 
     private static void startCtrlServer(final VirtualDisplay vd) {
         try {
@@ -345,71 +346,83 @@ public class DaemonMain {
     }
 
     private static void handleStreamClient(VirtualDisplay vd, ImageReader reader, Socket client) throws Exception {
-        sCurrentStreamClient = client;
-        MediaCodec codec = null;
-        Surface encoderSurface = null;
-        try {
-            codec = MediaCodec.createEncoderByType("video/avc");
-            MediaFormat format = MediaFormat.createVideoFormat("video/avc", sWidth, sHeight);
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 6000000); // 6 Mbps
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 60);
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1); // 1s keyframe interval
+        // Preempt any still-running encoder session before acquiring sStreamSessionLock so its
+        // finally block (restoring reader.getSurface()) completes BEFORE we attach encoderSurface.
+        Socket prev = sCurrentStreamClient;
+        if (prev != null && prev != client && !prev.isClosed()) {
+            try { prev.close(); } catch (Throwable ignored) {}
+        }
+
+        synchronized (sStreamSessionLock) {
+            if (client.isClosed()) {
+                return;
+            }
+            sCurrentStreamClient = client;
+            MediaCodec codec = null;
+            Surface encoderSurface = null;
             try {
-                format.setLong("repeat-previous-frame-after", 100000L); // 100ms
-            } catch (Throwable ignored) {}
+                codec = MediaCodec.createEncoderByType("video/avc");
+                MediaFormat format = MediaFormat.createVideoFormat("video/avc", sWidth, sHeight);
+                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+                format.setInteger(MediaFormat.KEY_BIT_RATE, 6000000); // 6 Mbps
+                format.setInteger(MediaFormat.KEY_FRAME_RATE, 60);
+                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1); // 1s keyframe interval
+                try {
+                    format.setLong("repeat-previous-frame-after", 100000L); // 100ms
+                } catch (Throwable ignored) {}
 
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            encoderSurface = codec.createInputSurface();
-            codec.start();
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                encoderSurface = codec.createInputSurface();
+                codec.start();
 
-            // Direct SurfaceFlinger GPU composition to hardware encoder
-            vd.setSurface(encoderSurface);
-            System.out.println("[AgentDaemon] VirtualDisplay output directed to MediaCodec");
+                // Direct SurfaceFlinger GPU composition to hardware encoder
+                vd.setSurface(encoderSurface);
+                System.out.println("[AgentDaemon] VirtualDisplay output directed to MediaCodec");
 
-            DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(client.getOutputStream(), 65536));
-            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            byte[] buf = null;
+                DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(client.getOutputStream(), 65536));
+                MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+                byte[] buf = null;
 
-            while (!client.isClosed() && !client.isOutputShutdown()) {
-                int outIndex = codec.dequeueOutputBuffer(info, 20000);
-                if (outIndex >= 0) {
-                    ByteBuffer outputBuffer = codec.getOutputBuffer(outIndex);
-                    if (outputBuffer != null && info.size > 0) {
-                        outputBuffer.position(info.offset);
-                        outputBuffer.limit(info.offset + info.size);
+                while (!client.isClosed() && !client.isOutputShutdown()) {
+                    int outIndex = codec.dequeueOutputBuffer(info, 20000);
+                    if (outIndex >= 0) {
+                        ByteBuffer outputBuffer = codec.getOutputBuffer(outIndex);
+                        if (outputBuffer != null && info.size > 0) {
+                            outputBuffer.position(info.offset);
+                            outputBuffer.limit(info.offset + info.size);
 
-                        if (buf == null || buf.length < info.size) {
-                            buf = new byte[info.size];
+                            if (buf == null || buf.length < info.size) {
+                                buf = new byte[info.size];
+                            }
+                            outputBuffer.get(buf, 0, info.size);
+
+                            dos.writeInt(info.size);
+                            dos.writeInt(info.flags);
+                            dos.writeLong(info.presentationTimeUs);
+                            dos.write(buf, 0, info.size);
+                            dos.flush();
                         }
-                        outputBuffer.get(buf, 0, info.size);
-
-                        dos.writeInt(info.size);
-                        dos.writeInt(info.flags);
-                        dos.writeLong(info.presentationTimeUs);
-                        dos.write(buf, 0, info.size);
-                        dos.flush();
+                        codec.releaseOutputBuffer(outIndex, false);
                     }
-                    codec.releaseOutputBuffer(outIndex, false);
                 }
-            }
-        } finally {
-            if (sCurrentStreamClient == client) {
-                sCurrentStreamClient = null;
-            }
-            // Restore surface back to ImageReader
-            try {
-                vd.setSurface(reader.getSurface());
-                System.out.println("[AgentDaemon] VirtualDisplay output restored to ImageReader");
-            } catch (Throwable t) {
-                System.err.println("[AgentDaemon] Failed to restore surface: " + t.getMessage());
-            }
-            if (codec != null) {
-                try { codec.stop(); } catch (Throwable ignored) {}
-                try { codec.release(); } catch (Throwable ignored) {}
-            }
-            if (encoderSurface != null) {
-                try { encoderSurface.release(); } catch (Throwable ignored) {}
+            } finally {
+                if (sCurrentStreamClient == client) {
+                    sCurrentStreamClient = null;
+                }
+                // Restore surface back to ImageReader while still holding sStreamSessionLock
+                try {
+                    vd.setSurface(reader.getSurface());
+                    System.out.println("[AgentDaemon] VirtualDisplay output restored to ImageReader");
+                } catch (Throwable t) {
+                    System.err.println("[AgentDaemon] Failed to restore surface: " + t.getMessage());
+                }
+                if (codec != null) {
+                    try { codec.stop(); } catch (Throwable ignored) {}
+                    try { codec.release(); } catch (Throwable ignored) {}
+                }
+                if (encoderSurface != null) {
+                    try { encoderSurface.release(); } catch (Throwable ignored) {}
+                }
             }
         }
     }

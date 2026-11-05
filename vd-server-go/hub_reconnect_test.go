@@ -141,6 +141,18 @@ func TestPumpDaemonFramesCachesAndBroadcasts(t *testing.T) {
 	if !hasSps || !hasIdr {
 		t.Fatalf("expected cached sps/pps and idr, got sps=%v idr=%v", hasSps, hasIdr)
 	}
+
+	// Closing the daemon stream must invalidate cached SPS/IDR so a future encoder session
+	// (possibly after a resize or restart) never feeds stale frames to a new watcher.
+	_ = daemonSide.Close()
+	time.Sleep(30 * time.Millisecond)
+	h.mu.Lock()
+	staleSps := len(h.spsPps) > 0
+	staleIdr := len(h.lastIDR) > 0
+	h.mu.Unlock()
+	if staleSps || staleIdr {
+		t.Fatalf("expected sps/pps and idr cleared after stream end, got sps=%v idr=%v", staleSps, staleIdr)
+	}
 }
 
 // The decisive regression: after a SUCCESSFUL connection, the daemon restarts and drops the

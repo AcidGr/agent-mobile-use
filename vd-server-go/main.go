@@ -92,20 +92,16 @@ var hub = &StreamHub{
 
 func (h *StreamHub) register(conn net.Conn) {
 	h.mu.Lock()
+	wasEmpty := len(h.clients) == 0
+	if !wasEmpty && h.daemonConn != nil && len(h.lastIDR) > 0 {
+		_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+		_ = writeWSBinaryFrame(conn, h.lastIDR)
+	}
 	h.clients[conn] = struct{}{}
 	count := len(h.clients)
-	sps := h.spsPps
-	idr := h.lastIDR
 	h.mu.Unlock()
 
 	fmt.Printf("[StreamHub] Client connected, total watchers: %d\n", count)
-
-	if len(sps) > 0 {
-		_ = writeWSBinaryFrame(conn, sps)
-	}
-	if len(idr) > 0 {
-		_ = writeWSBinaryFrame(conn, idr)
-	}
 
 	if count == 1 {
 		go h.connectDaemonLoop()
@@ -117,10 +113,14 @@ func (h *StreamHub) unregister(conn net.Conn) {
 	delete(h.clients, conn)
 	_ = conn.Close()
 	count := len(h.clients)
-	if count == 0 && h.daemonConn != nil {
-		_ = h.daemonConn.Close()
-		h.daemonConn = nil
-		fmt.Printf("[StreamHub] All watchers disconnected, released hardware encoder\n")
+	if count == 0 {
+		h.spsPps = nil
+		h.lastIDR = nil
+		if h.daemonConn != nil {
+			_ = h.daemonConn.Close()
+			h.daemonConn = nil
+			fmt.Printf("[StreamHub] All watchers disconnected, released hardware encoder\n")
+		}
 	}
 	h.mu.Unlock()
 	fmt.Printf("[StreamHub] Client disconnected, remaining watchers: %d\n", count)
@@ -218,6 +218,8 @@ func (h *StreamHub) pumpDaemonFrames(conn net.Conn) {
 		if h.daemonConn == conn {
 			h.daemonConn = nil
 		}
+		h.spsPps = nil
+		h.lastIDR = nil
 		_ = conn.Close()
 		h.mu.Unlock()
 	}()
@@ -248,23 +250,38 @@ func (h *StreamHub) pumpDaemonFrames(conn net.Conn) {
 			return
 		}
 
+		if (flags & 2) != 0 {
+			// BUFFER_FLAG_CODEC_CONFIG (SPS + PPS): cache raw parameter sets and wait to
+			// prepend them to the IDR slice. Sending standalone SPS/PPS without an IDR
+			// slice as an EncodedVideoChunk causes WebCodecs VideoDecoder.decode() to
+			// throw DataError ("A key frame is required") and drop the SPS/PPS!
+			rawCfg := make([]byte, size)
+			copy(rawCfg, buf[:size])
+			h.mu.Lock()
+			h.spsPps = rawCfg
+			h.mu.Unlock()
+			continue
+		}
+
 		isKey := byte(0)
-		if (flags & 3) != 0 {
+		if (flags & 1) != 0 {
 			isKey = 1
 		}
 
-		msg := make([]byte, 1+size)
-		msg[0] = isKey
-		copy(msg[1:], buf[:size])
-
-		if (flags & 2) != 0 {
+		var msg []byte
+		if isKey == 1 {
 			h.mu.Lock()
-			h.spsPps = msg
-			h.mu.Unlock()
-		} else if (flags & 1) != 0 {
-			h.mu.Lock()
+			sps := h.spsPps
+			msg = make([]byte, 1+len(sps)+int(size))
+			msg[0] = 1
+			copy(msg[1:], sps)
+			copy(msg[1+len(sps):], buf[:size])
 			h.lastIDR = msg
 			h.mu.Unlock()
+		} else {
+			msg = make([]byte, 1+int(size))
+			msg[0] = 0
+			copy(msg[1:], buf[:size])
 		}
 
 		h.broadcast(msg)
@@ -2128,6 +2145,7 @@ func main() {
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		w.Write(indexHTML)
 	})
 
@@ -2313,7 +2331,11 @@ func main() {
 			defer hub.unregister(conn)
 			b := make([]byte, 512)
 			for {
-				if _, err := conn.Read(b); err != nil {
+				n, err := conn.Read(b)
+				if err != nil {
+					break
+				}
+				if n > 0 && (b[0]&0x0f) == 8 {
 					break
 				}
 			}

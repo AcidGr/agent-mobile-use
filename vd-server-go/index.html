@@ -51,6 +51,7 @@
             font-size: 0.95rem;
             text-align: center;
             letter-spacing: 0.5px;
+            display: none;
         }
         .controls {
             position: fixed;
@@ -160,7 +161,7 @@
 <body>
     <div class="screen-box">
         <canvas id="stream-canvas"></canvas>
-        <div id="empty-tip">副屏未启动</div>
+        <div id="empty-tip"></div>
     </div>
 
     <div class="controls">
@@ -369,6 +370,10 @@
                 stopStream(true);
             } else if (result.running) {
                 screenState = 'running';
+                if (canvasEl.style.display !== 'block') {
+                    tipEl.style.display = 'none';
+                    tipEl.innerText = '';
+                }
             } else {
                 showTip(result.failed ? '副屏启动失败' : '副屏未启动');
                 screenState = 'stopped';
@@ -404,6 +409,7 @@
                     if (canvasEl.style.display !== 'block') {
                         canvasEl.style.display = 'block';
                         tipEl.style.display = 'none';
+                        console.log('First video frame rendered: ' + canvasEl.width + 'x' + canvasEl.height);
                     }
                 },
                 error: (e) => {
@@ -436,7 +442,7 @@
         }
 
         function startStream(isRetry) {
-            if (isStreaming) return;
+            if (isStreaming || ws) return;
             clearReconnect();
             if (!isRetry) { userStopped = false; }
             if (screenState !== 'running') return;
@@ -477,7 +483,7 @@
                     });
                     decoder.decode(chunk);
                 } catch (err) {
-                    console.error('Decode chunk error:', err);
+                    console.error('Decode chunk error: name=' + err.name + ' msg=' + err.message + ' isKey=' + isKey + ' len=' + chunkData.length);
                 }
             };
 
@@ -531,6 +537,9 @@
             toggleEl.disabled = true;
 
             const wasRunning = screenState === 'running';
+            if (wasRunning) {
+                stopStream(true);
+            }
             toggleEl.title = wasRunning ? '正在关闭副屏...' : '正在开启副屏...';
             try {
                 await fetch(wasRunning ? '/api/stop' : '/api/start', { method: 'POST' });
@@ -547,10 +556,10 @@
             if (document.hidden) {
                 // Hidden: release the encoder to save power. stopStream(false) keeps
                 // userStopped untouched, so the visible branch below can resume.
-                if (isStreaming && !userStopped) {
+                if ((isStreaming || ws) && !userStopped) {
                     stopStream(false);
                 }
-            } else if (!userStopped && screenState === 'running' && !isStreaming) {
+            } else if (!userStopped && screenState === 'running' && !isStreaming && !ws) {
                 // Visible again: restore the stream that the hidden-state teardown paused.
                 startStream(true);
             }
