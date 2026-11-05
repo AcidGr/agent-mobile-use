@@ -12,7 +12,7 @@
 通过底层的特权虚拟显示器（Virtual Display）、LSPosed 跨屏调度与输入法隔离、以及免软键盘弹窗的文字注入，让 Agent 能够操作手机上的应用。
 
 > ⚠️ **版本说明（SemVer 标准化）**：  
-> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.10`**（KSU 模块 versionCode: `810`）。包含原生控制中心（`SettingsActivity`）、流体云通知胶囊，以及基于 3080 端口 Remote RPC 的 DSH 版本握手。
+> 本项目遵循语义化版本规范（Semantic Versioning）。当前最新发行版本为 **`v0.8.11`**（KSU 模块 versionCode: `811`）。全面适配并支持 **DeepSeek Harness (DSH) v0.2.2-rc.1** 原生移动端 UI（包含抽屉式侧边栏 Drawer 浮层协同、全屏设置面板卡片化与透明背景保护、Thinking/Compaction 毛玻璃无缝透视及紧凑输入栏自适应），包含原生控制中心（`SettingsActivity`）、流体云通知胶囊，以及基于 3080 端口 Remote RPC 的 DSH 版本握手。
 
 ---
 
@@ -159,7 +159,7 @@
 #### 方式一：直接刷入发行版（推荐）
 
 1. 从 `release/` 目录或 GitHub Releases 下载最新的刷机包：
-   **`agent-mobile-use-ksu-v0.8.10.zip`**
+   **`agent-mobile-use-ksu-v0.8.11.zip`**
 2. 将 zip 文件传输至手机中。
 3. 打开 **KernelSU** (或 APatch / Magisk) 管理器 -> 点击「模块」-> 选择该 zip 进行安装。
 4. 安装过程中脚本会自动完成以下动作：
@@ -184,8 +184,8 @@
 
 By decoupling execution onto an independent virtual display (Display > 0), intercepting task/activity focus switches with LSPosed hooks, and injecting text via accessibility without popping up soft keyboards, it lets the agent drive apps while you keep using the phone.
 
-> ⚠️ **Release Notice (v0.8.10)**:  
-> Current active release is **`v0.8.10`** (KSU module versionCode: `810`). Includes the native control center (`SettingsActivity`), the fluid-cloud notification capsule, and DSH version handshake over the 3080 Remote RPC.
+> ⚠️ **Release Notice (v0.8.11)**:  
+> Current active release is **`v0.8.11`** (KSU module versionCode: `811`). Fully compatible with and optimized for **DeepSeek Harness (DSH) v0.2.2-rc.1** mobile UI (adaptive sidebar drawer overlay, floating settings modal with transparent backdrop guard, reasoning pill translucency, and compact composer layout). Includes the native control center (`SettingsActivity`), the fluid-cloud notification capsule, and DSH version handshake over the 3080 Remote RPC.
 
 ---
 
