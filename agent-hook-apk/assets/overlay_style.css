@@ -212,18 +212,36 @@ html[data-dsh-overlay="true"] [class*="_drawerMask"] {
   backdrop-filter: blur(8px) !important;
   -webkit-backdrop-filter: blur(8px) !important;
 }
-/* Mobile Drawer Mode (viewport < 768px): elegant sliding drawer over transparent chat */
+/* Mobile Drawer Mode (viewport < 768px): pure native edge-to-edge sliding drawer */
 html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-drawer] [class*="_sidebarCol"] {
   width: min(86vw, 320px) !important;
   max-width: 86vw !important;
-  background: rgba(22, 25, 33, 0.96) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  z-index: 75 !important;
+  overflow: hidden !important;
+}
+/* Native edge-to-edge integrated sidebar drawer (no nested card, no redundant outer borders) */
+html[data-dsh-overlay="true"] [data-shortcut-modal="sidebar"],
+html[data-dsh-overlay="true"] [class*="_sidebarCol"] > [class*="_root"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5) !important;
+  background: rgba(20, 24, 33, 0.96) !important;
   backdrop-filter: blur(28px) !important;
   -webkit-backdrop-filter: blur(28px) !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow: 6px 0 28px rgba(0, 0, 0, 0.45) !important;
-  padding-top: max(48px, env(safe-area-inset-top, 48px)) !important;
+  padding-top: max(24px, env(safe-area-inset-top, 24px)) !important;
   box-sizing: border-box !important;
-  z-index: 75 !important;
+  margin: 0 !important;
 }
 /* Non-drawer collapsed rail: completely hide the 56px rail while keeping column 1 anchor */
 html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-drawer])[data-sidebar-collapsed] {
@@ -542,11 +560,11 @@ html[data-dsh-overlay="true"] [data-slot="conversation.input.model"] button:acti
 /* Menus, Popovers, Dropdowns, and Dialogs: Solid frosted container */
 html[data-dsh-overlay="true"] [role="menu"],
 html[data-dsh-overlay="true"] [role="listbox"],
-html[data-dsh-overlay="true"] [role="dialog"],
+html[data-dsh-overlay="true"] [role="dialog"]:not([data-shortcut-modal="sidebar"]),
 html[data-dsh-overlay="true"] [data-dockkit-tab-menu],
 [data-floating-ui-portal] [role="menu"],
 [data-floating-ui-portal] [role="listbox"],
-[data-floating-ui-portal] [role="dialog"] {
+[data-floating-ui-portal] [role="dialog"]:not([data-shortcut-modal="sidebar"]) {
   background: rgba(24, 28, 36, 0.98) !important;
   backdrop-filter: blur(24px) !important;
   -webkit-backdrop-filter: blur(24px) !important;
