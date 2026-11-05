@@ -59,14 +59,23 @@ html[data-dsh-overlay="true"] [class*="_boot"] [class*="_card"] {
     transform: scale(1);
   }
 }
-/* ── mobile UI fixes (≤700px) ── */
-@media (max-width: 700px) {
+/* ── mobile UI fixes (≤767px) ── */
+@media (max-width: 767px) {
   /* 1. Settings panel: elegant centered floating modal card */
+  [class*="_overlay"]:has([data-shortcut-modal="settings"]),
+  [class*="_overlay"]:has([role="dialog"]) {
+    background: transparent !important;
+  }
+  [class*="_overlay"] [class*="_mask"] {
+    background: rgba(0, 0, 0, 0.45) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+  }
+  [role="dialog"][data-shortcut-modal="settings"],
   [role="dialog"][aria-modal="true"][aria-labelledby] {
-    flex-direction: column !important;
     width: min(92vw, 440px) !important;
     max-width: min(92vw, 440px) !important;
-    height: min(78vh, 78dvh, 620px) !important;
+    height: min(80vh, 80dvh, 640px) !important;
     min-height: 420px !important;
     max-height: min(86vh, 86dvh, 680px) !important;
     border-radius: 20px !important;
@@ -77,62 +86,70 @@ html[data-dsh-overlay="true"] [class*="_boot"] [class*="_card"] {
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
     overflow: hidden !important;
     margin: auto !important;
-    display: flex !important;
+    position: relative !important;
+    display: grid !important;
+    grid-template: "VOzbGW_title VOzbGW_header" auto "VOzbGW_nav VOzbGW_nav" auto "VOzbGW_options VOzbGW_options" minmax(0, 1fr) / 1fr auto !important;
   }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav {
-    flex: none !important;
-    flex-direction: column !important;
-    width: 100% !important;
-    box-sizing: border-box !important;
-    padding: 14px 14px 6px !important;
-    gap: 8px !important;
+  [role="dialog"][aria-modal="true"] [class*="_navTitle"] {
+    padding: 16px 12px 4px 18px !important;
+    font-size: 16px !important;
+    color: #F8FAFC !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  [role="dialog"][aria-modal="true"] [class*="_header"] {
+    padding: 14px 14px 4px 0 !important;
+    height: auto !important;
+  }
+  [role="dialog"][aria-modal="true"] [class*="_close"] {
+    color: #CBD5E1 !important;
+  }
+  [role="dialog"][aria-modal="true"] [class*="_nav"] {
+    padding: 0 !important;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
   }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav > div:last-child {
+  [role="dialog"][aria-modal="true"] [class*="_navList"] {
+    display: flex !important;
     flex-direction: row !important;
     flex-wrap: nowrap !important;
     gap: 6px !important;
+    padding: 8px 14px 10px !important;
     overflow-x: auto !important;
+    scrollbar-width: none !important;
   }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button {
+  [role="dialog"][aria-modal="true"] [class*="_navList"]::-webkit-scrollbar {
+    display: none !important;
+  }
+  [role="dialog"][aria-modal="true"] [class*="_navCell"] {
     flex: 0 0 auto !important;
     height: 36px !important;
+    min-width: unset !important;
     padding: 6px 12px !important;
     gap: 6px !important;
+    border-radius: 10px !important;
+    color: #CBD5E1 !important;
     justify-content: center !important;
   }
-  /* Keep every tab label visible: the stock label is flex:1 with
-        flex-basis 0, which collapses to zero width inside a content-sized
-        button; let the text drive the button width instead (0 1 auto). */
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button > :last-child {
+  [role="dialog"][aria-modal="true"] [class*="_navCell"] > :last-child {
     flex: 0 1 auto !important;
     min-width: 0 !important;
   }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav button[aria-current="true"] {
-    background: var(--dsw-specific-sidebar-nav-item-active, #e8ebf1) !important;
+  [role="dialog"][aria-modal="true"] [class*="_navCell"][class*="_active"],
+  [role="dialog"][aria-modal="true"] [class*="_navCell"][aria-current="true"] {
+    background: rgba(255, 255, 255, 0.14) !important;
+    color: #FFFFFF !important;
   }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div {
-    flex: 1 1 auto !important;
-    min-height: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    overflow: hidden !important;
-  }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div > div:first-child {
-    padding: 12px 12px 6px !important;
-  }
-  [role="dialog"][aria-modal="true"][aria-labelledby] > nav + div > div:last-child {
-    padding: 0 16px 16px !important;
-    flex: 1 1 auto !important;
+  [role="dialog"][aria-modal="true"] [class*="_options"] {
+    padding: 12px 18px 20px !important;
     overflow-y: auto !important;
     min-height: 0 !important;
   }
-  /* 2. Composer bar: keep all tools and actions on a single row without wrapping */
+  /* 2. Composer bar: keep all tools and actions nicely fitted without breaking off */
   [data-composer-seat], [data-slot="conversation.composer.bar"] {
     --dsh-composer-side-clearance: 8px !important;
   }
   [data-slot="conversation.composer.bar"] [class*="_row"] {
-    flex-wrap: nowrap !important;
     gap: 6px !important;
     padding: 2px 6px 6px !important;
     align-items: center !important;
@@ -154,42 +171,15 @@ html[data-dsh-overlay="true"] [class*="_boot"] [class*="_card"] {
     padding: 0 16px 0 4px !important;
     text-overflow: ellipsis !important;
   }
-  [data-slot="conversation.input.model"] > div > button {
-    max-width: 120px !important;
+  [data-slot="conversation.input.model"] button {
+    max-width: 140px !important;
     padding: 0 4px !important;
     gap: 2px !important;
   }
-  [data-slot="conversation.input.model"] > div > button > span {
+  [data-slot="conversation.input.model"] button > span {
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
-  }
-  /* Grid column stability on mobile screens */
-  [class*="_sidebarCol"] {
-    grid-column: 1 !important;
-  }
-  [class*="_centerCol"] {
-    grid-column: 2 !important;
-  }
-  /* 3. Expanded sidebar on narrow screens: take 100% full width and collapse center */
-  [class*="_frame"]:not([data-sidebar-collapsed]) {
-    grid-template-columns: 100% 0px 0px !important;
-  }
-  [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_sidebarCol"] {
-    width: 100% !important;
-    min-width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
-    z-index: 60 !important;
-  }
-  [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_centerCol"] {
-    width: 0 !important;
-    min-width: 0 !important;
-    max-width: 0 !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
   }
 }
 
@@ -211,11 +201,35 @@ html[data-dsh-overlay="true"] [class*="_sidebarCol"] {
 html[data-dsh-overlay="true"] [class*="_centerCol"] {
   grid-column: 2 !important;
 }
-/* Collapsed sidebar rail in overlay: completely hide the 56px black rail while keeping column 1 anchor */
-html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-collapsed] {
+/* Hide official leading seat in overlay mode to prevent duplicate controls and overlap with whale button */
+html[data-dsh-overlay="true"] [class*="_leadingSeat"] {
+  display: none !important;
+}
+/* Semi-transparent frosted mask for sidebar drawer in overlay */
+html[data-dsh-overlay="true"] [data-sidebar-mask],
+html[data-dsh-overlay="true"] [class*="_drawerMask"] {
+  background: rgba(0, 0, 0, 0.3) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+}
+/* Mobile Drawer Mode (viewport < 768px): elegant sliding drawer over transparent chat */
+html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-drawer] [class*="_sidebarCol"] {
+  width: min(86vw, 320px) !important;
+  max-width: 86vw !important;
+  background: rgba(22, 25, 33, 0.96) !important;
+  backdrop-filter: blur(28px) !important;
+  -webkit-backdrop-filter: blur(28px) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 6px 0 28px rgba(0, 0, 0, 0.45) !important;
+  padding-top: max(48px, env(safe-area-inset-top, 48px)) !important;
+  box-sizing: border-box !important;
+  z-index: 75 !important;
+}
+/* Non-drawer collapsed rail: completely hide the 56px rail while keeping column 1 anchor */
+html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-drawer])[data-sidebar-collapsed] {
   grid-template-columns: 0px minmax(0, 1fr) 0px !important;
 }
-html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-collapsed] [class*="_sidebarCol"] {
+html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-drawer])[data-sidebar-collapsed] [class*="_sidebarCol"] {
   width: 0 !important;
   min-width: 0 !important;
   max-width: 0 !important;
@@ -223,31 +237,6 @@ html[data-dsh-overlay="true"] [class*="_frame"][data-sidebar-collapsed] [class*=
   padding: 0 !important;
   margin: 0 !important;
   border: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-/* Expanded sidebar in overlay: take 100% full screen with solid frosted backdrop */
-html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) {
-  grid-template-columns: 100% 0px 0px !important;
-}
-html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_sidebarCol"] {
-  width: 100% !important;
-  min-width: 100% !important;
-  max-width: 100% !important;
-  overflow: hidden !important;
-  background: rgba(22, 25, 33, 0.98) !important;
-  backdrop-filter: blur(28px) !important;
-  -webkit-backdrop-filter: blur(28px) !important;
-  padding-top: max(48px, env(safe-area-inset-top, 48px)) !important;
-  box-sizing: border-box !important;
-  z-index: 60 !important;
-}
-html[data-dsh-overlay="true"] [class*="_frame"]:not([data-sidebar-collapsed]) [class*="_centerCol"] {
-  width: 0 !important;
-  min-width: 0 !important;
-  max-width: 0 !important;
-  overflow: hidden !important;
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -592,13 +581,14 @@ html[data-dsh-overlay="true"] [class*="_composerHero"] {
 /* Floating bottom composer (sticky over transparent scrollbody) */
 html[data-dsh-overlay="true"] [data-phase="active"] [data-composer-seat],
 html[data-dsh-overlay="true"] [class*="_composerSeat"] {
-  background: none !important;
+  background: transparent !important;
   background-color: transparent !important;
+  background-image: none !important;
   position: sticky !important;
   bottom: 0 !important;
   z-index: 10 !important;
   padding: 0 12px max(14px, env(safe-area-inset-bottom, 14px)) !important;
-  animation: dsh-composer-rise-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  animation: none !important;
 }
 html[data-dsh-overlay="true"] [class*="_viewArea"] {
   padding-bottom: 24px !important;
@@ -907,6 +897,7 @@ html[data-dsh-overlay="true"] [data-variant="think"][data-expanded] [data-open] 
   overflow: visible !important;
 }
 /* Reset native DSH sticky/white disclosure row inside our frosted pill */
+html[data-dsh-overlay="true"] [data-variant="think"] [data-disclosure-header],
 html[data-dsh-overlay="true"] [data-variant="think"] [data-disclosure-row],
 html[data-dsh-overlay="true"] [data-variant="think"] [class*="_row"] {
   background: transparent !important;

@@ -134,7 +134,16 @@
       whaleBtn.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        var toggleBtn = document.querySelector('[data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
+        var frame = document.querySelector('[class*="_frame"]');
+        var isCollapsed = !frame || frame.hasAttribute("data-sidebar-collapsed");
+        if (!isCollapsed) {
+          var closeTarget = document.querySelector('[data-sidebar-toggle], [data-sidebar-mask], [data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"]');
+          if (closeTarget) {
+            closeTarget.click();
+            return;
+          }
+        }
+        var toggleBtn = document.querySelector('[data-sidebar-opener], [data-sidebar-toggle], [data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
         if (toggleBtn) {
           toggleBtn.click();
         }
@@ -229,7 +238,7 @@
         setTimeout(function () {
           var currentFrame = document.querySelector('[class*="_frame"]');
           if (currentFrame && !currentFrame.hasAttribute("data-sidebar-collapsed")) {
-            var toggleBtn = document.querySelector('[data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
+            var toggleBtn = document.querySelector('[data-sidebar-toggle], [data-sidebar-mask], [data-slot="sidebar-toggle"], [aria-label*="sidebar" i], [aria-label*="侧边栏"], button[class*="toggleSidebar"], button[class*="_toggle"]');
             if (toggleBtn) toggleBtn.click();
           }
         }, 80);
