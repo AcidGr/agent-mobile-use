@@ -2,6 +2,10 @@
 
 [English](#english) | [中文说明](#中文说明)
 
+> 🚀 **推荐全新通用 MCP 版本：[Mobile Use MCP Sandbox (`mobile-use-mcp`)](https://github.com/AcidGr/mobile-use-mcp)**
+> - 如果你希望在 **Claude Code、Google Antigravity、OpenAI Codex、Cursor、Windsurf、Cherry Studio、DeepSeek Harness** 等任意支持 MCP 协议的 Agent 中通用操控手机，**强烈推荐使用全新的 [mobile-use-mcp](https://github.com/AcidGr/mobile-use-mcp)**：架构更纯粹（100% 纯虚拟副屏隔离、全局单端口 `3070`）、支持 60fps 沉浸式全屏人工接管、系统级横竖屏自动翻转，并具备免 GMS 的跨 ROM 通用兼容性。
+> - Looking for **universal MCP (Model Context Protocol)** support across Claude Code, Antigravity, Codex, Cursor, Windsurf, Cherry Studio, and more? Check out **[mobile-use-mcp](https://github.com/AcidGr/mobile-use-mcp)** — featuring a cleaner pure Virtual Display sandbox, single-port `3070` Streamable HTTP / Stdio MCP, 60fps Human-in-the-Loop takeover, auto orientation, and cross-ROM support. *(This repository remains available as the dedicated DeepSeek Harness native integration.)*
+
 ---
 
 <a name="中文说明"></a>
@@ -179,6 +183,9 @@
 
 <a name="english"></a>
 ## English Description
+
+> 🚀 **Recommended Universal MCP Edition: [Mobile Use MCP Sandbox (`mobile-use-mcp`)](https://github.com/AcidGr/mobile-use-mcp)**  
+> For universal **Model Context Protocol (MCP)** compatibility across **Claude Code, Google Antigravity, OpenAI Codex, Cursor, Windsurf, Cherry Studio, DSH**, and more — with a cleaner pure Virtual Display architecture, single-port `3070` Streamable HTTP/Stdio transport, 60fps Human-in-the-Loop takeover, automatic orientation switching, and cross-ROM support — we strongly recommend **[mobile-use-mcp](https://github.com/AcidGr/mobile-use-mcp)**.
 
 `agent-mobile-use` is the Mobile Use tool for **DeepSeek Harness (DSH)**. It gives an agent the ability to operate apps on an Android device, running them on a background virtual display so the physical screen stays untouched (tested on ColorOS 16 / Android 15-16).
 
